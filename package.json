@@ -1,0 +1,10 @@
+{
+  "name": "e2e",
+  "version": "0.1.0",
+  "description": "",
+  "keywords": ["e2e", "tester army"],
+  "contributors": [
+    "Oskar Kwaśniewski <oskar@tester.army>",
+    "Szymon Rybczak <szymon@tester.army>"
+  ]
+}
