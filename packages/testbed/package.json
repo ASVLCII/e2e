@@ -1,0 +1,21 @@
+{
+  "name": "@e2e/testbed",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dogfood suite: runs the e2e runner against a local playground app and real websites",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node node_modules/e2e/dist/cli/bin.js run",
+    "test:headed": "node node_modules/e2e/dist/cli/bin.js run --headed",
+    "test:public": "node node_modules/e2e/dist/cli/bin.js run --config e2e.public.config.ts",
+    "app": "node app/server.mjs"
+  },
+  "dependencies": {
+    "e2e": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
+  }
+}

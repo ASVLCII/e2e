@@ -1,5 +1,9 @@
-/** Canonical public declarations for the e2e driver-1 profile. */
+/**
+ * Public driver-1 SPI. Mirrors spec/api/driver.d.ts; the spec file wins on any
+ * divergence.
+ */
 
+import { driverHandleBrand } from '../internal/brands.js';
 import type {
   Capability,
   Cookie,
@@ -12,7 +16,7 @@ import type {
   SelectOption,
   ScrollDirection,
   Target,
-} from 'e2e';
+} from '../types.js';
 
 export interface OperationContext {
   readonly signal: AbortSignal;
@@ -26,22 +30,14 @@ export type TextPattern =
   | { readonly kind: 'string'; readonly value: string; readonly exact: boolean }
   | { readonly kind: 'regexp'; readonly source: string; readonly flags: string };
 
-export type QueryKind =
-  | 'role'
-  | 'label'
-  | 'placeholder'
-  | 'text'
-  | 'displayValue'
-  | 'testId';
+export type QueryKind = 'role' | 'label' | 'placeholder' | 'text' | 'displayValue' | 'testId';
 
 export interface SemanticQuery {
   readonly kind: QueryKind;
   readonly value: TextPattern;
   readonly name?: TextPattern;
   readonly states?: Readonly<
-    Partial<
-      Record<'checked' | 'disabled' | 'selected' | 'expanded' | 'hidden', boolean>
-    >
+    Partial<Record<'checked' | 'disabled' | 'selected' | 'expanded' | 'hidden', boolean>>
   >;
 }
 
@@ -83,22 +79,11 @@ export interface SemanticNode {
   readonly name?: string;
   readonly text?: string;
   readonly value?: string;
-  readonly inputPurpose?:
-    | 'username'
-    | 'password'
-    | 'one-time-code'
-    | 'generic-secret'
-    | 'none';
+  readonly inputPurpose?: 'username' | 'password' | 'one-time-code' | 'generic-secret' | 'none';
   readonly states?: Readonly<
     Partial<
       Record<
-        | 'checked'
-        | 'disabled'
-        | 'selected'
-        | 'expanded'
-        | 'focused'
-        | 'hidden'
-        | 'secure',
+        'checked' | 'disabled' | 'selected' | 'expanded' | 'focused' | 'hidden' | 'secure',
         boolean
       >
     >
@@ -131,14 +116,20 @@ export interface Observation {
 }
 
 export type LocatorAction =
-  | { readonly kind: 'tap' | 'doubleTap' | 'check' | 'uncheck' | 'clear' | 'focus' | 'scrollIntoView' }
+  | {
+      readonly kind:
+        | 'tap'
+        | 'doubleTap'
+        | 'check'
+        | 'uncheck'
+        | 'clear'
+        | 'focus'
+        | 'scrollIntoView';
+    }
   | { readonly kind: 'longPress'; readonly durationMs?: number }
   | { readonly kind: 'fill'; readonly value: string; readonly sensitive: boolean }
   | { readonly kind: 'press'; readonly key: string }
-  | {
-      readonly kind: 'selectOption';
-      readonly value: SelectOption;
-    }
+  | { readonly kind: 'selectOption'; readonly value: SelectOption }
   | { readonly kind: 'dragTo'; readonly target: NodeRef }
   | {
       readonly kind: 'swipe';
@@ -158,14 +149,27 @@ export type DriverErrorCode =
   | 'INVALID_STATE'
   | 'DRIVER_FAILURE';
 
+const LEGAL_RETRYABLE: ReadonlySet<DriverErrorCode> = new Set(['NODE_STALE', 'FRAME_NOT_FOUND']);
+
 export class DriverError extends Error {
+  readonly code: DriverErrorCode;
+  readonly retryable: boolean;
+
   constructor(
     code: DriverErrorCode,
     message: string,
     options: { retryable: boolean; cause?: unknown },
-  );
-  readonly code: DriverErrorCode;
-  readonly retryable: boolean;
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = 'DriverError';
+    if (options.retryable && !LEGAL_RETRYABLE.has(code)) {
+      this.code = 'DRIVER_FAILURE';
+      this.retryable = false;
+      return;
+    }
+    this.code = code;
+    this.retryable = options.retryable;
+  }
 }
 
 export interface DriverState {
@@ -222,18 +226,11 @@ export interface DriverApp {
 
 export interface DriverScreen {
   /** Resolves immediately; the runner owns query polling and strictness. */
-  resolve(
-    expression: LocatorExpression,
-    operation: OperationContext,
-  ): Promise<readonly NodeRef[]>;
+  resolve(expression: LocatorExpression, operation: OperationContext): Promise<readonly NodeRef[]>;
   /** Reads one node from its observation revision. */
   read(ref: NodeRef, operation: OperationContext): Promise<SemanticNode>;
   /** Performs exactly one action with backend actionability checks. */
-  perform(
-    ref: NodeRef,
-    action: LocatorAction,
-    operation: OperationContext,
-  ): Promise<void>;
+  perform(ref: NodeRef, action: LocatorAction, operation: OperationContext): Promise<void>;
   /** Performs a viewport-level swipe. */
   swipe(
     direction: ScrollDirection,
@@ -244,10 +241,7 @@ export interface DriverScreen {
 
 export interface DriverAgentActions {
   /** Taps one semantic node. */
-  tap(
-    target: { readonly ref: NodeRef },
-    operation: OperationContext,
-  ): Promise<void>;
+  tap(target: { readonly ref: NodeRef }, operation: OperationContext): Promise<void>;
   /** Long-presses one semantic node. */
   longPress(
     target: { readonly ref: NodeRef },
@@ -333,10 +327,7 @@ export interface DriverWeb {
   /** Removes matching routes. */
   unroute(pattern: TextPattern, operation: OperationContext): Promise<void>;
   /** Waits for one response. */
-  waitForResponse(
-    pattern: TextPattern,
-    operation: OperationContext,
-  ): Promise<DriverWebResponse>;
+  waitForResponse(pattern: TextPattern, operation: OperationContext): Promise<DriverWebResponse>;
   /** Returns current cookies. */
   cookies(operation: OperationContext): Promise<readonly Cookie[]>;
   /** Sets current cookies. */
@@ -348,10 +339,7 @@ export interface DriverWeb {
   ): Promise<void>;
   /** Registers an attempt-scoped dialog policy. */
   setDialogHandler(
-    handler:
-      | 'accept'
-      | 'dismiss'
-      | ((dialog: DriverDialog) => void | Promise<void>),
+    handler: 'accept' | 'dismiss' | ((dialog: DriverDialog) => void | Promise<void>),
     operation: OperationContext,
   ): Promise<string>;
   /** Removes one dialog policy. */
@@ -372,11 +360,7 @@ export interface DriverWeb {
   /** Moves the pointer. */
   mouseMove(x: number, y: number, operation: OperationContext): Promise<void>;
   /** Scrolls the pointer wheel. */
-  mouseWheel(
-    deltaX: number,
-    deltaY: number,
-    operation: OperationContext,
-  ): Promise<void>;
+  mouseWheel(deltaX: number, deltaY: number, operation: OperationContext): Promise<void>;
   /** Presses the pointer button. */
   mouseDown(operation: OperationContext): Promise<void>;
   /** Releases the pointer button. */
@@ -453,8 +437,35 @@ export interface DriverDefinition extends DriverManifest {
   dispose?(): Promise<void>;
 }
 
-/** Type-checks and returns a driver-1 implementation. */
-export function defineDriver(driver: DriverDefinition): Driver;
+const DRIVER_ID_PATTERN = /^[a-z0-9\-./]+$/;
+
+/** Type-checks, validates, and brands a driver-1 implementation. */
+export function defineDriver(driver: DriverDefinition): Driver {
+  if (driver.spiVersion !== 1) {
+    throw new TypeError(`unsupported driver SPI version: ${String(driver.spiVersion)}`);
+  }
+  if (typeof driver.id !== 'string' || !DRIVER_ID_PATTERN.test(driver.id)) {
+    throw new TypeError(
+      'driver id must contain lowercase ASCII letters, numbers, "-", ".", or "/"',
+    );
+  }
+  if (typeof driver.version !== 'string' || driver.version.length === 0) {
+    throw new TypeError('driver version is required');
+  }
+  if (!Array.isArray(driver.platforms) || driver.platforms.length === 0) {
+    throw new TypeError('driver platforms must be a nonempty array');
+  }
+  if (typeof driver.launch !== 'function') {
+    throw new TypeError('driver launch must be a function');
+  }
+  if (driver.dispose !== undefined && typeof driver.dispose !== 'function') {
+    throw new TypeError('driver dispose must be a function when present');
+  }
+  return Object.freeze({
+    ...driver,
+    [driverHandleBrand]: true as const,
+  });
+}
 
 export type DriverProfile = 'driver-1' | 'core-0.1' | 'web-0.1';
 
@@ -484,10 +495,43 @@ export interface DriverConformanceReport {
   readonly results: readonly DriverConformanceResult[];
 }
 
-/** Runs the reference application and machine-executable driver vectors. */
+/**
+ * Runs the reference application and machine-executable driver vectors.
+ * The conformance harness ships with a later Phase 1 milestone.
+ */
 export function verifyDriver(options: {
   driver: Driver;
   profiles: readonly DriverProfile[];
   artifactSha256: string;
   createTarget(referenceAppUrl: string): Target | Promise<Target>;
-}): Promise<readonly DriverConformanceReport[]>;
+}): Promise<readonly DriverConformanceReport[]> {
+  void options;
+  return Promise.reject(
+    new Error(
+      'verifyDriver is not implemented yet: the driver conformance harness lands with a later Phase 1 milestone',
+    ),
+  );
+}
+
+/** Returns true when the value is a defineDriver-branded handle. */
+export function isDriverHandle(value: unknown): value is Driver {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<PropertyKey, unknown>)[driverHandleBrand] === true
+  );
+}
+
+export type {
+  Capability,
+  Cookie,
+  DriverHandle,
+  DriverManifest,
+  JsonValue,
+  Momentum,
+  Platform,
+  RouteFulfillResponse,
+  SelectOption,
+  ScrollDirection,
+  Target,
+} from '../types.js';
