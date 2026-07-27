@@ -17,7 +17,7 @@ import { canonicalDigest, timestamp, uuidv7 } from '../internal/ids.ts';
 import { Deadline, withTimeout } from '../internal/time.ts';
 import type { CollectedFile } from '../collect/collect.ts';
 import type { RegisteredTest } from '../collect/registry.ts';
-import type { SkipInfo, TestTargetPair } from '../collect/select.ts';
+import type { TestTargetPair } from '../collect/select.ts';
 import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import { createFixtures, type ArtifactSink } from './fixtures.ts';
 import { findRegistered, RealmManager, type Realm } from './realm.ts';
@@ -29,18 +29,16 @@ import type {
 } from './records.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialHost, type SharedSerialSession } from './serial.ts';
+import { INTERRUPTED_BEFORE_START, pairResult, unstartedResult } from './units.ts';
 import { SessionStaging, SessionStore, type SessionIdentity } from './sessions.ts';
 import { StepRecorder } from './steps.ts';
 import type { SetupFn, TestFn } from '../types.ts';
 
 export interface ExecutionEvents {
   onResult?(result: ResultRecord): void;
-}
-
-export interface ExecutionOutcome {
-  readonly results: readonly ResultRecord[];
-  readonly serialGroups: readonly SerialGroupRecord[];
-  readonly runErrors: readonly RunError[];
+  onSerialGroup?(group: SerialGroupRecord): void;
+  /** Fires before a runnable pair (or serial unit via its first member) starts. */
+  onPairStart?(pair: TestTargetPair): void;
 }
 
 export interface TargetExecutorOptions {
@@ -58,6 +56,9 @@ export interface TargetExecutorOptions {
 
 type AttemptPhase = 'launch' | 'beforeEach' | 'body' | 'afterEach';
 
+/** The file-path slice of a collected file that unit execution needs. */
+export type FileRef = Pick<CollectedFile, 'file' | 'absolutePath'>;
+
 /** How one attempt acquires its driver session and session-staging hooks. */
 export type AttemptContext =
   | { readonly kind: 'ordinary' }
@@ -72,11 +73,8 @@ export class TargetExecutor implements SerialHost {
   readonly realms: RealmManager;
   readonly debug: DebugTrace;
 
-  private readonly results: ResultRecord[] = [];
-  private readonly serialGroups: SerialGroupRecord[] = [];
   private readonly runErrors: RunError[] = [];
   private readonly sessionIdentity: SessionIdentity;
-  private readonly failedSetupSessions = new Map<string, string>();
 
   constructor(private readonly options: TargetExecutorOptions) {
     this.target = options.target;
@@ -109,9 +107,8 @@ export class TargetExecutor implements SerialHost {
     return this.options.config;
   }
 
-  /** Emits one final result record (SerialHost). */
+  /** Emits one final result record (SerialHost). Records are not retained. */
   emit(result: ResultRecord): void {
-    this.results.push(result);
     this.options.events?.onResult?.(result);
   }
 
@@ -124,107 +121,46 @@ export class TargetExecutor implements SerialHost {
     return { signal, timeoutMs, runId: this.options.runId, attemptId };
   }
 
-  /** Runs all pairs for this target in report order. */
-  async run(pairs: readonly TestTargetPair[], files: readonly CollectedFile[]): Promise<ExecutionOutcome> {
-    const setupPairs = pairs.filter((pair) => pair.test.kind === 'setup' && pair.disposition === 'run');
-    for (const pair of setupPairs) {
-      if (this.interruptSignal.aborted) break;
-      await this.runSetupPair(pair);
-    }
+  /** Run-level errors recorded so far, in order. */
+  collectedRunErrors(): readonly RunError[] {
+    return this.runErrors;
+  }
 
+  /**
+   * Runs one file-target unit: runnable pairs of a single file, in declaration
+   * order, sharing a realm between passing non-serial tests (spec
+   * 11-lifecycle.md). Dispatch-time gating (selection dispositions and
+   * setup-failure dependencies) belongs to the scheduler, so every pair
+   * reaching here is runnable.
+   */
+  async runFileUnit(file: FileRef, filePairs: readonly TestTargetPair[]): Promise<void> {
     const executedSerialUnits = new Set<string>();
-    for (const file of files) {
-      if (this.interruptSignal.aborted) break;
-      const filePairs = pairs.filter(
-        (pair) => pair.test.file === file.file && pair.test.kind === 'test',
-      );
-      let realm: Realm | null = null;
-      for (const pair of filePairs.toSorted((a, b) => a.test.declarationIndex - b.test.declarationIndex)) {
-        if (this.interruptSignal.aborted) {
-          this.emitUnstartedInterrupted(pair);
-          continue;
-        }
-        if (pair.disposition !== 'run') {
-          this.emitNonRun(pair);
-          continue;
-        }
-        const dependencyFailure = this.dependencySkip(pair);
-        if (dependencyFailure !== undefined) {
-          this.emit({
-            test: pair.test,
-            target: pair.target,
-            status: 'skipped',
-            selected: true,
-            skip: dependencyFailure,
-            attempts: [],
-          });
-          continue;
-        }
-        if (pair.test.serialId !== undefined) {
-          if (!executedSerialUnits.has(pair.test.serialId)) {
-            executedSerialUnits.add(pair.test.serialId);
-            const members = filePairs
-              .filter((member) => member.test.serialId === pair.test.serialId)
-              .toSorted((a, b) => a.test.declarationIndex - b.test.declarationIndex);
-            this.serialGroups.push(await runSerialUnit(this, members, file.absolutePath));
-            realm = null;
-          }
-          continue;
-        }
-        realm = await this.runOrdinaryPair(pair, file, realm);
+    const ordered = filePairs.toSorted((a, b) => a.test.declarationIndex - b.test.declarationIndex);
+    let realm: Realm | null = null;
+    for (const pair of ordered) {
+      if (this.interruptSignal.aborted) {
+        this.emit(unstartedResult(pair, INTERRUPTED_BEFORE_START));
+        continue;
       }
-      if (realm !== null) await this.realms.leave(realm);
+      if (pair.test.serialId !== undefined) {
+        if (!executedSerialUnits.has(pair.test.serialId)) {
+          executedSerialUnits.add(pair.test.serialId);
+          const members = ordered.filter((member) => member.test.serialId === pair.test.serialId);
+          this.options.events?.onPairStart?.(pair);
+          const group = await runSerialUnit(this, members, file.absolutePath);
+          this.options.events?.onSerialGroup?.(group);
+          realm = null;
+        }
+        continue;
+      }
+      this.options.events?.onPairStart?.(pair);
+      realm = await this.runOrdinaryPair(pair, file, realm);
     }
-
-    return {
-      results: this.results,
-      serialGroups: this.serialGroups,
-      runErrors: this.runErrors,
-    };
+    if (realm !== null) await this.realms.leave(realm);
   }
 
-  private emitNonRun(pair: TestTargetPair): void {
-    if (pair.disposition === 'skip') {
-      this.emit({
-        test: pair.test,
-        target: pair.target,
-        status: 'skipped',
-        selected: true,
-        skip: pair.skip,
-        attempts: [],
-      });
-      return;
-    }
-    this.emit({
-      test: pair.test,
-      target: pair.target,
-      status: 'skipped',
-      selected: false,
-      skip: pair.skip ?? { cause: 'filtered', reason: 'not selected' },
-      attempts: [],
-    });
-  }
-
-  private emitUnstartedInterrupted(pair: TestTargetPair): void {
-    this.emit({
-      test: pair.test,
-      target: pair.target,
-      status: 'skipped',
-      selected: pair.disposition === 'run',
-      skip: { cause: 'infrastructure-unavailable', reason: 'run interrupted before execution' },
-      attempts: [],
-    });
-  }
-
-  private dependencySkip(pair: TestTargetPair): SkipInfo | undefined {
-    const session = pair.options.session;
-    if (session === undefined) return undefined;
-    const failedSetup = this.failedSetupSessions.get(session);
-    if (failedSetup === undefined) return undefined;
-    return { cause: 'setup-failed', reason: `setup for session "${session}" failed`, relatedId: failedSetup };
-  }
-
-  private recordDisappeared(message: string): void {
+  /** Records a deterministic-registration violation as a run-level error. */
+  recordDisappeared(message: string): void {
     this.runErrors.push({
       error: serializeError(new ConfigurationError('COLLECTION_ERROR', message), {
         phase: 'collection',
@@ -236,7 +172,7 @@ export class TargetExecutor implements SerialHost {
 
   private async runOrdinaryPair(
     pair: TestTargetPair,
-    file: CollectedFile,
+    file: FileRef,
     incomingRealm: Realm | null,
   ): Promise<Realm | null> {
     const attempts: AttemptRecord[] = [];
@@ -267,29 +203,25 @@ export class TargetExecutor implements SerialHost {
     );
 
     if (hookFailure !== undefined) {
-      this.emit({
-        test: pair.test,
-        target: pair.target,
-        status: 'skipped',
-        selected: true,
-        skip: { cause: 'hook-failed', reason: hookFailure.message },
-        attempts: [],
-      });
+      this.emit(
+        pairResult(pair, {
+          status: 'skipped',
+          selected: true,
+          skip: { cause: 'hook-failed', reason: hookFailure.message },
+          attempts: [],
+        }),
+      );
       return realm;
     }
-    this.emit({
-      test: pair.test,
-      target: pair.target,
-      status: finalStatus,
-      selected: true,
-      attempts,
-    });
+    this.emit(pairResult(pair, { status: finalStatus, selected: true, attempts }));
     return realm;
   }
 
   // --- setup tests ---
 
-  private async runSetupPair(pair: TestTargetPair): Promise<void> {
+  /** Runs one setup pair to completion, persisting staged sessions on success. */
+  async runSetupUnit(pair: TestTargetPair): Promise<void> {
+    this.options.events?.onPairStart?.(pair);
     const absolutePath = path.resolve(this.config.projectRoot, pair.test.file);
     const attempts: AttemptRecord[] = [];
 
@@ -333,18 +265,7 @@ export class TargetExecutor implements SerialHost {
       },
     );
 
-    if (finalStatus !== 'passed' && finalStatus !== 'flaky') {
-      for (const session of pair.test.sessions) {
-        this.failedSetupSessions.set(session, pair.test.id);
-      }
-    }
-    this.emit({
-      test: pair.test,
-      target: pair.target,
-      status: finalStatus,
-      selected: true,
-      attempts,
-    });
+    this.emit(pairResult(pair, { status: finalStatus, selected: true, attempts }));
   }
 
   // --- attempt core ---
