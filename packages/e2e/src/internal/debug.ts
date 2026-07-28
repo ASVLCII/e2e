@@ -6,6 +6,16 @@ interface DebugEntry {
   maxMs: number;
 }
 
+/** One aggregated phase, JSON-serializable so workers can ship it over IPC. */
+export interface DebugEntrySnapshot extends DebugEntry {
+  readonly label: string;
+}
+
+/** Everything one trace collected, JSON-serializable for the worker channel. */
+export interface DebugSnapshot {
+  readonly entries: readonly DebugEntrySnapshot[];
+}
+
 /**
  * Aggregates named phase durations for one run. When disabled every method is
  * a near-zero pass-through, so call sites never need to branch.
@@ -40,42 +50,75 @@ export class DebugTrace {
     }
   }
 
-  /** Formats aggregated timings as an aligned table, sorted by total time. */
+  /** Returns everything recorded so far and resets, for transport to another trace. */
+  drain(): DebugSnapshot {
+    const snapshot: DebugSnapshot = {
+      entries: [...this.entries.entries()].map(([label, entry]) => ({ label, ...entry })),
+    };
+    this.entries.clear();
+    return snapshot;
+  }
+
+  /** Folds a drained snapshot from another trace into this one. */
+  merge(snapshot: DebugSnapshot): void {
+    if (!this.enabled) return;
+    for (const incoming of snapshot.entries) {
+      const entry = this.entries.get(incoming.label);
+      if (entry === undefined) {
+        this.entries.set(incoming.label, {
+          totalMs: incoming.totalMs,
+          count: incoming.count,
+          maxMs: incoming.maxMs,
+        });
+        continue;
+      }
+      entry.totalMs += incoming.totalMs;
+      entry.count += incoming.count;
+      if (incoming.maxMs > entry.maxMs) entry.maxMs = incoming.maxMs;
+    }
+  }
+
+  /** Formats aggregated timings as one aligned table, phases sorted by total time. */
   summary(): string {
     const rows = [...this.entries.entries()]
       .toSorted((left, right) => right[1].totalMs - left[1].totalMs)
-      .map(([label, entry]) => ({
+      .map(([label, entry]) => [
         label,
-        count: String(entry.count),
-        total: formatMs(entry.totalMs),
-        avg: formatMs(entry.totalMs / entry.count),
-        max: formatMs(entry.maxMs),
-      }));
-    const header = { label: 'phase', count: 'count', total: 'total', avg: 'avg', max: 'max' };
-    const width = (key: keyof typeof header): number =>
-      Math.max(header[key].length, ...rows.map((row) => row[key].length));
-    const widths = {
-      label: width('label'),
-      count: width('count'),
-      total: width('total'),
-      avg: width('avg'),
-      max: width('max'),
-    };
-    const line = (row: typeof header): string =>
-      `  ${row.label.padEnd(widths.label)}  ${row.count.padStart(widths.count)}  ${row.total.padStart(
-        widths.total,
-      )}  ${row.avg.padStart(widths.avg)}  ${row.max.padStart(widths.max)}`;
-    const body = rows.length === 0 ? ['  (no phases recorded)'] : rows.map(line);
-    return [
+        String(entry.count),
+        formatMs(entry.totalMs),
+        formatMs(entry.totalMs / entry.count),
+        formatMs(entry.maxMs),
+      ]);
+    return table(
       `[e2e debug] phase timings (wall ${formatMs(Date.now() - this.startedMs)})`,
-      line(header),
-      ...body,
-      '',
-    ].join('\n');
+      ['phase', 'count', 'total', 'avg', 'max'],
+      rows,
+      '(no phases recorded)',
+    );
   }
 }
 
-function formatMs(value: number): string {
+/** Renders one aligned table: first column left-aligned, the rest right-aligned. */
+export function table(
+  title: string,
+  header: readonly string[],
+  rows: readonly (readonly string[])[],
+  empty: string,
+): string {
+  const widths = header.map((label, column) =>
+    Math.max(label.length, ...rows.map((row) => row[column]?.length ?? 0)),
+  );
+  const line = (row: readonly string[]): string =>
+    `  ${row
+      .map((cell, column) =>
+        column === 0 ? cell.padEnd(widths[column] ?? 0) : cell.padStart(widths[column] ?? 0),
+      )
+      .join('  ')}`;
+  const body = rows.length === 0 ? [`  ${empty}`] : rows.map(line);
+  return [title, line(header), ...body, ''].join('\n');
+}
+
+export function formatMs(value: number): string {
   if (value >= 10_000) return `${(value / 1000).toFixed(1)}s`;
   return `${Math.round(value)}ms`;
 }

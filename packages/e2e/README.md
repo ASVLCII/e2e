@@ -16,11 +16,16 @@ implements the deterministic subset of specification 0.1:
   actions and reads, `app` lifecycle, `web` navigation/routes/cookies/dialogs/
   downloads/evaluation, and screenshot/trace artifacts through the
   `e2e/playwright` reference driver.
+- **agent-protocol-1 (located actions and judgments)** — atomic semantic
+  observations, the closed `agent-locate-1`/`agent-judgment-1` grammars,
+  runner-owned budgets, ledger, policy, and error classification behind
+  `agent.tap`, `click`, `type`, `longPress`, `scroll`, `scrollTo`, `waitFor`,
+  `extract`, and `assert`.
 
-Not implemented yet: agentic execution (`agent.*` rejects with
-`MODEL_UNAVAILABLE`), locate/path caches, the HTML reporter, video artifacts,
-and mobile targets (rejected per the v0 boundary). `--no-agent-cache` is
-accepted per spec 06-cli.md but no agent cache exists yet.
+Not implemented yet: the planning tier (`agent.act` and `agent.login` reject
+with `UNSUPPORTED_CAPABILITY`), locate/path caches (`cache-1`; every agent step
+reports `cache: bypassed`), the HTML reporter, video artifacts, step source
+locations, and mobile targets (rejected per the v0 boundary).
 
 ## Parallel execution
 
@@ -37,6 +42,61 @@ owns one driver instance (one browser). A programmatic in-memory config (the
 `rawConfig` option) cannot cross a process boundary, so it runs against a
 single in-process worker instead — same scheduler, same execution core, only
 the transport differs.
+
+## Agent configuration
+
+There is no implicit default model. Configure one of:
+
+```ts
+export default defineConfig({
+  agent: { model: 'anthropic/claude-sonnet-4.5' },
+});
+```
+
+```bash
+E2E_MODEL=openai/gpt-5.4-mini E2E_MODEL_API_KEY=... e2e run
+```
+
+```ts
+// Any AI SDK provider instance works: install the provider package and pass
+// the model directly. The instance owns its own transport and credentials.
+import { openai } from '@ai-sdk/openai';
+
+export default defineConfig({
+  agent: { model: openai('gpt-5.4-mini') },
+});
+```
+
+A `provider/model-id` string is reached through the
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway), so the provider is
+chosen by the model string. The gateway credential is read from
+`E2E_MODEL_API_KEY` (or `agent.model.apiKeyEnv`, falling back to
+`AI_GATEWAY_API_KEY`) and never enters config digests, logs, or reports.
+`agent.model.endpoint` overrides the gateway base URL and must use HTTPS
+unless it is a loopback host, which is how a local or self-hosted
+OpenAI-compatible endpoint is reached.
+
+A model instance bypasses the gateway entirely: `openai(...)`,
+`anthropic(...)`, `ollama(...)`, or any other package implementing the AI SDK
+language-model specification is used as-is, with whatever credentials and
+endpoint the provider package resolves itself. Because workers re-load the
+config module, each process constructs its own instance; the report records
+the instance's provider and model ID.
+
+Model input is the redacted semantic tree, the bounded prior-step ledger, and
+trusted project context — never screenshots, raw HTML, cookies, headers, or
+secret values. Secure fields arrive masked and registered secret values are
+replaced by their secret name.
+
+Two behaviors are worth knowing when writing tests:
+
+- `agent.extract` projects your schema to JSON Schema when the vendor supports
+  it, so zod schemas are enforced by the provider in one model call. Vendors
+  without a converter fall back to text mode: describe the shape in the
+  instruction, and rejections feed validation issue paths back for one repair
+  attempt within `maxModelCalls`.
+- Any secret fill leaves the viewport pixel-tainted for the rest of the attempt,
+  so `agent.assert` stops attaching screenshot evidence afterwards.
 
 ## Usage
 

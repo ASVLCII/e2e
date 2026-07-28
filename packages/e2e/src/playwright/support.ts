@@ -1,12 +1,83 @@
 /** Shared error translation, filename, and swipe helpers for the Playwright driver. */
 
-import type { Locator as PwLocator, Page } from 'playwright';
+import type { ElementHandle, Locator as PwLocator, Page } from 'playwright';
 import { DriverError, type Momentum, type ScrollDirection } from '../driver/index.ts';
 
 export const DEFAULT_VIEWPORT = { width: 1280, height: 720 } as const;
 
+/**
+ * A resolved node is addressed either by a deterministic locator expression or
+ * by a live element handle captured during one agent observation. Handles are
+ * always elements: the in-page observation walk records `Element` nodes only.
+ */
+export type ActionTarget =
+  | { readonly kind: 'locator'; readonly locator: PwLocator }
+  | { readonly kind: 'element'; readonly element: ElementHandle<Element> };
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Action surface Locator and ElementHandle share with identical signatures.
+ * Operations whose behavior diverges between the two kinds (bounding box,
+ * evaluate, page ownership, drag) have explicit helpers below so every fork is
+ * visible at its call site instead of hidden behind a uniform interface.
+ */
+export type Actionable = Pick<
+  PwLocator,
+  | 'click'
+  | 'dblclick'
+  | 'fill'
+  | 'press'
+  | 'check'
+  | 'uncheck'
+  | 'hover'
+  | 'scrollIntoViewIfNeeded'
+  | 'selectOption'
+  | 'setInputFiles'
+>;
+
+/** Narrows one action target to the shared Playwright action surface. */
+export function asActionable(target: ActionTarget): Actionable {
+  return target.kind === 'locator' ? target.locator : target.element;
+}
+
+/** Owning page of one action target. */
+export async function targetPage(target: ActionTarget): Promise<Page> {
+  if (target.kind === 'locator') return target.locator.page();
+  const frame = await target.element.ownerFrame();
+  if (frame === null) throw invalidState('element is detached from every frame');
+  return frame.page();
+}
+
+/**
+ * Bounding box of one action target. A locator waits up to `timeout` for its
+ * element to resolve; an element handle is already resolved, so its box is
+ * read immediately.
+ */
+export function targetBoundingBox(target: ActionTarget, timeout: number): Promise<Rect | null> {
+  return target.kind === 'locator'
+    ? target.locator.boundingBox({ timeout })
+    : target.element.boundingBox();
+}
+
+export function unsupportedDrag(): DriverError {
+  return new DriverError('UNSUPPORTED_CAPABILITY', 'dragTo requires locator-backed targets', {
+    retryable: false,
+  });
+}
+
+/** Playwright colorizes call logs; escape codes are noise in reports. */
+// oxlint-disable-next-line no-control-regex -- intentionally matches the ESC control character
+const ANSI_PATTERN = /\u001b\[\d+(?:;\d+)*m/g;
+
 export function message(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
+  const text = cause instanceof Error ? cause.message : String(cause);
+  return text.replace(ANSI_PATTERN, '');
 }
 
 export function isPwTimeout(cause: unknown): boolean {
@@ -60,12 +131,15 @@ export function performViewportSwipe(
 }
 
 export async function performElementSwipe(
-  locator: PwLocator,
+  target: ActionTarget,
   direction: ScrollDirection,
   momentum: Momentum,
   timeout: number,
 ): Promise<void> {
-  const box = await locator.boundingBox({ timeout });
+  // Hover first: it auto-waits for visibility on both target kinds, so the
+  // immediate box read below observes a settled element.
+  await asActionable(target).hover({ timeout });
+  const box = await targetBoundingBox(target, timeout);
   if (box === null) {
     throw new DriverError('NOT_ACTIONABLE', 'element has no visible bounding box', {
       retryable: false,
@@ -76,8 +150,8 @@ export async function performElementSwipe(
     momentum,
   );
   const [deltaX, deltaY] = wheelDelta(direction, distance);
-  await locator.hover({ timeout });
-  await locator.page().mouse.wheel(deltaX, deltaY);
+  const page = await targetPage(target);
+  await page.mouse.wheel(deltaX, deltaY);
 }
 
 function swipeDistance(extent: number, momentum: Momentum): number {

@@ -88,7 +88,12 @@ export class TargetWorker {
         events: {
           onResult: (result) => this.host.emit({ type: 'result', result: encodeResult(result) }),
           onSerialGroup: (group) => this.host.emit({ type: 'serial-group', group }),
-          onPairStart: (pair) => this.host.emit({ type: 'pair-start', testId: pair.test.id }),
+          onPairStart: (pair) =>
+            this.host.emit({
+              type: 'pair-start',
+              testId: pair.test.id,
+              title: pair.test.titlePath.join(' \u203a '),
+            }),
         },
       });
       this.host.emit({ type: 'ready' });

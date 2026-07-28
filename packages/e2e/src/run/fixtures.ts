@@ -1,6 +1,9 @@
 /** Attempt-scoped fixture graph (spec 02-test-api.md, 08-platforms.md). */
 
+import { createAgent } from '../agent/index.ts';
+import { createModelAdapter } from '../agent/model/sdk.ts';
 import type { DriverDialog, DriverSession, DriverWebRoute } from '../driver/index.ts';
+import type { DebugTrace } from '../internal/debug.ts';
 import { registerWebExpectTarget } from '../expect/index.ts';
 import { ConfigurationError, TestError } from '../internal/errors.ts';
 import { toRoutePattern } from '../internal/route-pattern.ts';
@@ -32,7 +35,7 @@ import type {
   WebResponse,
   WebRoute,
 } from '../types.ts';
-import type { StepRecorder } from './steps.ts';
+import type { StepRecord, StepRecorder } from './steps.ts';
 
 export interface ArtifactSink {
   /** Registers a produced artifact and returns its report artifact ID. */
@@ -49,6 +52,10 @@ export interface AttemptEnvironment {
   readonly attemptId: string;
   readonly testDeadline: Deadline;
   readonly artifacts: ArtifactSink;
+  /** Completed steps agent prompts quote as prior context; serial members see the whole group. */
+  readonly priorSteps: () => readonly StepRecord[];
+  /** Trusted test/group agent context appended after config.agent.context. */
+  readonly agentContext: string | undefined;
   /** Stages one captured session state; only setup attempts provide this. */
   readonly saveSession: ((name: string) => Promise<void>) | undefined;
   /**
@@ -56,6 +63,8 @@ export interface AttemptEnvironment {
    * members share one session and therefore one open state.
    */
   readonly opened: { value: boolean };
+  /** `--debug` phase timings; absent when the caller collects none. */
+  readonly debug?: DebugTrace;
 }
 
 export interface FixtureGraph {
@@ -84,6 +93,12 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
     },
   });
 
+  /**
+   * Any resolved secret leaves the viewport pixel-tainted for the rest of the
+   * attempt: an untrusted app may mirror the value anywhere on screen.
+   */
+  const taint = { value: false };
+
   const secrets: SecretResolver = {
     resolve(secret) {
       const credential = environment.config.credentials.get(secret.name);
@@ -93,21 +108,43 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
           `credential "${secret.name}" is not configured`,
         );
       }
+      taint.value = true;
       return credential.password;
     },
   };
 
-  const screenContext: ScreenContext = { engine, steps: environment.steps, secrets };
+  const screenContext: ScreenContext = {
+    engine,
+    steps: environment.steps,
+    secrets,
+    projectRoot: environment.config.projectRoot,
+  };
   const screen = createScreen(screenContext);
   const app = createApp(environment, engine, opened);
   const web = createWeb(environment, engine, screenContext, opened);
 
+  let agent: Agent | undefined;
+
   const fixtures: TestFixtures & { session: SetupSession } = {
     get agent(): Agent {
-      throw new ConfigurationError(
-        'MODEL_UNAVAILABLE',
-        'the agent fixture requires model configuration (agent.model or E2E_MODEL); agentic execution is not implemented yet',
-      );
+      agent ??= createAgent({
+        engine,
+        steps: environment.steps,
+        adapter: createModelAdapter(environment.config.agent.model),
+        config: environment.config,
+        priorSteps: environment.priorSteps,
+        agentContext: joinAgentContext(
+          environment.config.agent.context,
+          environment.agentContext,
+        ),
+        secrets,
+        secretValues: secretValues(environment),
+        taint,
+        artifacts: environment.artifacts,
+        signal: environment.signal,
+        ...(environment.debug !== undefined ? { debug: environment.debug } : {}),
+      });
+      return agent;
     },
     app,
     screen,
@@ -134,6 +171,26 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
   };
 
   return { fixtures, engine };
+}
+
+/** Trusted config context first, then test/group context. */
+function joinAgentContext(
+  configContext: string | undefined,
+  testContext: string | undefined,
+): string | undefined {
+  const parts = [configContext, testContext].filter(
+    (part): part is string => part !== undefined && part.trim() !== '',
+  );
+  return parts.length === 0 ? undefined : parts.join('\n');
+}
+
+/** Registered secret values, used only for runner-side observation redaction. */
+function secretValues(environment: AttemptEnvironment): ReadonlyMap<string, string> {
+  const values = new Map<string, string>();
+  for (const [name, credential] of environment.config.credentials) {
+    values.set(name, credential.password);
+  }
+  return values;
 }
 
 function createApp(
@@ -364,9 +421,11 @@ function createWeb(
       });
     },
     async setViewport(size): Promise<void> {
-      await steps.run('web', 'web.setViewport', `${size.width}x${size.height}`, () =>
-        driverWeb().setViewport(size, engine.operation()),
-      );
+      await steps.run('web', 'web.setViewport', `${size.width}x${size.height}`, async () => {
+        await driverWeb().setViewport(size, engine.operation());
+        const runtime = await engine.session.runtime(engine.operation());
+        steps.attachViewport(runtime.viewport);
+      });
     },
     async onDialog(handler): Promise<() => Promise<void>> {
       const wrapped =

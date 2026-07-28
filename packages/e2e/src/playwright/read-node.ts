@@ -1,4 +1,4 @@
-/** In-page semantic node reader executed via locator.evaluate. */
+/** In-page semantic reader executed via locator.evaluate / locator.evaluateHandle. */
 
 export interface RawNodeData {
   role: string | null;
@@ -19,11 +19,112 @@ export interface RawNodeData {
   rect: { x: number; y: number; width: number; height: number };
 }
 
+/** One observed node plus its position in the flattened depth-first tree. */
+export interface RawObservedNode extends RawNodeData {
+  /** Index of the nearest included ancestor, or -1 for the root. */
+  parent: number;
+  /** Unique CSS selector of this `<iframe>` element; set only for iframes. */
+  frameSelector?: string;
+}
+
+/**
+ * One walked document. driver-1 has no way to report a truncated tree, so the
+ * node budget is a safety valve, not a signal: when it stops the walk early
+ * the result simply ends, and the runner's visible observation byte budget is
+ * the effective limit.
+ */
+export interface RawObservation {
+  nodes: RawObservedNode[];
+  /** Live element handles positionally aligned with `nodes`. */
+  elements: Element[];
+  secureNodeCount: number;
+}
+
+export type SemanticMode = { kind: 'node' } | { kind: 'tree'; maxNodes: number };
+
+export interface SemanticOptions {
+  testIdAttribute: string;
+  mode: SemanticMode;
+}
+
+/** Result of one read, selected by the mode discriminant. */
+export type SemanticResult<Mode extends SemanticMode> = Mode extends { kind: 'node' }
+  ? RawNodeData
+  : RawObservation;
+
 /**
  * Serialized into the page by Playwright. Must stay self-contained: no outer
- * captures beyond its single argument.
+ * captures beyond its two arguments.
+ *
+ * `mode.kind === 'node'` reads exactly one element for locator reads.
+ * `mode.kind === 'tree'` walks the subtree for one agent observation and
+ * returns live element handles aligned with the flattened node list. The two
+ * modes also project nodes differently; those differences are data (see
+ * `projection` below), not scattered branches.
  */
-export const readNodeFunction = (element: Element, testIdAttribute: string): RawNodeData => {
+export const readSemanticsFunction = <Mode extends SemanticMode>(
+  element: Element,
+  options: { testIdAttribute: string; mode: Mode },
+): SemanticResult<Mode> => {
+  const SKIP_TAGS = [
+    'script',
+    'style',
+    'noscript',
+    'template',
+    'head',
+    'meta',
+    'link',
+    'title',
+    'base',
+    'param',
+    'source',
+    'track',
+    'col',
+    'colgroup',
+    'frame',
+    'frameset',
+    'object',
+    'embed',
+  ];
+  const OPAQUE_TAGS = ['svg', 'math', 'canvas', 'video', 'audio'];
+
+  /**
+   * How the active mode projects one node, expressed as data so `describe`
+   * stays branch-free. Tree mode is the model-bound projection: bounded text,
+   * a lean attribute allowlist, hrefs reduced to origin+path, and the root
+   * document named by its title. Node mode is the full locator-read surface.
+   */
+  const projection =
+    options.mode.kind === 'tree'
+      ? {
+          attributes: [options.testIdAttribute, 'type', 'autocomplete', 'href', 'role'],
+          textLimit: 512,
+          nameLimit: 256,
+          redactHref: true,
+          directTextOnly: true,
+          documentRoot: true,
+        }
+      : {
+          attributes: [
+            options.testIdAttribute,
+            'type',
+            'autocomplete',
+            'href',
+            'role',
+            'id',
+            'name',
+            'placeholder',
+            'title',
+            'alt',
+            'value',
+          ],
+          textLimit: null,
+          nameLimit: null,
+          redactHref: false,
+          directTextOnly: false,
+          documentRoot: false,
+        };
+
   const implicitRole = (el: Element): string | null => {
     const explicit = el.getAttribute('role');
     if (explicit !== null && explicit !== '') return explicit.split(/\s+/)[0] ?? null;
@@ -94,6 +195,15 @@ export const readNodeFunction = (element: Element, testIdAttribute: string): Raw
     return el.textContent ?? '';
   };
 
+  /** Text owned directly by an element, excluding descendant elements. */
+  const directTextOf = (el: Element): string => {
+    let out = '';
+    for (const child of Array.from(el.childNodes)) {
+      if (child.nodeType === 3) out += child.nodeValue ?? '';
+    }
+    return out.replace(/\s+/g, ' ').trim();
+  };
+
   const accessibleName = (el: Element): string | null => {
     const ariaLabel = el.getAttribute('aria-label');
     if (ariaLabel !== null && ariaLabel.trim() !== '') return ariaLabel.trim();
@@ -159,78 +269,189 @@ export const readNodeFunction = (element: Element, testIdAttribute: string): Raw
     return el.getClientRects().length === 0;
   };
 
-  const el = element;
-  const tag = el.tagName.toLowerCase();
-  const type = (el.getAttribute('type') ?? '').toLowerCase();
-  const autocomplete = (el.getAttribute('autocomplete') ?? '').toLowerCase();
-
-  let value: string | null = null;
-  let checked: boolean | null = null;
-  let selectedState: boolean | null = null;
-  if (el instanceof HTMLInputElement) {
-    if (el.type === 'checkbox' || el.type === 'radio') checked = el.checked;
-    else value = el.value;
-  } else if (el instanceof HTMLTextAreaElement) {
-    value = el.value;
-  } else if (el instanceof HTMLSelectElement) {
-    value = el.value;
-  } else if (el instanceof HTMLOptionElement) {
-    selectedState = el.selected;
-    value = el.value;
-  }
-  const ariaChecked = el.getAttribute('aria-checked');
-  if (ariaChecked !== null) checked = ariaChecked === 'true';
-  const ariaSelected = el.getAttribute('aria-selected');
-  if (ariaSelected !== null) selectedState = ariaSelected === 'true';
-
-  const disabled =
-    ((el instanceof HTMLInputElement ||
-      el instanceof HTMLTextAreaElement ||
-      el instanceof HTMLSelectElement ||
-      el instanceof HTMLButtonElement) &&
-      el.disabled) ||
-    el.getAttribute('aria-disabled') === 'true';
-
-  const ariaExpanded = el.getAttribute('aria-expanded');
-  const secure = tag === 'input' && type === 'password';
-
-  let inputPurpose: RawNodeData['inputPurpose'] = 'none';
-  if (secure) inputPurpose = 'password';
-  else if (autocomplete === 'username') inputPurpose = 'username';
-  else if (autocomplete === 'current-password' || autocomplete === 'new-password') {
-    inputPurpose = 'password';
-  } else if (autocomplete === 'one-time-code') inputPurpose = 'one-time-code';
-
-  const attributes: Record<string, string> = {};
-  const allowedExact = new Set([
-    testIdAttribute, 'type', 'autocomplete', 'href', 'role', 'id',
-    'name', 'placeholder', 'title', 'alt', 'value',
-  ]);
-  for (const attribute of Array.from(el.attributes)) {
-    if (allowedExact.has(attribute.name) || attribute.name.startsWith('aria-')) {
-      if (secure && attribute.name === 'value') continue;
-      attributes[attribute.name] = attribute.value;
+  /** Reduces a URL to origin and path, dropping userinfo, query, and fragment. */
+  const originAndPath = (value: string, base: string): string => {
+    try {
+      const url = new URL(value, base);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return value.split('?')[0]?.split('#')[0] ?? '';
     }
-  }
-
-  const rect = el.getBoundingClientRect();
-
-  return {
-    role: implicitRole(el),
-    name: accessibleName(el),
-    text: secure ? '' : textOf(el),
-    value: secure ? null : value,
-    inputPurpose,
-    states: {
-      checked,
-      disabled,
-      selected: selectedState,
-      expanded: ariaExpanded === null ? null : ariaExpanded === 'true',
-      focused: el.ownerDocument.activeElement === el,
-      hidden: isHidden(el),
-      secure,
-    },
-    attributes,
-    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
   };
+
+  const describe = (el: Element): RawNodeData => {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') ?? '').toLowerCase();
+    const autocomplete = (el.getAttribute('autocomplete') ?? '').toLowerCase();
+
+    let value: string | null = null;
+    let checked: boolean | null = null;
+    let selectedState: boolean | null = null;
+    if (el instanceof HTMLInputElement) {
+      if (el.type === 'checkbox' || el.type === 'radio') checked = el.checked;
+      else value = el.value;
+    } else if (el instanceof HTMLTextAreaElement) {
+      value = el.value;
+    } else if (el instanceof HTMLSelectElement) {
+      value = el.value;
+    } else if (el instanceof HTMLOptionElement) {
+      selectedState = el.selected;
+      value = el.value;
+    }
+    const ariaChecked = el.getAttribute('aria-checked');
+    if (ariaChecked !== null) checked = ariaChecked === 'true';
+    const ariaSelected = el.getAttribute('aria-selected');
+    if (ariaSelected !== null) selectedState = ariaSelected === 'true';
+
+    const disabled =
+      ((el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement ||
+        el instanceof HTMLButtonElement) &&
+        el.disabled) ||
+      el.getAttribute('aria-disabled') === 'true';
+
+    const ariaExpanded = el.getAttribute('aria-expanded');
+    const secure = tag === 'input' && type === 'password';
+
+    let inputPurpose: RawNodeData['inputPurpose'] = 'none';
+    if (secure) inputPurpose = 'password';
+    else if (autocomplete === 'username') inputPurpose = 'username';
+    else if (autocomplete === 'current-password' || autocomplete === 'new-password') {
+      inputPurpose = 'password';
+    } else if (autocomplete === 'one-time-code') inputPurpose = 'one-time-code';
+
+    const attributes: Record<string, string> = {};
+    for (const attribute of Array.from(el.attributes)) {
+      if (projection.attributes.indexOf(attribute.name) !== -1 || attribute.name.startsWith('aria-')) {
+        if (secure && attribute.name === 'value') continue;
+        // Observations expose href origin and path only: query strings and
+        // fragments routinely carry tokens (spec 10-determinism.md).
+        if (projection.redactHref && attribute.name === 'href') {
+          attributes[attribute.name] = originAndPath(attribute.value, el.ownerDocument.baseURI);
+          continue;
+        }
+        attributes[attribute.name] = attribute.value;
+      }
+    }
+
+    let text: string;
+    if (secure) text = '';
+    else if (projection.directTextOnly) text = directTextOf(el);
+    else text = textOf(el);
+    if (projection.textLimit !== null) text = text.slice(0, projection.textLimit);
+
+    let name = accessibleName(el);
+    if (projection.nameLimit !== null && name !== null) name = name.slice(0, projection.nameLimit);
+    const isDocumentRoot = projection.documentRoot && tag === 'html';
+    if (isDocumentRoot) name = el.ownerDocument.title;
+
+    const rect = el.getBoundingClientRect();
+
+    return {
+      role: isDocumentRoot ? 'document' : implicitRole(el),
+      name,
+      text,
+      value: secure ? null : value,
+      inputPurpose,
+      states: {
+        checked,
+        disabled,
+        selected: selectedState,
+        expanded: ariaExpanded === null ? null : ariaExpanded === 'true',
+        focused: el.ownerDocument.activeElement === el,
+        hidden: isHidden(el),
+        secure,
+      },
+      attributes,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    };
+  };
+
+  // The conditional return type resolves per call site; inside the body the
+  // discriminant narrows the value but not the generic, hence the two casts.
+  if (options.mode.kind === 'node') return describe(element) as SemanticResult<Mode>;
+
+  const maxNodes = options.mode.maxNodes;
+  const nodes: RawObservedNode[] = [];
+  const elements: Element[] = [];
+  let truncated = false;
+  let secureNodeCount = 0;
+
+  const include = (el: Element, parent: number): number => {
+    const data = describe(el);
+    if (data.states.secure) secureNodeCount += 1;
+    nodes.push({ ...data, parent });
+    elements.push(el);
+    return nodes.length - 1;
+  };
+
+  /** True when a node carries semantics worth sending to a model. */
+  const isInteresting = (el: Element): boolean => {
+    if (el.hasAttribute(options.testIdAttribute)) return true;
+    const role = implicitRole(el);
+    if (role !== null && role !== 'presentation' && role !== 'none') return true;
+    if (accessibleName(el) !== null) return true;
+    return directTextOf(el) !== '';
+  };
+
+  /** Unique CSS selector for one iframe element in its own document. */
+  const frameSelectorOf = (el: Element): string => {
+    const id = el.getAttribute('id');
+    if (id !== null && id !== '' && el.ownerDocument.querySelectorAll(`#${CSS.escape(id)}`).length === 1) {
+      return `#${CSS.escape(id)}`;
+    }
+    const parts: string[] = [];
+    let current: Element | null = el;
+    while (current !== null && current.tagName.toLowerCase() !== 'html') {
+      const parent: Element | null = current.parentElement;
+      if (parent === null) break;
+      const index = Array.prototype.indexOf.call(parent.children, current) + 1;
+      parts.unshift(`${current.tagName.toLowerCase()}:nth-child(${index})`);
+      current = parent;
+    }
+    return parts.join(' > ');
+  };
+
+  const walk = (el: Element, parent: number): void => {
+    if (truncated) return;
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_TAGS.indexOf(tag) !== -1) return;
+    if (isHidden(el)) return;
+
+    // Iframes are emitted as boundary nodes and never entered: their content
+    // lives in another document, which the driver captures per frame and
+    // stitches under this node.
+    if (tag === 'iframe') {
+      if (nodes.length >= maxNodes) {
+        truncated = true;
+        return;
+      }
+      const index = include(el, parent);
+      const node = nodes[index]!;
+      node.frameSelector = frameSelectorOf(el);
+      node.role = 'iframe';
+      if (node.name === null) {
+        const title = el.getAttribute('title');
+        if (title !== null && title.trim() !== '') node.name = title.trim();
+      }
+      return;
+    }
+
+    let nextParent = parent;
+    if (isInteresting(el)) {
+      if (nodes.length >= maxNodes) {
+        truncated = true;
+        return;
+      }
+      nextParent = include(el, parent);
+    }
+    if (OPAQUE_TAGS.indexOf(tag) !== -1) return;
+    for (const child of Array.from(el.children)) walk(child, nextParent);
+  };
+
+  include(element, -1);
+  for (const child of Array.from(element.children)) walk(child, 0);
+
+  return { nodes, elements, secureNodeCount } as SemanticResult<Mode>;
 };

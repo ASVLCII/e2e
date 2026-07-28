@@ -15,6 +15,7 @@ import type { ResolvedTarget } from '../config/resolve.ts';
 import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import type { AttemptContext } from './execute.ts';
 import type { ArtifactSink } from './fixtures.ts';
+import type { StepRecord } from './steps.ts';
 import { findRegistered, type Realm, RealmManager } from './realm.ts';
 import type {
   AttemptRecord,
@@ -34,7 +35,15 @@ import { pairResult } from './units.ts';
  */
 export interface SharedSerialSession {
   readonly session: DriverSession;
+  /**
+   * Report segments of the group attempt directory. The shared session writes
+   * every artifact there, so members resolve artifact paths against it rather
+   * than against their own attempt directory.
+   */
+  readonly artifactSegments: readonly string[];
   readonly opened: { value: boolean };
+  /** Steps completed by earlier members, so later members see them as prior context. */
+  readonly priorSteps: StepRecord[];
 }
 
 /** Executor capabilities the serial runner borrows. */
@@ -148,13 +157,14 @@ async function runSerialAttempt(
   const startedMs = Date.now();
   const memberRecords: SerialMemberRecord[] = [];
   const first = members[0]!;
+  const artifactSegments = [
+    host.target.name,
+    sanitizePathSegment(first.test.serialId ?? first.test.id),
+    `attempt-${attemptIndex}`,
+  ];
   const artifacts = createAttemptArtifacts({
     artifactsRoot: host.artifactsRoot,
-    segments: [
-      host.target.name,
-      sanitizePathSegment(first.test.serialId ?? first.test.id),
-      `attempt-${attemptIndex}`,
-    ],
+    segments: artifactSegments,
     attemptId,
   });
   const record: SerialAttemptRecord = {
@@ -183,7 +193,9 @@ async function runSerialAttempt(
   try {
     shared = {
       session: await host.launchSession(first, attemptId, artifacts.dir, host.interruptSignal),
+      artifactSegments,
       opened: { value: false },
+      priorSteps: [],
     };
   } catch (cause) {
     const error = classifyError(cause);
@@ -238,6 +250,7 @@ async function runSerialAttempt(
       kind: 'serial',
       shared,
     });
+    shared.priorSteps.push(...memberAttempt.steps);
     memberRecords.push({
       id: memberId,
       index: memberIndex,

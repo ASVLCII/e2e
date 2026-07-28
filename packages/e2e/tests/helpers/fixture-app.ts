@@ -10,6 +10,7 @@ const PAGES: Record<string, string> = {
 <body>
   <h1>Home</h1>
   <a href="/about">About</a>
+  <a href="/about?token=super-secret-token#frag">About with token</a>
   <button id="increment" onclick="document.getElementById('count').textContent = String(Number(document.getElementById('count').textContent) + 1)">Increment</button>
   <output id="count" role="status" aria-label="Counter">0</output>
 
@@ -73,6 +74,30 @@ const PAGES: Record<string, string> = {
     }
     render();
   </script>
+</body>
+</html>`,
+  '/verbs': `<!doctype html>
+<html>
+<head><title>Verbs playground</title></head>
+<body>
+  <h1>Verbs</h1>
+
+  <label for="search">Search</label>
+  <input id="search" type="search" onkeydown="if (event.key === 'Enter') document.getElementById('submitted').textContent = 'submitted:' + this.value" />
+  <output id="submitted" aria-label="Submitted"></output>
+
+  <div id="hover-zone" onmouseenter="document.getElementById('reveal').hidden = false">Hover zone</div>
+  <button id="reveal" hidden>Revealed action</button>
+
+  <ul aria-label="Board">
+    <li id="card" draggable="true">Card One</li>
+  </ul>
+  <div id="dropzone" ondragover="event.preventDefault()" ondrop="event.preventDefault(); document.getElementById('drop-state').textContent = 'dropped'">Drop zone</div>
+  <output id="drop-state" aria-label="Drop state"></output>
+
+  <label for="avatar">Avatar</label>
+  <input id="avatar" type="file" onchange="document.getElementById('file-name').textContent = this.files[0] ? this.files[0].name : ''" />
+  <output id="file-name" aria-label="File name"></output>
 </body>
 </html>`,
   '/frame': `<!doctype html>

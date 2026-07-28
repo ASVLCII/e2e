@@ -359,7 +359,18 @@ export class TargetExecutor implements SerialHost {
     const attemptId = uuidv7();
     const startedAt = timestamp();
     const startedMs = Date.now();
-    const steps = new StepRecorder(attemptId);
+    // Serial members borrow the group's shared session, open state, artifact
+    // directory, and prior-step context; every other attempt owns its own.
+    const shared = context.kind === 'serial' ? context.shared : undefined;
+    const steps = new StepRecorder(attemptId, {
+      maxEventsPerStep: this.config.limits.maxEventsPerStep,
+    });
+    // Agent prompts quote completed steps as prior context. Serial-group
+    // members prepend the steps earlier members already contributed.
+    const priorSteps =
+      shared === undefined
+        ? () => steps.completed()
+        : () => [...shared.priorSteps, ...steps.completed()];
     const secondaryErrors: SerializedError[] = [];
     const attemptAbort = new AbortController();
     const onInterrupt = () => attemptAbort.abort();
@@ -367,7 +378,11 @@ export class TargetExecutor implements SerialHost {
 
     const artifacts = createAttemptArtifacts({
       artifactsRoot: this.artifactsRoot,
-      segments: [this.target.name, sanitizePathSegment(pair.test.id), `attempt-${attemptIndex}`],
+      // Serial members share the group's session, and therefore its artifact
+      // directory; registering under their own would not resolve on disk.
+      segments:
+        shared?.artifactSegments ??
+        [this.target.name, sanitizePathSegment(pair.test.id), `attempt-${attemptIndex}`],
       attemptId,
       currentStepId: () => steps.currentStepId,
     });
@@ -392,9 +407,8 @@ export class TargetExecutor implements SerialHost {
 
     try {
       const session =
-        context.kind === 'serial'
-          ? context.shared.session
-          : await this.launchSession(pair, attemptId, artifacts.dir, attemptAbort.signal);
+        shared?.session ??
+        (await this.launchSession(pair, attemptId, artifacts.dir, attemptAbort.signal));
       driverSession = session;
 
       const testDeadline = new Deadline(pair.options.timeout);
@@ -423,8 +437,11 @@ export class TargetExecutor implements SerialHost {
         attemptId,
         testDeadline,
         artifacts: artifacts.sink,
-        opened: context.kind === 'serial' ? context.shared.opened : { value: false },
+        priorSteps,
+        agentContext: pair.options.agentContext,
+        opened: shared?.opened ?? { value: false },
         saveSession,
+        debug: this.debug,
       });
 
       const beforeEachHooks = this.realms.hooksFor(realm, registered, 'beforeEach');
@@ -477,7 +494,7 @@ export class TargetExecutor implements SerialHost {
       failurePhase = phase;
     } finally {
       this.interruptSignal.removeEventListener('abort', onInterrupt);
-      if (driverSession !== null && context.kind !== 'serial') {
+      if (driverSession !== null && shared === undefined) {
         await this.closeSession(driverSession, attemptId, record, artifacts.sink, secondaryErrors);
       }
     }

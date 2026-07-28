@@ -2,7 +2,7 @@
 
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Browser, BrowserContext, Locator as PwLocator, Page } from 'playwright';
+import type { Browser, BrowserContext, ElementHandle, JSHandle, Page } from 'playwright';
 import {
   DriverError,
   type CleanupContext,
@@ -25,8 +25,13 @@ import {
 } from '../driver/index.ts';
 import { matchesText } from '../internal/text.ts';
 import { frameSelectors, projectExpression } from './locators.ts';
-import { readNodeFunction, type RawNodeData } from './read-node.ts';
 import {
+  readSemanticsFunction,
+  type RawNodeData,
+  type RawObservedNode,
+} from './read-node.ts';
+import {
+  asActionable,
   DEFAULT_VIEWPORT,
   invalidState,
   isPwTimeout,
@@ -36,11 +41,27 @@ import {
   sanitizeFilename,
   staleOr,
   translatePwError,
+  unsupportedDrag,
+  type ActionTarget,
 } from './support.ts';
 import { WebChannel, type WebSessionHost } from './web.ts';
 
-/** Refs are pruned oldest-first past this bound so the map cannot grow unboundedly. */
+/** Locator refs are pruned oldest-first past this bound so the map cannot grow unboundedly. */
 const MAX_STORED_REFS = 2048;
+
+/**
+ * Safety valve on nodes in one observation. driver-1 has no way to report a
+ * truncated tree, so this must stay well above real pages and let the runner's
+ * observation byte budget — which is visible in the prompt and the report —
+ * be the effective limit.
+ */
+const MAX_OBSERVED_NODES = 3_000;
+
+/** Nested iframe capture depth; deeper frames stay boundary nodes. */
+const MAX_FRAME_DEPTH = 4;
+
+/** Bounded settle before an observation so a committing navigation is not raced. */
+const SETTLE_TIMEOUT_MS = 5_000;
 
 interface ParsedWebTarget {
   readonly browser: 'chromium' | 'firefox' | 'webkit';
@@ -59,7 +80,7 @@ export function parseWebTarget(target: DriverContext['target']): ParsedWebTarget
 }
 
 interface StoredRef {
-  readonly locator: PwLocator;
+  readonly target: ActionTarget;
   readonly revision: string;
 }
 
@@ -74,7 +95,16 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
   private refCounter = 0;
   private artifactCounter = 0;
   private tracing = false;
+  /** Locator-backed refs from `screen.resolve`; they hold no live handles. */
   private readonly refs = new Map<string, StoredRef>();
+  /**
+   * Handle-backed refs of the newest observation. One observation is one
+   * handle generation: the whole map is swapped atomically per `observe()`,
+   * and the superseded generation is disposed in one sweep. Keeping these out
+   * of `refs` means locator-ref eviction can never destroy a handle an
+   * in-flight observation still references.
+   */
+  private observationRefs = new Map<string, StoredRef>();
   private pendingState: DriverState | null = null;
   private readonly target: ParsedWebTarget;
   private readonly webChannel: WebChannel;
@@ -171,15 +201,36 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
     return `r${this.revisionCounter}`;
   }
 
-  private storeRef(locator: PwLocator, revision: string): NodeRef {
+  private storeRef(target: ActionTarget, revision: string): NodeRef {
     this.refCounter += 1;
     const id = `n${this.refCounter}`;
-    this.refs.set(id, { locator, revision });
+    this.refs.set(id, { target, revision });
     for (const oldest of this.refs.keys()) {
       if (this.refs.size <= MAX_STORED_REFS) break;
       this.refs.delete(oldest);
     }
     return { id, revision };
+  }
+
+  /** Stores one element-backed ref in the observation generation being built. */
+  private storeObservationRef(
+    generation: Map<string, StoredRef>,
+    element: ElementHandle<Element>,
+    revision: string,
+  ): NodeRef {
+    this.refCounter += 1;
+    const id = `n${this.refCounter}`;
+    generation.set(id, { target: { kind: 'element', element }, revision });
+    return { id, revision };
+  }
+
+  /** Disposes every element handle in one observation generation. */
+  private static disposeGeneration(generation: ReadonlyMap<string, StoredRef>): void {
+    for (const stored of generation.values()) {
+      if (stored.target.kind === 'element') {
+        void stored.target.element.dispose().catch(() => undefined);
+      }
+    }
   }
 
   // --- DriverApp ---
@@ -246,7 +297,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
               .catch(() => nth.evaluate((el) => (el as HTMLInputElement).value ?? ''));
             if (!matchesText(value, projected.displayValue)) continue;
           }
-          refs.push(this.storeRef(nth, revision));
+          refs.push(this.storeRef({ kind: 'locator', locator: nth }, revision));
         }
         return refs;
       }),
@@ -255,10 +306,20 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       this.checkOperation(operation);
       this.requirePage();
       const stored = this.lookupRef(ref);
+      const args = {
+        testIdAttribute: this.driverContext.app.testIdAttribute,
+        mode: { kind: 'node' as const },
+      };
       try {
-        const raw = (await stored.locator.evaluate(readNodeFunction, this.driverContext.app.testIdAttribute, {
-          timeout: Math.min(operation.timeoutMs, 5000),
-        })) as RawNodeData;
+        // A locator waits for its element to resolve; a handle-backed target
+        // is already resolved, so it evaluates immediately.
+        const read = readSemanticsFunction<{ kind: 'node' }>;
+        const raw =
+          stored.target.kind === 'locator'
+            ? await stored.target.locator.evaluate(read, args, {
+                timeout: Math.min(operation.timeoutMs, 5000),
+              })
+            : await stored.target.element.evaluate(read, args);
         return toSemanticNode(ref, raw);
       } catch (cause) {
         throw staleOr(cause, 'read');
@@ -271,7 +332,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       const stored = this.lookupRef(ref);
       const timeout = operation.timeoutMs;
       try {
-        await this.dispatchAction(stored.locator, action, timeout);
+        await this.dispatchAction(stored.target, action, timeout);
       } catch (cause) {
         throw this.classifyActionError(cause, action);
       }
@@ -307,7 +368,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
   }
 
   private lookupRef(ref: NodeRef): StoredRef {
-    const stored = this.refs.get(ref.id);
+    const stored = this.refs.get(ref.id) ?? this.observationRefs.get(ref.id);
     if (stored === undefined || stored.revision !== ref.revision) {
       throw new DriverError('NODE_STALE', `node reference ${ref.id} is stale`, { retryable: true });
     }
@@ -315,10 +376,11 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
   }
 
   private async dispatchAction(
-    locator: PwLocator,
+    target: ActionTarget,
     action: LocatorAction,
     timeout: number,
   ): Promise<void> {
+    const locator = asActionable(target);
     switch (action.kind) {
       case 'tap':
         await locator.click({ timeout });
@@ -333,7 +395,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
         await locator.fill(action.value, { timeout });
         return;
       case 'clear':
-        await locator.clear({ timeout });
+        await locator.fill('', { timeout });
         return;
       case 'press':
         await locator.press(action.key, { timeout });
@@ -345,7 +407,12 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
         await locator.uncheck({ timeout });
         return;
       case 'focus':
-        await locator.focus({ timeout });
+        // ElementHandle.focus takes no timeout: the element is already resolved.
+        if (target.kind === 'locator') await target.locator.focus({ timeout });
+        else await target.element.focus();
+        return;
+      case 'hover':
+        await locator.hover({ timeout });
         return;
       case 'scrollIntoView':
         await locator.scrollIntoViewIfNeeded({ timeout });
@@ -361,13 +428,19 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
         }
         return;
       }
+      case 'setInputFiles':
+        await locator.setInputFiles([...action.paths], { timeout });
+        return;
       case 'dragTo': {
-        const target = this.lookupRef(action.target);
-        await locator.dragTo(target.locator, { timeout });
+        const other = this.lookupRef(action.target);
+        if (target.kind !== 'locator' || other.target.kind !== 'locator') {
+          throw unsupportedDrag();
+        }
+        await target.locator.dragTo(other.target.locator, { timeout });
         return;
       }
       case 'swipe': {
-        await performElementSwipe(locator, action.direction, action.momentum ?? 'none', timeout);
+        await performElementSwipe(target, action.direction, action.momentum ?? 'none', timeout);
         return;
       }
     }
@@ -389,7 +462,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
         { retryable: false, cause },
       );
     }
-    if (/not an? (input|checkbox|radio|select)|not editable|not checkable/i.test(text)) {
+    if (/not an? <?(input|checkbox|radio|select)|not editable|not checkable/i.test(text)) {
       return new DriverError('NOT_ACTIONABLE', text, { retryable: false, cause });
     }
     return new DriverError('DRIVER_FAILURE', text, { retryable: false, cause });
@@ -415,7 +488,12 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       this.checkOperation(operation);
       if (options.target !== undefined) {
         const stored = this.lookupRef(options.target);
-        await performElementSwipe(stored.locator, direction, options.momentum ?? 'none', operation.timeoutMs);
+        await performElementSwipe(
+          stored.target,
+          direction,
+          options.momentum ?? 'none',
+          operation.timeoutMs,
+        );
         return;
       }
       const page = this.requirePage();
@@ -492,27 +570,116 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
 
   // --- Observation ---
 
+  /**
+   * Captures one atomic semantic observation. Secure fields are masked in the
+   * page before the tree leaves the backend, and every node keeps a live
+   * element handle valid only for the returned revision.
+   */
   async observe(operation: OperationContext): Promise<Observation> {
-    this.checkOperation(operation);
-    const page = this.requirePage();
-    const revision = this.nextRevision();
-    const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT;
-    const secureCount = await page.locator('input[type="password"]').count();
-    const root: SemanticNode = {
-      ref: { id: 'root', revision },
-      role: 'document',
-    };
-    return {
-      revision,
-      capturedAt: new Date().toISOString(),
-      tree: root,
-      viewport: { width: viewport.width, height: viewport.height, scale: 1 },
-      redaction: {
-        secureNodeCount: secureCount,
-        maskedRegionCount: 0,
-        complete: secureCount === 0,
-      },
-    };
+    return this.guard(operation, 'observe', async () => {
+      const page = this.requirePage();
+      // A preceding action may still be committing a navigation. Settling is
+      // bounded and best-effort: a slow document never fails the observation.
+      await page
+        .waitForLoadState('domcontentloaded', {
+          timeout: Math.min(operation.timeoutMs, SETTLE_TIMEOUT_MS),
+        })
+        .catch(() => undefined);
+      const revision = this.nextRevision();
+      const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT;
+      const generation = new Map<string, StoredRef>();
+      let captured: Awaited<ReturnType<PlaywrightSession['captureDocument']>>;
+      try {
+        captured = await this.captureDocument(
+          page.locator(':root'),
+          revision,
+          [],
+          MAX_OBSERVED_NODES,
+          generation,
+        );
+      } catch (cause) {
+        PlaywrightSession.disposeGeneration(generation);
+        throw cause;
+      }
+      PlaywrightSession.disposeGeneration(this.observationRefs);
+      this.observationRefs = generation;
+      return {
+        revision,
+        capturedAt: new Date().toISOString(),
+        tree: captured.tree,
+        viewport: { width: viewport.width, height: viewport.height, scale: 1 },
+        redaction: {
+          secureNodeCount: captured.secureNodeCount,
+          maskedRegionCount: 0,
+          complete: true,
+        },
+      };
+    });
+  }
+
+  /**
+   * Captures one document's semantic tree, then descends into each observed
+   * iframe boundary node via its content frame and stitches the child
+   * document under it. Frame capture is best-effort: a detached or unloaded
+   * frame leaves its boundary node childless rather than failing the
+   * observation. The node budget is shared across all documents.
+   */
+  private async captureDocument(
+    root: ReturnType<Page['locator']>,
+    revision: string,
+    framePath: readonly string[],
+    budget: number,
+    generation: Map<string, StoredRef>,
+  ): Promise<{ tree: SemanticNode; nodeCount: number; secureNodeCount: number }> {
+    const captured = await root.evaluateHandle(readSemanticsFunction, {
+      testIdAttribute: this.driverContext.app.testIdAttribute,
+      mode: { kind: 'tree' as const, maxNodes: budget },
+    });
+    let elementsHandle: JSHandle | undefined;
+    try {
+      const [nodes, elementsProperty, initialSecureCount] = await Promise.all([
+        captured.getProperty('nodes').then((handle) => handle.jsonValue()),
+        captured.getProperty('elements'),
+        captured.getProperty('secureNodeCount').then((handle) => handle.jsonValue()),
+      ]);
+      elementsHandle = elementsProperty;
+      let secureNodeCount = initialSecureCount;
+      const elements = await collectElementHandles(elementsHandle, nodes.length);
+      const refs = elements.map((element) =>
+        this.storeObservationRef(generation, element, revision),
+      );
+      let nodeCount = nodes.length;
+      const frameChildren = new Map<number, SemanticNode>();
+      if (framePath.length < MAX_FRAME_DEPTH) {
+        for (let index = 0; index < nodes.length; index += 1) {
+          const selector = nodes[index]!.frameSelector;
+          if (selector === undefined) continue;
+          const remaining = budget - nodeCount;
+          if (remaining <= 0) break;
+          const frame = await elements[index]!.contentFrame().catch(() => null);
+          if (frame === null) continue;
+          const child = await this.captureDocument(
+            frame.locator(':root'),
+            revision,
+            [...framePath, selector],
+            remaining,
+            generation,
+          ).catch(() => undefined);
+          if (child === undefined) continue;
+          frameChildren.set(index, child.tree);
+          nodeCount += child.nodeCount;
+          secureNodeCount += child.secureNodeCount;
+        }
+      }
+      return {
+        tree: assembleTree(nodes, refs, framePath, frameChildren),
+        nodeCount,
+        secureNodeCount,
+      };
+    } finally {
+      await elementsHandle?.dispose().catch(() => undefined);
+      await captured.dispose().catch(() => undefined);
+    }
   }
 
   async runtime(operation: OperationContext): Promise<DriverRuntime> {
@@ -538,11 +705,72 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
     await this.context?.close().catch(() => undefined);
     this.context = null;
     this.page = null;
+    PlaywrightSession.disposeGeneration(this.observationRefs);
+    this.observationRefs.clear();
     this.refs.clear();
   }
 }
 
-function toSemanticNode(ref: NodeRef, raw: RawNodeData): SemanticNode {
+/**
+ * Reads one element handle per observed node from the in-page element array.
+ * `asElement` types handles as `ElementHandle<Node>`, but the observation walk
+ * records `Element` nodes only, so the narrowing is safe by construction.
+ */
+async function collectElementHandles(
+  elementsHandle: JSHandle,
+  count: number,
+): Promise<ElementHandle<Element>[]> {
+  const properties = await elementsHandle.getProperties();
+  const elements: ElementHandle<Element>[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const property = properties.get(String(index));
+    const element = (property?.asElement() ?? null) as ElementHandle<Element> | null;
+    if (element === null) {
+      throw new DriverError('DRIVER_FAILURE', `observation node ${index} lost its element`, {
+        retryable: false,
+      });
+    }
+    elements.push(element);
+  }
+  for (const [key, handle] of properties) {
+    if (Number(key) >= count) void handle.dispose().catch(() => undefined);
+  }
+  return elements;
+}
+
+/**
+ * Rebuilds the observation tree from the depth-first node list. Descendants
+ * always follow their parent, so children are complete before a parent is
+ * built. Captured child documents attach under their iframe boundary nodes.
+ */
+function assembleTree(
+  nodes: readonly RawObservedNode[],
+  refs: readonly NodeRef[],
+  framePath: readonly string[] = [],
+  frameChildren: ReadonlyMap<number, SemanticNode> = new Map(),
+): SemanticNode {
+  if (nodes.length === 0 || refs.length === 0) {
+    throw new DriverError('DRIVER_FAILURE', 'observation produced no nodes', { retryable: false });
+  }
+  const childLists: SemanticNode[][] = nodes.map(() => []);
+  const built: SemanticNode[] = [];
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const raw = nodes[index]!;
+    const embedded = frameChildren.get(index);
+    if (embedded !== undefined) childLists[index]!.unshift(embedded);
+    const node = toSemanticNode(refs[index]!, raw, childLists[index]!, framePath);
+    built[index] = node;
+    if (raw.parent >= 0) childLists[raw.parent]!.unshift(node);
+  }
+  return built[0]!;
+}
+
+function toSemanticNode(
+  ref: NodeRef,
+  raw: RawNodeData,
+  children: readonly SemanticNode[] = [],
+  framePath: readonly string[] = [],
+): SemanticNode {
   const states: Record<string, boolean> = {};
   if (raw.states.checked !== null) states['checked'] = raw.states.checked;
   if (raw.states.disabled) states['disabled'] = true;
@@ -561,5 +789,7 @@ function toSemanticNode(ref: NodeRef, raw: RawNodeData): SemanticNode {
     states,
     attributes: raw.attributes,
     rect: raw.rect,
+    ...(framePath.length > 0 ? { framePath } : {}),
+    ...(children.length > 0 ? { children } : {}),
   };
 }

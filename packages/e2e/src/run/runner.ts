@@ -23,6 +23,7 @@ import {
 import { DebugTrace } from '../internal/debug.ts';
 import { timestamp, uuidv7 } from '../internal/ids.ts';
 import { buildReport, type Report1Document, type TargetProvenance } from '../report/build.ts';
+import { agentStepTable } from '../report/debug-steps.ts';
 import { ListReporter } from '../report/list.ts';
 import { writeJsonReport } from '../report/write.ts';
 import { ensureBrowsersInstalled } from '../playwright/install.ts';
@@ -48,6 +49,8 @@ export interface RunOptions {
   workers?: number | undefined;
   reporters?: readonly ('list' | 'json' | 'html')[] | undefined;
   artifactsDir?: string | undefined;
+  /** `--no-agent-cache`: false forces agent cache mode off. */
+  agentCache?: boolean | undefined;
   passWithNoTests?: boolean | undefined;
   /** Prints aggregated phase timings to stderr after the run. */
   debug?: boolean | undefined;
@@ -104,7 +107,6 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       serialGroups,
       runErrors,
       targetProvenance,
-      trustNoticeShown: listReporter !== undefined,
     });
     if (config !== undefined) {
       const artifactsRoot = resolveArtifactsRoot(config, options.artifactsDir);
@@ -120,7 +122,10 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     if (options.reporters?.includes('json') === true) {
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     }
-    if (debug.enabled) process.stderr.write(debug.summary());
+    if (debug.enabled) {
+      process.stderr.write(debug.summary());
+      process.stderr.write(agentStepTable(results, serialGroups));
+    }
     return { exitCode, status, report, reportPath, results };
   };
 
@@ -133,6 +138,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     if (options.retries !== undefined) cli.retries = options.retries;
     if (options.workers !== undefined) cli.workers = options.workers;
     if (options.reporters !== undefined) cli.reporters = options.reporters;
+    if (options.agentCache === false) cli.agentCache = 'off';
 
     config = await debug.time('config.load', async () => {
       if (options.rawConfig !== undefined) {
@@ -157,6 +163,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     runId,
     targets: config.targets.map((target) => target.name),
     ci: isCiMode(env),
+    projectRoot: config.projectRoot,
   });
 
   try {
@@ -189,6 +196,8 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       return finish(exitCodeForCategory(error.category));
     }
     const { collection, selection } = planned;
+
+    listReporter?.onPlan({ total: selection.pairs.length });
 
     const artifactsRoot = resolveArtifactsRoot(config, options.artifactsDir);
     const sessionsRoot = path.join(config.projectRoot, '.e2e', 'sessions');
@@ -255,6 +264,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
               headed: options.headed ?? false,
               sessionsRoot,
               sessionKeyBase64: store.exportKeyForWorker(),
+              debug: debug.enabled,
               env,
             }),
           };
@@ -276,6 +286,9 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             },
             onSerialGroup: (group) => serialGroups.push(group),
             onRunError: (error) => runErrors.push(error),
+            onTestStart: (testId, title, targetName) =>
+              listReporter?.onTestStart({ id: testId, title, target: targetName }),
+            onDebug: (snapshot) => debug.merge(snapshot),
           },
         }),
       );
