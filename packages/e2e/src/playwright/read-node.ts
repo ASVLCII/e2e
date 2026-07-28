@@ -40,7 +40,16 @@ export interface RawObservation {
   secureNodeCount: number;
 }
 
-export type SemanticMode = { kind: 'node' } | { kind: 'tree'; maxNodes: number };
+export type SemanticMode =
+  | { kind: 'node' }
+  | {
+      kind: 'tree';
+      maxNodes: number;
+      /** Cuts each node's name at this length; the caller owns the contract value. */
+      nameLimit: number;
+      /** Cuts each node's text at this length; the caller owns the contract value. */
+      textLimit: number;
+    };
 
 export interface SemanticOptions {
   testIdAttribute: string;
@@ -98,8 +107,8 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     options.mode.kind === 'tree'
       ? {
           attributes: [options.testIdAttribute, 'type', 'autocomplete', 'href', 'role'],
-          textLimit: 512,
-          nameLimit: 256,
+          textLimit: options.mode.textLimit,
+          nameLimit: options.mode.nameLimit,
           redactHref: true,
           directTextOnly: true,
           documentRoot: true,
@@ -269,13 +278,18 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     return el.getClientRects().length === 0;
   };
 
-  /** Reduces a URL to origin and path, dropping userinfo, query, and fragment. */
+  /**
+   * Reduces a URL to origin and path, dropping userinfo, query, and fragment.
+   * Bounded: hrefs are shown to the model as link hints, not resolved, so a
+   * long path only buys tokens.
+   */
+  const HREF_LIMIT = 80;
   const originAndPath = (value: string, base: string): string => {
     try {
       const url = new URL(value, base);
-      return `${url.origin}${url.pathname}`;
+      return `${url.origin}${url.pathname}`.slice(0, HREF_LIMIT);
     } catch {
-      return value.split('?')[0]?.split('#')[0] ?? '';
+      return (value.split('?')[0]?.split('#')[0] ?? '').slice(0, HREF_LIMIT);
     }
   };
 

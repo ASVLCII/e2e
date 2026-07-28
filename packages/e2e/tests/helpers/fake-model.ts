@@ -7,6 +7,7 @@
  * works across the src/dist realm boundary.
  */
 
+import { observedLineHasRole } from '../../src/agent/observation.ts';
 import type { ModelInstance } from '../../src/types.ts';
 
 export interface FakeCall {
@@ -127,7 +128,7 @@ export function bestMatch(call: FakeCall): { id: string; line: string } {
     const haystack = line.toLowerCase();
     let score = words.reduce((total, word) => total + (haystack.includes(word) ? 1 : 0), 0);
     // Prefer semantic controls over plain text holders on equal word overlap.
-    if (score > 0 && !/\bgeneric\b/.test(haystack)) score += 0.5;
+    if (score > 0 && observedLineHasRole(line)) score += 0.5;
     if (best === undefined || score > best.score) best = { id, line, score };
   }
   if (best === undefined) throw new Error(`no observed nodes in prompt:\n${call.prompt}`);

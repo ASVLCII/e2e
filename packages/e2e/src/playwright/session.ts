@@ -22,8 +22,11 @@ import {
   type Observation,
   type OperationContext,
   type SemanticNode,
+  OBSERVED_NAME_LIMIT,
+  OBSERVED_TEXT_LIMIT,
 } from '../driver/index.ts';
 import { matchesText } from '../internal/text.ts';
+import { withTimeout } from '../internal/time.ts';
 import { frameSelectors, projectExpression } from './locators.ts';
 import {
   readSemanticsFunction,
@@ -59,6 +62,15 @@ const MAX_OBSERVED_NODES = 3_000;
 
 /** Nested iframe capture depth; deeper frames stay boundary nodes. */
 const MAX_FRAME_DEPTH = 4;
+
+/**
+ * Budget for capturing one child document. A stalled frame (ads, trackers)
+ * must cost an observation a moment, not the context default timeout.
+ */
+const FRAME_CAPTURE_TIMEOUT_MS = 3_000;
+
+/** Budget for capturing the main document, still capped by the operation timeout. */
+const DOCUMENT_CAPTURE_TIMEOUT_MS = 15_000;
 
 /** Bounded settle before an observation so a committing navigation is not raced. */
 const SETTLE_TIMEOUT_MS = 5_000;
@@ -596,6 +608,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
           [],
           MAX_OBSERVED_NODES,
           generation,
+          Math.max(1, Math.min(operation.timeoutMs, DOCUMENT_CAPTURE_TIMEOUT_MS)),
         );
       } catch (cause) {
         PlaywrightSession.disposeGeneration(generation);
@@ -630,10 +643,24 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
     framePath: readonly string[],
     budget: number,
     generation: Map<string, StoredRef>,
+    timeoutMs: number,
   ): Promise<{ tree: SemanticNode; nodeCount: number; secureNodeCount: number }> {
-    const captured = await root.evaluateHandle(readSemanticsFunction, {
+    const evaluation = root.evaluateHandle(readSemanticsFunction, {
       testIdAttribute: this.driverContext.app.testIdAttribute,
-      mode: { kind: 'tree' as const, maxNodes: budget },
+      mode: {
+        kind: 'tree' as const,
+        maxNodes: budget,
+        nameLimit: OBSERVED_NAME_LIMIT,
+        textLimit: OBSERVED_TEXT_LIMIT,
+      },
+    });
+    const captured = await withTimeout(evaluation, timeoutMs, () => {
+      // The losing evaluation may still settle later; a late handle must be
+      // released and a late failure must not become an unhandled rejection.
+      void evaluation.then((handle) => handle.dispose()).catch(() => undefined);
+      return new DriverError('OPERATION_TIMEOUT', 'observation capture timed out', {
+        retryable: true,
+      });
     });
     let elementsHandle: JSHandle | undefined;
     try {
@@ -658,12 +685,18 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
           if (remaining <= 0) break;
           const frame = await elements[index]!.contentFrame().catch(() => null);
           if (frame === null) continue;
+          // Only frames within allowedOrigins enter observations. Third-party
+          // frames (ads, trackers, embeds) are not the agent's to read or act
+          // on — and a stalled ad frame must not tax the capture. They stay
+          // boundary nodes, exactly like frames past the depth limit.
+          if (!isAllowedFrameOrigin(frame.url(), this.driverContext.app.allowedOrigins)) continue;
           const child = await this.captureDocument(
             frame.locator(':root'),
             revision,
             [...framePath, selector],
             remaining,
             generation,
+            FRAME_CAPTURE_TIMEOUT_MS,
           ).catch(() => undefined);
           if (child === undefined) continue;
           frameChildren.set(index, child.tree);
@@ -708,6 +741,21 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
     PlaywrightSession.disposeGeneration(this.observationRefs);
     this.observationRefs.clear();
     this.refs.clear();
+  }
+}
+
+/**
+ * True when a frame document's origin is inside the app's allowed origins.
+ * `about:blank` and `srcdoc` documents inherit their parent's origin, so they
+ * are the app's own content (consent managers, editors) and always allowed;
+ * the parent frame was already admitted to be captured at all.
+ */
+function isAllowedFrameOrigin(url: string, allowedOrigins: readonly string[]): boolean {
+  if (url === '' || url === 'about:blank' || url === 'about:srcdoc') return true;
+  try {
+    return allowedOrigins.includes(new URL(url).origin);
+  } catch {
+    return false;
   }
 }
 
