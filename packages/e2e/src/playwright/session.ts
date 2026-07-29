@@ -20,6 +20,7 @@ import {
   type LocatorExpression,
   type NodeRef,
   type Observation,
+  type ObserveOptions,
   type OperationContext,
   type SemanticNode,
   OBSERVED_NAME_LIMIT,
@@ -28,8 +29,10 @@ import {
 import { matchesText } from '../internal/text.ts';
 import { withTimeout } from '../internal/time.ts';
 import { frameSelectors, projectExpression } from './locators.ts';
+import { capturePixels, type PixelCapture } from './observe.ts';
 import {
   readSemanticsFunction,
+  SECURE_FIELD_SELECTOR,
   type RawNodeData,
   type RawObservedNode,
 } from './read-node.ts';
@@ -320,6 +323,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       const stored = this.lookupRef(ref);
       const args = {
         testIdAttribute: this.driverContext.app.testIdAttribute,
+        secureFieldSelector: SECURE_FIELD_SELECTOR,
         mode: { kind: 'node' as const },
       };
       try {
@@ -515,6 +519,12 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       this.checkOperation(operation);
       await this.requirePage().keyboard.press(key);
     },
+    tapPoint: (point, operation) =>
+      this.guard(operation, 'tapPoint', async () => {
+        // The runner validated the point against the observation viewport, so
+        // there is no node to check for actionability: the click is the action.
+        await this.requirePage().mouse.click(point.x, point.y);
+      }),
   };
 
   // --- Artifacts ---
@@ -586,8 +596,12 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
    * Captures one atomic semantic observation. Secure fields are masked in the
    * page before the tree leaves the backend, and every node keeps a live
    * element handle valid only for the returned revision.
+   *
+   * With `options.pixels`, masked viewport pixels are captured alongside the
+   * tree rather than after it, so the image and the node geometry describe the
+   * page as closely in time as two backend calls can.
    */
-  async observe(operation: OperationContext): Promise<Observation> {
+  async observe(operation: OperationContext, options?: ObserveOptions): Promise<Observation> {
     return this.guard(operation, 'observe', async () => {
       const page = this.requirePage();
       // A preceding action may still be committing a navigation. Settling is
@@ -600,16 +614,31 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       const revision = this.nextRevision();
       const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT;
       const generation = new Map<string, StoredRef>();
+      // The screenshot masks by sweeping the page's frames, so it needs nothing
+      // from the tree walk and runs with it instead of after it. Pixels never
+      // fail an observation: an image the page could not produce in time gives
+      // a tree-only observation, exactly like a driver that has no pixels.
+      const pixelCapture =
+        options?.pixels === true
+          ? capturePixels(page, operation, viewport).catch(() => undefined)
+          : Promise.resolve(undefined);
       let captured: Awaited<ReturnType<PlaywrightSession['captureDocument']>>;
+      let capturedPixels: PixelCapture | undefined;
       try {
-        captured = await this.captureDocument(
-          page.locator(':root'),
-          revision,
-          [],
-          MAX_OBSERVED_NODES,
-          generation,
-          Math.max(1, Math.min(operation.timeoutMs, DOCUMENT_CAPTURE_TIMEOUT_MS)),
-        );
+        // Both halves are awaited before the generation swap, so a failed
+        // observation leaves the session on its previous generation instead of
+        // publishing handles for a revision no caller ever received.
+        [captured, capturedPixels] = await Promise.all([
+          this.captureDocument(
+            page.locator(':root'),
+            revision,
+            [],
+            MAX_OBSERVED_NODES,
+            generation,
+            Math.max(1, Math.min(operation.timeoutMs, DOCUMENT_CAPTURE_TIMEOUT_MS)),
+          ),
+          pixelCapture,
+        ]);
       } catch (cause) {
         PlaywrightSession.disposeGeneration(generation);
         throw cause;
@@ -619,11 +648,12 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
       return {
         revision,
         capturedAt: new Date().toISOString(),
+        ...(capturedPixels === undefined ? {} : { pixels: capturedPixels.pixels }),
         tree: captured.tree,
         viewport: { width: viewport.width, height: viewport.height, scale: 1 },
         redaction: {
           secureNodeCount: captured.secureNodeCount,
-          maskedRegionCount: 0,
+          maskedRegionCount: capturedPixels?.maskedRegionCount ?? 0,
           complete: true,
         },
       };
@@ -647,6 +677,7 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
   ): Promise<{ tree: SemanticNode; nodeCount: number; secureNodeCount: number }> {
     const evaluation = root.evaluateHandle(readSemanticsFunction, {
       testIdAttribute: this.driverContext.app.testIdAttribute,
+      secureFieldSelector: SECURE_FIELD_SELECTOR,
       mode: {
         kind: 'tree' as const,
         maxNodes: budget,
