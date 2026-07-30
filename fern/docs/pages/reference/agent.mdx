@@ -12,8 +12,8 @@ the fixture without a configured model fails with `MODEL_UNAVAILABLE`.
 </Callout>
 
 The `cache` option applies to the located actions `tap`, `click`, `type`,
-`scroll`, `scrollTo`, and `longPress`. Other located verbs are not part of the
-`cache-1` method set and always report `bypassed`. `cache: false` disables the
+`scroll`, `scrollTo`, and `longPress`. Other located verbs are not cacheable
+and always report `bypassed`. `cache: false` disables the
 cache for one call; it cannot upgrade the resolved run mode.
 
 ```ts

@@ -3,7 +3,12 @@
 This directory defines e2e specification **0.1**, a local-first agentic testing
 framework standard.
 
-**Status: frozen implementation contract. No implementation exists yet.**
+**Status: frozen implementation contract.** The reference implementation
+(`packages/e2e`, `packages/playwright`) tracks it and is exercised in CI, but no
+profile is claimed conformant: the required-ID set is
+[`conformance/v0-requirements.json`](./conformance/v0-requirements.json) (see
+[15-conformance-matrix.md](./15-conformance-matrix.md)) and no `conformance-1`
+report is produced until the conformance harness lands.
 
 v0 executes web targets. The API is designed for future mobile profiles, but
 iOS and Android execution are not claimed until their conformance suites exist.
@@ -78,5 +83,7 @@ Agent tests require an explicit model. Deterministic tests do not.
 Normative precedence and BCP 14 language are defined only in
 00-conformance.md. Root documents, examples, migration guidance, and roadmap
 designs are informative and must be checked against the canonical contracts.
-Canonical declarations and examples are type-checked in CI. Schema and semantic
-validation land with the implementation conformance suites before release.
+Canonical declarations and examples are type-checked in CI, and the reference
+implementation validates the `report-1` and `cache-1` documents it writes
+against the schemas here. Full semantic validation lands with the
+implementation conformance suites before release.

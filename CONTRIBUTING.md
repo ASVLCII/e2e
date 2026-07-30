@@ -36,9 +36,21 @@ Integration tests need Chromium:
 pnpm --filter @e2edev/playwright exec playwright install chromium
 ```
 
-`spec/` is a frozen normative contract. A spec change touches declarations,
-schemas, prose, examples, and tests in one review — implementation shortcuts
-never amend the spec.
+`spec/` is a frozen normative contract and stays internal: it defines profiles
+(`spec/00-conformance.md`), canonical declarations (`spec/api/`), wire schemas
+(`spec/schema/`), and mandatory safety behavior (`spec/14-security.md`). A spec
+change touches declarations, schemas, prose, examples, and tests in one review —
+implementation shortcuts never amend the spec. READMEs and the docs site describe
+user-facing behavior only; profile IDs, schema versions, and conformance status
+belong in `spec/`.
+
+Docs are part of the change, not a follow-up: a behavior change updates its guide
+page under `fern/` in the same review.
+
+```sh
+pnpm docs:dev     # local preview
+pnpm docs:check   # validate configuration and pages
+```
 
 ### Commit message convention
 
