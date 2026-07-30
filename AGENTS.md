@@ -1,0 +1,102 @@
+# AGENTS.md
+
+`e2e` — an open standard for agentic end-to-end testing plus its reference
+implementation. pnpm monorepo, ESM only, TypeScript 7.
+
+## The spec wins
+
+`spec/` is a frozen normative contract, not documentation.
+
+- `spec/api/e2e.d.ts` (`sdk-0.1`) and `spec/api/driver.d.ts` (`driver-1`) are
+  canonical. Implementation code must match them, not the reverse.
+- `packages/e2e/tests/contract/driver-spec-drift.ts` fails the build if
+  `src/driver/index.ts` and `spec/api/driver.d.ts` diverge structurally. Any
+  change to either requires the same change in the other. Run via
+  `pnpm --filter e2e run check:driver-drift` (already inside `typecheck`).
+- Wire output must validate against `spec/schema/*.schema.json`; integration
+  tests validate every generated report against `report-v1.schema.json`.
+- Per `PLAN.md`, a spec change touches declarations, schemas, prose, examples,
+  and tests in one review. Implementation shortcuts never amend the spec.
+- Behavior changes update the matching `fern/docs/pages/*.mdx` page in the same
+  change, including "not implemented yet" callouts.
+
+## Layout
+
+- `packages/e2e` — the published `e2e` package: SDK surface, runner, CLI,
+  `e2e/driver` SPI, `e2e/playwright` reference driver.
+  - `src/run/` runner core (scheduler, units, workers, retries, sessions),
+    `src/collect/` registration+selection, `src/locator/` locator AST/engine,
+    `src/agent/` agent tiers, `src/cache/` `cache-1`, `src/playwright/` driver.
+- `packages/testbed` (`@e2e/testbed`, private) — dogfood project that consumes
+  the **built** `e2e` package like a real user would.
+- `spec/`, `fern/` (docs site), `PLAN.md` (phase ordering only).
+
+## Commands
+
+Build first — nearly everything downstream consumes `dist`.
+
+```bash
+pnpm check          # lint -> check:spec -> typecheck -> docs:check (full gate)
+pnpm test           # builds, then vitest unit + integration
+pnpm test:testbed   # builds, then runs the real CLI against the playground app
+```
+
+Focused work:
+
+```bash
+pnpm --filter e2e run build
+pnpm --filter e2e run test:unit                       # unit only, no build
+pnpm --filter e2e exec vitest run tests/unit/scheduler.test.ts
+pnpm --filter e2e exec vitest run -t 'name fragment'
+pnpm --filter @e2e/testbed run test:headed
+```
+
+- `pnpm typecheck` runs `build` first, then per-package `typecheck`.
+- `pnpm check:spec` typechecks `spec/api` + `spec/examples` under a separate,
+  stricter config (`skipLibCheck: false`, DOM lib) — it can fail while package
+  typecheck passes.
+- Integration tests need Chromium: `pnpm --filter e2e exec playwright install
+  chromium`. The runner also auto-installs missing browsers on first run.
+
+## Non-obvious conventions
+
+- **Relative imports carry the `.ts` extension** (`rewriteRelativeImportExtensions`).
+  `import { x } from '../internal/ids.ts'` — not `.js`, not extensionless.
+- `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess` are on. Optional
+  properties use the conditional-spread idiom; `oxc/no-map-spread` is disabled
+  for exactly that reason.
+- Lint is `oxlint` with `correctness`/`suspicious`/`perf` as errors and
+  `style`/`pedantic` off. `no-await-in-loop` is intentionally off (sequential
+  execution is the runner's contract).
+- JSDoc on new functions; avoid inline comments unless they explain *why*.
+
+## Testing quirks
+
+- Vitest 4, `pool: 'forks'`, two projects. `integration` is capped at
+  `maxWorkers: 3` and runs in a later group — do not raise it; CPU starvation
+  produces timeouts indistinguishable from real failures.
+- Integration tests write throwaway projects into
+  `packages/e2e/tests/tmp-projects/` (gitignored) and import the runner from
+  `dist/` via a non-literal specifier so the fixture's `e2e` self-reference
+  shares one registry. Stale `dist` means confusing failures — rebuild.
+- Testbed suites beyond the default one are opt-in and **never** run in CI:
+  `test:public` (real websites), `test:agent` / `test:wakacje` (real model
+  calls, need `E2E_MODEL_API_KEY`, optional `E2E_MODEL=provider/model-id`).
+- Agentic assertions must be model-portable: assert on meaning (`toContain`)
+  and pair each agentic step with a deterministic locator check.
+
+## Gotchas
+
+- Status prose drifts. `packages/e2e/README.md` and `spec/README.md` still claim
+  things that have since landed (e.g. the locate cache exists in
+  `src/agent/locate-cache.ts` and `src/cache/`). Verify against `src/` before
+  repeating or relying on any "not implemented yet" list — and fix the prose
+  when you find it stale.
+- No implicit default model. Agent fixtures without model config fail with
+  `MODEL_UNAVAILABLE`; mobile targets are rejected by the v0 boundary.
+- Secrets must never reach model input, digests, logs, or reports. Model input
+  is the redacted semantic tree plus the bounded ledger only.
+- CI (`.github/workflows/spec.yml`) runs Node 26 and pins actions by SHA; keep
+  new actions SHA-pinned.
+- Commits follow Conventional Commits; PRs are squash-merged with the number in
+  the subject.
