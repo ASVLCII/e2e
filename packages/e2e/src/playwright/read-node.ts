@@ -29,6 +29,16 @@ export interface RawNodeData {
   };
   attributes: Record<string, string>;
   rect: { x: number; y: number; width: number; height: number };
+  /**
+   * CSS selector for this element within its own document, or `''` when the
+   * active mode derives none or the element has none worth keeping. Structural,
+   * so it survives the content changes that rename a node, but anchored on an
+   * attribute that names something rather than counted from `body` — an
+   * unanchored path does not survive to the next run, which is the only run it
+   * exists for. Only `node` mode derives it: the probe is document-wide, so a
+   * tree walk must not pay for it per node.
+   */
+  selector: string;
 }
 
 /** One observed node plus its position in the flattened depth-first tree. */
@@ -124,6 +134,12 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
           redactHref: true,
           directTextOnly: true,
           documentRoot: true,
+          // Off for the tree walk. Deriving a selector probes the whole document
+          // once per naming attribute per ancestor, so doing it for every
+          // observed node costs O(nodes x depth) document-wide queries per
+          // observation. Only the one node a caller goes on to act on needs it,
+          // and that node is re-read in `node` mode, which does derive it.
+          selector: false,
         }
       : {
           attributes: [
@@ -144,6 +160,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
           redactHref: false,
           directTextOnly: false,
           documentRoot: false,
+          selector: true,
         };
 
   const implicitRole = (el: Element): string | null => {
@@ -305,6 +322,86 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     }
   };
 
+  /** Attributes that name an element rather than describe where it sits. */
+  const NAMING_ATTRIBUTES = [options.testIdAttribute, 'name'];
+
+  /**
+   * A document-unique attribute selector for one element, when it has one.
+   *
+   * A test ID names an element by definition; a form control's `name` names it
+   * because the server reads it, which is also why it outlives redesigns. Ids
+   * are deliberately absent: a framework that mints them per render
+   * (`#firstName-aepj7PyFWSmXAkB8bb91h`) would make every selector single-use.
+   */
+  const namedSelectorOf = (el: Element): string | null => {
+    for (const attribute of NAMING_ATTRIBUTES) {
+      const value = el.getAttribute(attribute);
+      if (value === null || value === '') continue;
+      const selector = `[${attribute}="${value.replace(/["\\]/g, '\\$&')}"]`;
+      let unique: boolean;
+      try {
+        unique = el.ownerDocument.querySelectorAll(selector).length === 1;
+      } catch {
+        continue;
+      }
+      if (unique) return selector;
+    }
+    return null;
+  };
+
+  /**
+   * Path to one element in its own document, and whether anything along it names
+   * the element rather than counting positions to it.
+   *
+   * The walk stops at the first ancestor something names, so an anchored path is
+   * only positional *below* that ancestor. An unanchored path is positional all
+   * the way from `body`, which makes it fragile for a reason that has nothing to
+   * do with the element: a chat widget, a consent frame, or a portal appended
+   * anywhere above shifts every `nth-child` index beneath it.
+   *
+   * Each `namedSelectorOf` probe is a document-wide `querySelectorAll`, so this
+   * is deliberately not called for every node of a tree walk; see `projection`.
+   */
+  const pathTo = (el: Element): { selector: string; anchored: boolean } => {
+    const named = namedSelectorOf(el);
+    if (named !== null) return { selector: named, anchored: true };
+    const parts: string[] = [];
+    let current: Element | null = el;
+    while (current !== null && current.tagName.toLowerCase() !== 'html') {
+      const parent: Element | null = current.parentElement;
+      if (parent === null) break;
+      const index = Array.prototype.indexOf.call(parent.children, current) + 1;
+      parts.unshift(`${current.tagName.toLowerCase()}:nth-child(${index})`);
+      const anchor = namedSelectorOf(parent);
+      if (anchor !== null) return { selector: `${anchor} > ${parts.join(' > ')}`, anchored: true };
+      current = parent;
+    }
+    return { selector: parts.join(' > '), anchored: false };
+  };
+
+  /**
+   * The selector a runner may keep, or `''` when this element has none worth
+   * keeping.
+   *
+   * An unanchored path is refused rather than offered. A runner stores a selector
+   * to re-find the node on a later run, and a body-rooted path does not survive
+   * to one: measured against a production page that injects a chat widget, the
+   * entry went stale between every run, so the step paid its full model call
+   * anyway and left one dead file behind each time. Reporting no selector costs
+   * the same model call and tells the truth about why.
+   */
+  const storableSelectorOf = (el: Element): string => {
+    const path = pathTo(el);
+    return path.anchored ? path.selector : '';
+  };
+
+  /**
+   * The selector used to re-enter one iframe. Unanchored is fine here: it is
+   * resolved against the document it was just read from, within this
+   * observation, and never stored.
+   */
+  const frameSelectorOf = (el: Element): string => pathTo(el).selector;
+
   const describe = (el: Element): RawNodeData => {
     const tag = el.tagName.toLowerCase();
     const autocomplete = (el.getAttribute('autocomplete') ?? '').toLowerCase();
@@ -393,6 +490,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
       },
       attributes,
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      selector: projection.selector ? storableSelectorOf(el) : '',
     };
   };
 
@@ -421,24 +519,6 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     if (role !== null && role !== 'presentation' && role !== 'none') return true;
     if (accessibleName(el) !== null) return true;
     return directTextOf(el) !== '';
-  };
-
-  /** Unique CSS selector for one iframe element in its own document. */
-  const frameSelectorOf = (el: Element): string => {
-    const id = el.getAttribute('id');
-    if (id !== null && id !== '' && el.ownerDocument.querySelectorAll(`#${CSS.escape(id)}`).length === 1) {
-      return `#${CSS.escape(id)}`;
-    }
-    const parts: string[] = [];
-    let current: Element | null = el;
-    while (current !== null && current.tagName.toLowerCase() !== 'html') {
-      const parent: Element | null = current.parentElement;
-      if (parent === null) break;
-      const index = Array.prototype.indexOf.call(parent.children, current) + 1;
-      parts.unshift(`${current.tagName.toLowerCase()}:nth-child(${index})`);
-      current = parent;
-    }
-    return parts.join(' > ');
   };
 
   const walk = (el: Element, parent: number): void => {

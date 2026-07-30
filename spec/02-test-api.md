@@ -135,6 +135,18 @@ runner validates that both identify the same unique node before acting. Zero
 matches rejects with `LOCATOR_NOT_FOUND`; multiple matches rejects with
 `LOCATOR_AMBIGUOUS`; actionability failure rejects with `ACTION_FAILED`.
 
+A page that repeats a control — one reservation button per row, the same label
+on each — has nodes no derived query can separate. The reference the observation
+handed out can: it is bound to the element the model was shown, in the revision
+it was shown in, which is a stricter identity than any locator. A runner MAY
+therefore act through that reference once no derived query resolves the
+selection, after re-reading it to confirm it is still the node the model chose.
+A reference cannot outlive its observation, so such a target is never recorded
+(10-determinism.md). A runner that also offers `vision: 'fallback'` MUST prefer
+the escalation: an unaddressable selection is that feature's signal, and pixels
+can tell repeated controls apart that a reference can only take on trust from a
+tree-only answer.
+
 `agent.type` replaces the target's current content and accepts plain strings or
 opaque `Secret` values. It never submits the field; submission is a separate
 tap/click/press step. A secret may be sent only to an authorized secure input
@@ -147,9 +159,15 @@ single-call instant actions:
 
 - `scrollTo` alternates deterministic scrolling and fresh locate judgments
   until the node is found or the timeout/model-call budget expires.
-- `waitFor` makes one fresh observation and judgment per `intervalMs`, default
-  3,000 ms. It succeeds on the first true judgment. The interval is an integer
-  from 100 through 60,000 ms.
+- `waitFor` succeeds on the first true judgment. `intervalMs`, default 3,000 ms,
+  is the shortest time between two judgments, not a pause added after each one:
+  it is a rate limit on model calls, and a runner MUST NOT make the caller wait
+  it out after a judgment that already took longer. A judgment reads the
+  observation, so while the observation is unchanged the answer cannot change; a
+  runner MAY therefore keep observing — driver-only work — and spend the next
+  judgment when the page changes rather than when the clock says so. A call that
+  sends pixels judges on the interval alone, because an animation the tree cannot
+  see is still a change. The interval is an integer from 100 through 60,000 ms.
 
 Every polling method is bounded by both its timeout and the resolved
 `maxModelCalls` limit.

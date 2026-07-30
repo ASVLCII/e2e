@@ -23,7 +23,7 @@ import type {
   VisionMode,
 } from '../types.ts';
 import { AgentError } from './error.ts';
-import type { AgentObservation } from './observation.ts';
+import { observationShape, type AgentObservation } from './observation.ts';
 import {
   Invocation,
   toAgentError,
@@ -33,8 +33,7 @@ import {
 import type { PromptInput } from './prompts.ts';
 import {
   locateOne,
-  observeAndSelect,
-  resolveSelected,
+  locateByScrolling,
   NODE_ONLY,
   type Located,
   type LocatedNode,
@@ -48,6 +47,17 @@ import { authorizeSecretFill } from './secrets.ts';
 
 const MIN_STEP_TIMEOUT_MS = 30_000;
 const DEFAULT_WAIT_INTERVAL_MS = 3_000;
+
+/**
+ * How often `waitFor` looks at the page between judgments.
+ *
+ * An observation is driver-only work, so it is far cheaper than a model call —
+ * but it is not free: it walks the document and swaps the session's reference
+ * generation, which invalidates any node reference taken from the previous one.
+ * That is safe here because a judgment reads only the observation text, and it
+ * is the reason this interval is not shorter.
+ */
+const CHANGE_POLL_MS = 500;
 const EXTRACT_MODEL_CALLS = 2;
 
 /** Builds the agent fixture for one attempt. */
@@ -119,13 +129,20 @@ export function createAgent(runtime: AgentContext): Agent {
    * is what shows the model the pointing grammar in the first place, so a
    * method with no coordinate equivalent is never offered a coordinate.
    */
-  const instant = (
-    api: string,
-    target: string,
-    options: InstantActionOptions | undefined,
-    action: (invocation: Invocation, located: LocatedNode) => Promise<void>,
-    pointAction?: (invocation: Invocation, located: LocatedPoint) => Promise<void>,
-  ): Promise<void> => {
+  const instant = (spec: {
+    readonly api: string;
+    readonly target: string;
+    readonly options: InstantActionOptions | undefined;
+    /**
+     * Non-secret call parameters that belong in the cache key. Required, so that
+     * adding a located action forces a decision about what its key covers; `{}`
+     * only when the call really has no parameters.
+     */
+    readonly input: Readonly<Record<string, unknown>>;
+    readonly action: (invocation: Invocation, located: LocatedNode) => Promise<void>;
+    readonly pointAction?: (invocation: Invocation, located: LocatedPoint) => Promise<void>;
+  }): Promise<void> => {
+    const { api, target, options, input, action, pointAction } = spec;
     const vision = resolveVision(options?.vision);
     const point: PointPolicy<null> =
       pointAction === undefined
@@ -153,7 +170,7 @@ export function createAgent(runtime: AgentContext): Agent {
       },
       target,
       async (invocation) => {
-        const located = await locateOne(invocation, target, { testIdAttribute, point });
+        const located = await locateOne(invocation, target, { testIdAttribute, input, point });
         // Null means the model pointed and the policy already dispatched.
         if (located === null) return;
         await dispatch(invocation, api, target, located, () => action(invocation, located));
@@ -174,16 +191,17 @@ export function createAgent(runtime: AgentContext): Agent {
   const tapVerb =
     (api: string) =>
     (target: string, options?: InstantActionOptions): Promise<void> =>
-      instant(
+      instant({
         api,
         target,
         options,
-        (invocation, located) =>
+        input: {},
+        action: (invocation, located) =>
           invocation.commit('tap', () =>
             invocation.session.actions.tap({ ref: located.ref }, invocation.operation()),
           ),
-        (invocation, located) => tapAtPoint(invocation, api, located),
-      );
+        pointAction: (invocation, located) => tapAtPoint(invocation, api, located),
+      });
 
   /**
    * Taps a validated screenshot point. The dispatch is at the point itself:
@@ -225,93 +243,152 @@ export function createAgent(runtime: AgentContext): Agent {
       if (!sensitive && typeof value !== 'string') {
         throw new TestError('INVALID_ARGUMENT', 'agent.type value must be a string or a Secret');
       }
-      return instant('agent.type', target, options, async (invocation, located) => {
-        const plaintext = sensitive
-          ? await authorizeSecretFill(invocation, runtime, value, located.node)
-          : value;
-        await invocation.commit('type', () =>
-          invocation.session.actions.type(
-            { ref: located.ref },
-            plaintext,
-            sensitive,
-            invocation.operation(),
-          ),
-        );
+      return instant({
+        api: 'agent.type',
+        target,
+        options,
+        // A secret contributes only its stable name and purpose: its value must
+        // never reach a cache key, not even through a digest.
+        input: sensitive ? { sensitiveName: value.name, purpose: value.purpose } : { value },
+        action: async (invocation, located) => {
+          const plaintext = sensitive
+            ? await authorizeSecretFill(invocation, runtime, value, located.node)
+            : value;
+          await invocation.commit('type', () =>
+            invocation.session.actions.type(
+              { ref: located.ref },
+              plaintext,
+              sensitive,
+              invocation.operation(),
+            ),
+          );
+        },
       });
     },
 
     longPress(target, options) {
       const durationMs = validateLongPress(options?.durationMs);
-      return instant('agent.longPress', target, options, (invocation, located) =>
-        invocation.commit('longPress', () =>
-          invocation.session.actions.longPress(
-            { ref: located.ref },
-            durationMs,
-            invocation.operation(),
+      return instant({
+        api: 'agent.longPress',
+        target,
+        options,
+        input: { durationMs },
+        action: (invocation, located) =>
+          invocation.commit('longPress', () =>
+            invocation.session.actions.longPress(
+              { ref: located.ref },
+              durationMs,
+              invocation.operation(),
+            ),
           ),
-        ),
-      );
+      });
     },
 
     press(target, key, options) {
       if (typeof key !== 'string' || key.trim() === '' || key.length > 64) {
         throw new TestError('INVALID_ARGUMENT', 'agent.press key must be a short non-empty string');
       }
-      return instant('agent.press', target, options, (invocation, located) =>
-        invocation.commit('press', () =>
-          invocation.session.screen.perform(located.ref, { kind: 'press', key }, invocation.operation()),
-        ),
-      );
+      return instant({
+        api: 'agent.press',
+        target,
+        options,
+        input: { key },
+        action: (invocation, located) =>
+          invocation.commit('press', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'press', key },
+              invocation.operation(),
+            ),
+          ),
+      });
     },
 
     select(target, value, options) {
       validateSelectOption(value);
-      return instant('agent.select', target, options, (invocation, located) =>
-        invocation.commit('selectOption', () =>
-          invocation.session.screen.perform(
-            located.ref,
-            { kind: 'selectOption', value },
-            invocation.operation(),
+      return instant({
+        api: 'agent.select',
+        target,
+        options,
+        input: { value },
+        action: (invocation, located) =>
+          invocation.commit('selectOption', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'selectOption', value },
+              invocation.operation(),
+            ),
           ),
-        ),
-      );
+      });
     },
 
     hover(target, options) {
-      return instant('agent.hover', target, options, (invocation, located) =>
-        invocation.commit('hover', () =>
-          invocation.session.screen.perform(located.ref, { kind: 'hover' }, invocation.operation()),
-        ),
-      );
+      return instant({
+        api: 'agent.hover',
+        target,
+        options,
+        input: {},
+        action: (invocation, located) =>
+          invocation.commit('hover', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'hover' },
+              invocation.operation(),
+            ),
+          ),
+      });
     },
 
     check(target, options) {
-      return instant('agent.check', target, options, (invocation, located) =>
-        invocation.commit('check', () =>
-          invocation.session.screen.perform(located.ref, { kind: 'check' }, invocation.operation()),
-        ),
-      );
+      return instant({
+        api: 'agent.check',
+        target,
+        options,
+        input: {},
+        action: (invocation, located) =>
+          invocation.commit('check', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'check' },
+              invocation.operation(),
+            ),
+          ),
+      });
     },
 
     uncheck(target, options) {
-      return instant('agent.uncheck', target, options, (invocation, located) =>
-        invocation.commit('uncheck', () =>
-          invocation.session.screen.perform(located.ref, { kind: 'uncheck' }, invocation.operation()),
-        ),
-      );
+      return instant({
+        api: 'agent.uncheck',
+        target,
+        options,
+        input: {},
+        action: (invocation, located) =>
+          invocation.commit('uncheck', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'uncheck' },
+              invocation.operation(),
+            ),
+          ),
+      });
     },
 
     upload(target, paths, options) {
       const resolved = validateUploadPaths(paths, runtime.config.projectRoot);
-      return instant('agent.upload', target, options, (invocation, located) =>
-        invocation.commit('setInputFiles', () =>
-          invocation.session.screen.perform(
-            located.ref,
-            { kind: 'setInputFiles', paths: resolved },
-            invocation.operation(),
+      return instant({
+        api: 'agent.upload',
+        target,
+        options,
+        input: { paths: resolved },
+        action: (invocation, located) =>
+          invocation.commit('setInputFiles', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'setInputFiles', paths: resolved },
+              invocation.operation(),
+            ),
           ),
-        ),
-      );
+      });
     },
 
     dragTo(source, destination, options) {
@@ -329,8 +406,8 @@ export function createAgent(runtime: AgentContext): Agent {
         },
         `${source} \u2192 ${destination}`,
         async (invocation) => {
-          const from = await locateOne(invocation, source, { testIdAttribute });
-          const to = await locateOne(invocation, destination, { testIdAttribute });
+          const from = await locateOne(invocation, source, { testIdAttribute, input: {} });
+          const to = await locateOne(invocation, destination, { testIdAttribute, input: {} });
           try {
             await invocation.commit('dragTo', () =>
               invocation.session.screen.perform(
@@ -370,7 +447,10 @@ export function createAgent(runtime: AgentContext): Agent {
             );
             return;
           }
-          const located = await locateOne(invocation, within, { testIdAttribute });
+          const located = await locateOne(invocation, within, {
+            testIdAttribute,
+            input: { direction, ...(momentum === undefined ? {} : { momentum }) },
+          });
           await invocation.commit('scroll', () =>
             invocation.session.actions.scroll(
               direction,
@@ -396,39 +476,22 @@ export function createAgent(runtime: AgentContext): Agent {
         },
         target,
         async (invocation) => {
-          let lastExplanation = '';
-          for (let round = 1; ; round += 1) {
-            invocation.recordPoll('scrollTo', round);
-            // Node-only: scrollIntoView needs a node reference, so the model
-            // is never shown the pointing grammar here and a pointed answer,
-            // which this loop would misread as "not on screen yet", cannot
-            // reach it.
-            const selection = await observeAndSelect(invocation, target);
-            if (selection.kind === 'node') {
-              const located = await resolveSelected(invocation, selection, { testIdAttribute });
-              await invocation.commit('scrollIntoView', () =>
-                invocation.session.screen.perform(
-                  located.ref,
-                  { kind: 'scrollIntoView' },
-                  invocation.operation(),
-                ),
-              );
-              return;
-            }
-            if (selection.kind === 'none') lastExplanation = selection.explanation;
-            if (invocation.deadline.expired() || !invocation.canAsk()) {
-              if (lastExplanation !== '') invocation.note({ explanation: lastExplanation });
-              throw new AgentError(
-                'LOCATOR_NOT_FOUND',
-                `scrollTo did not reach ${JSON.stringify(target)} within its budget${
-                  lastExplanation === '' ? '' : `; the model reported: ${lastExplanation}`
-                }`,
-              );
-            }
-            await invocation.commit('scroll', () =>
-              invocation.session.actions.scroll(direction, {}, invocation.operation()),
-            );
-          }
+          const located = await locateByScrolling(
+            invocation,
+            target,
+            { testIdAttribute, input: { direction } },
+            () =>
+              invocation.commit('scroll', () =>
+                invocation.session.actions.scroll(direction, {}, invocation.operation()),
+              ),
+          );
+          await invocation.commit('scrollIntoView', () =>
+            invocation.session.screen.perform(
+              located.ref,
+              { kind: 'scrollIntoView' },
+              invocation.operation(),
+            ),
+          );
         },
       );
     },
@@ -450,35 +513,18 @@ export function createAgent(runtime: AgentContext): Agent {
         },
         condition,
         async (invocation) => {
-          // The exhaustion checks live at the top of the loop — the only exit
-          // — so a timeout after a sleep still reports the last judgment
-          // instead of a bare deadline error.
-          let lastExplanation = 'no judgment was produced';
+          let observation = await invocation.observe();
           for (let round = 1; ; round += 1) {
-            if (round > 1) {
-              if (invocation.deadline.expired()) {
-                throw new AgentError(
-                  'STEP_TIMEOUT',
-                  `waitFor timed out; last judgment: ${lastExplanation}`,
-                );
-              }
-              if (!invocation.canAsk()) {
-                throw new AgentError(
-                  'STEP_BUDGET_EXHAUSTED',
-                  `waitFor exhausted its model-call budget; last judgment: ${lastExplanation}`,
-                );
-              }
-            }
             invocation.recordPoll('waitFor', round);
-            const observation = await invocation.observe();
             const judgment = await askJudgment(invocation, condition, observation);
-            lastExplanation = judgment.explanation;
             invocation.note({ explanation: judgment.explanation });
             if (judgment.result) return;
-            await sleep(
-              Math.min(intervalMs, Math.max(1, invocation.deadline.remaining())),
-              runtime.signal,
-            );
+            observation = await waitForNextJudgment(invocation, {
+              since: observation,
+              intervalMs,
+              lastExplanation: judgment.explanation,
+              signal: runtime.signal,
+            });
           }
         },
       );
@@ -587,6 +633,61 @@ export function createAgent(runtime: AgentContext): Agent {
   }
 
   return agent;
+}
+
+/**
+ * Waits until the next judgment is worth spending, and returns the observation
+ * to spend it on.
+ *
+ * A judgment reads the observation and nothing else, so while the page looks the
+ * same the answer is the same and re-asking is a model call that can only repeat
+ * itself. So a false judgment is followed by driver-only observations until the
+ * page actually changes, which is also what makes a condition that came true two
+ * seconds ago cost two seconds rather than a full interval.
+ *
+ * `intervalMs` stays the rate limit it always was: at most one judgment per
+ * interval, so a page that changes continuously — a spinner, a countdown —
+ * cannot spend the budget in a second.
+ *
+ * A vision call waits on the interval alone. An animation the tree cannot see is
+ * still a real change, so there is nothing to compare and nothing to gain.
+ *
+ * Throws rather than returning on exhaustion, and checks before every
+ * observation, so a timeout reports the caller's last judgment instead of a bare
+ * deadline error.
+ */
+async function waitForNextJudgment(
+  invocation: Invocation,
+  options: {
+    readonly since: AgentObservation;
+    readonly intervalMs: number;
+    readonly lastExplanation: string;
+    readonly signal: AbortSignal;
+  },
+): Promise<AgentObservation> {
+  const watchTree = !invocation.pixelTier;
+  const tickMs = Math.min(options.intervalMs, CHANGE_POLL_MS);
+  const judgedAt = Date.now();
+  const judgedShape = observationShape(options.since);
+  for (;;) {
+    if (invocation.deadline.expired()) {
+      throw new AgentError(
+        'STEP_TIMEOUT',
+        `waitFor timed out; last judgment: ${options.lastExplanation}`,
+      );
+    }
+    if (!invocation.canAsk()) {
+      throw new AgentError(
+        'STEP_BUDGET_EXHAUSTED',
+        `waitFor exhausted its model-call budget; last judgment: ${options.lastExplanation}`,
+      );
+    }
+    const remainder = Math.min(tickMs, invocation.deadline.remaining());
+    if (remainder > 0) await sleep(remainder, options.signal);
+    const observation = await invocation.observe();
+    if (Date.now() - judgedAt < options.intervalMs) continue;
+    if (!watchTree || observationShape(observation) !== judgedShape) return observation;
+  }
 }
 
 function resolveTimeout(requested: number | undefined, fallback: number): number {
@@ -732,8 +833,12 @@ function explainActionFailure(
   }
   const reasoning =
     located.explanation === '' ? '' : ` The model explained: ${located.explanation}`;
+  const addressed =
+    located.expression === undefined
+      ? `by reference from observation ${located.observation.revision}`
+      : describeExpression(located.expression);
   const explanation =
-    `the model selected ${describeNode(located.node)} (${describeExpression(located.expression)}) ` +
+    `the model selected ${describeNode(located.node)} (${addressed}) ` +
     `as ${JSON.stringify(target)}, but that node rejected the action: ${driverReason(error.message)}.` +
     `${reasoning} Check that the current screen actually shows ${JSON.stringify(target)}.`;
   invocation.note({ explanation });

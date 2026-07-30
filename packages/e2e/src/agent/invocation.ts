@@ -6,23 +6,28 @@
  */
 
 import type { JSONSchema7 } from 'ai';
+import type { CacheCallSignature, CacheStore, CacheTargetIdentity } from '../cache/index.ts';
 import type { ResolvedConfig } from '../config/resolve.ts';
-import type { DriverSession } from '../driver/index.ts';
+import { DriverError, type DriverSession, type Observation } from '../driver/index.ts';
 import type { DebugTrace } from '../internal/debug.ts';
 import { E2EError, classifyError } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
-import { Deadline } from '../internal/time.ts';
+import { Deadline, POLL_INTERVAL_MS, sleep } from '../internal/time.ts';
 import { agentTrace, observationTrace } from '../internal/trace.ts';
 import type { LocatorEngine } from '../locator/engine.ts';
 import type { SecretResolver } from '../locator/screen.ts';
 import type { ArtifactSink } from '../run/fixtures.ts';
-import type {
-  StepEvent,
-  StepMetrics,
-  StepModelInfo,
-  StepRecord,
-  StepRecorder,
-  VisionDegradation,
+import {
+  CACHE_REPLAY_EVENT,
+  foldCacheInfo,
+  joinCacheReasons,
+  type StepCacheInfo,
+  type StepEvent,
+  type StepMetrics,
+  type StepModelInfo,
+  type StepRecord,
+  type StepRecorder,
+  type VisionDegradation,
 } from '../run/steps.ts';
 import type { AgentErrorCode, VisionMode } from '../types.ts';
 import { AgentError, CATEGORY_BY_CODE, isAgentError } from './error.ts';
@@ -38,6 +43,31 @@ import type { ModelRouter } from './model/router.ts';
 import { prepareObservation, type AgentObservation } from './observation.ts';
 import type { ProtocolValidation } from './protocol.ts';
 import { POLICY_VERSION, buildPrompt, buildSystem, type PromptInput } from './prompts.ts';
+
+/**
+ * Attempt-scoped cache identity and storage. Every field except the store is a
+ * cache-key input, so they are resolved once per attempt rather than rebuilt
+ * per call.
+ *
+ * There is no separate "cache disabled" flag. An attempt that must bypass the
+ * cache — mode `off`, or any retry, which starts from clean state and must not
+ * inherit a locator that may have caused the flake — gets `disabledCacheStore`
+ * and is otherwise identical.
+ */
+export interface AgentCacheContext {
+  readonly store: CacheStore;
+  /** SHA-256 of the resolved `projectId`. */
+  readonly project: string;
+  readonly testId: string;
+  readonly target: CacheTargetIdentity;
+  readonly policyVersion: string;
+  /**
+   * Assigns the zero-based occurrence of one call signature within this
+   * attempt: 0 the first time a given method/instruction/parameters triple
+   * runs, 1 the second time, and so on.
+   */
+  nextCallIndex: (signature: CacheCallSignature) => number;
+}
 
 /** Attempt-scoped services one agent fixture needs. */
 export interface AgentContext {
@@ -57,6 +87,7 @@ export interface AgentContext {
   readonly taint: { value: boolean };
   readonly artifacts: ArtifactSink;
   readonly signal: AbortSignal;
+  readonly cache: AgentCacheContext;
   /** `--debug` phase timings; absent when the caller collects none. */
   readonly debug?: DebugTrace;
 }
@@ -111,7 +142,7 @@ const PIXEL_RESERVE = imageTokenUpperBound({ width: 2_560, height: 1_440 });
 /** One instrumented phase: the event kind it records and the debug bucket it feeds. */
 interface PhaseSpec {
   readonly kind: StepEvent['kind'];
-  readonly phase: 'agent.observe' | 'agent.model' | 'agent.action';
+  readonly phase: 'agent.observe' | 'agent.model' | 'agent.action' | 'agent.cache';
   readonly name?: string;
 }
 
@@ -142,6 +173,12 @@ export class Invocation {
   private estimatedCostUsd: number | undefined;
   private observationRevision: string | undefined;
   private explanation: string | undefined;
+  /**
+   * Undefined until something cache-related happens. A call that never locates
+   * anything — a judgment, an extraction — has no cache dimension at all, and
+   * reporting a bypass for it would imply the cache could have helped.
+   */
+  private cacheInfo: StepCacheInfo | undefined;
   private visionInput = false;
   private visionDegraded: VisionDegradation | undefined;
   /**
@@ -152,7 +189,12 @@ export class Invocation {
    * the model choice follow from a single value instead of each deriving the
    * tier for itself.
    */
-  private pixelTier: boolean;
+  /**
+   * Whether this invocation asks for pixel evidence. Readable so a caller can
+   * tell that comparing successive observation trees is meaningless here: an
+   * animation the tree cannot see is still a change a vision call must judge.
+   */
+  pixelTier: boolean;
   private visionEscalated = false;
 
   constructor(
@@ -181,6 +223,69 @@ export class Invocation {
 
   get session(): DriverSession {
     return this.runtime.engine.session;
+  }
+
+  /** Attempt-scoped cache identity and storage. Check `cacheBypass` first. */
+  get cacheContext(): AgentCacheContext {
+    return this.runtime.cache;
+  }
+
+  /** Configured app base, which cache route identity is expressed against. */
+  get appBase(): ResolvedConfig['app']['base'] {
+    return this.runtime.config.app.base;
+  }
+
+  /**
+   * Why this call cannot use the cache, or undefined when it can. `cache: false`
+   * opts one call out; it can never upgrade the resolved run mode, which the
+   * store itself already expresses.
+   */
+  get cacheBypass(): string | undefined {
+    if (!this.options.cache) return 'the call passed cache: false';
+    return this.runtime.cache.store.unusable;
+  }
+
+  /** Records one locate's cache outcome against the enclosing step. */
+  setCache(info: StepCacheInfo): void {
+    this.cacheInfo =
+      this.cacheInfo === undefined ? info : foldCacheInfo(this.cacheInfo, info);
+  }
+
+  /**
+   * Merges a later cache outcome into the one already recorded: fields given
+   * win, and reasons accumulate.
+   *
+   * A cold call has two halves worth reporting — why nothing was replayed, and
+   * what was stored instead — and either alone is misleading. "no entry for
+   * this key; recorded getByRole(...)" is the whole story.
+   */
+  mergeCache(info: Partial<StepCacheInfo> & { reason: string }): void {
+    const previous: StepCacheInfo = this.cacheInfo ?? { status: 'bypassed' };
+    this.cacheInfo = {
+      ...previous,
+      ...info,
+      ...joinCacheReasons(previous.reason, info.reason),
+    };
+  }
+
+  /**
+   * Reports that this call never consulted the cache, and why. Returns
+   * undefined so a bail-out site can `return invocation.bypassCache(reason)`.
+   */
+  bypassCache(reason: string): undefined {
+    this.cacheInfo = { status: 'bypassed', reason };
+    agentTrace(() => `cache: bypassed — ${reason}`);
+    return undefined;
+  }
+
+  /**
+   * Times one cache consultation. Replay is driver work — one locator resolve
+   * plus one node read — so it is accounted for like every other phase instead
+   * of through a side channel, which is what makes `--debug` able to show the
+   * cache's own cost next to the model time it avoided.
+   */
+  cacheReplay<Value>(body: () => Promise<Value>): Promise<Value> {
+    return this.instrument({ kind: 'driver', phase: 'agent.cache', name: CACHE_REPLAY_EVENT }, body);
   }
 
   /**
@@ -287,7 +392,7 @@ export class Invocation {
     const observation = await this.instrument(
       { kind: 'observation', phase: 'agent.observe' },
       async () => {
-        const raw = await this.session.observe(this.operation(), { pixels });
+        const raw = await this.captureObservation(pixels);
         return prepareObservation(raw, {
           secrets: this.runtime.secretValues,
           maxBytes: this.observationByteBudget(),
@@ -310,6 +415,29 @@ export class Invocation {
       observation.text,
     );
     return observation;
+  }
+
+  /**
+   * Captures one raw observation, re-capturing while the driver reports a
+   * retryable failure and the invocation deadline remains. A page that
+   * navigates as it is read (a redirect, a hydration swap, a form submit still
+   * committing) makes the capture lose its document; that is a race, not a
+   * broken app, so it is re-read rather than surfaced as a failed call.
+   */
+  private async captureObservation(pixels: boolean): Promise<Observation> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.session.observe(this.operation(), { pixels });
+      } catch (cause) {
+        if (!(cause instanceof DriverError && cause.retryable) || this.deadline.expired()) {
+          throw cause;
+        }
+        agentTrace(
+          () => `${this.options.api} observation attempt ${attempt} raced the page: ${cause.code}`,
+        );
+        await sleep(POLL_INTERVAL_MS, this.runtime.signal);
+      }
+    }
   }
 
   /**
@@ -541,9 +669,7 @@ export class Invocation {
     this.runtime.steps.attachAgentDetails({
       metrics: { ...this.metrics },
       ...(this.metrics.modelCalls > 0 ? { model: this.modelInfo() } : {}),
-      // The locate/path caches (cache-1) are not implemented yet, so every
-      // invocation reports a bypass rather than a fabricated key hash.
-      cache: { status: 'bypassed' },
+      ...(this.cacheInfo === undefined ? {} : { cache: this.cacheInfo }),
       ...(this.observationRevision !== undefined
         ? { observationRevision: this.observationRevision }
         : {}),

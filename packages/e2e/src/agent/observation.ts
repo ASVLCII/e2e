@@ -2,6 +2,7 @@
 
 import type { Observation, ObservationPixels, SemanticNode } from '../driver/index.ts';
 import { sanitizeText } from '../internal/errors.ts';
+import { createRedactor } from '../internal/redact.ts';
 import { AgentError } from './error.ts';
 
 /** Appended when the node walk stopped at the observation byte budget. */
@@ -167,21 +168,29 @@ export function observedLineHasRole(line: string): boolean {
   return /^\s*#\S+ [a-z][a-z-]*(\s|$)/.test(line);
 }
 
-function collapse(text: string): string {
-  return sanitizeText(text).replace(/\s+/g, ' ').trim();
+/**
+ * What the page looks like, independent of which observation looked at it.
+ *
+ * Two things are dropped. Node ids, because they are minted per observation, so
+ * two looks at a page that has not moved would never render identically. And
+ * the focus state, because focus moves on its own — the browser settling it
+ * after load, a script claiming it, a widget stealing it — without the page
+ * having changed in any way a judgment could answer differently about. Leaving
+ * it in meant a genuinely static page could still spend a second model call.
+ *
+ * Lives next to `formatNode` so the line grammar keeps one owner.
+ */
+export function observationShape(observation: AgentObservation): string {
+  return observation.text
+    .replaceAll(/(^|\n)(\s*)#\S+/g, '$1$2')
+    .replaceAll(/ \[([^\]]*)\]/g, (_match, states: string) => {
+      const stable = states.split(' ').filter((state) => state !== 'focused');
+      return stable.length === 0 ? '' : ` [${stable.join(' ')}]`;
+    });
 }
 
-/** Replaces every exact registered secret value with its stable secret name. */
-function createRedactor(secrets: ReadonlyMap<string, string>): (text: string) => string {
-  const entries = [...secrets]
-    .filter(([, value]) => value.length > 0)
-    .toSorted((a, b) => b[1].length - a[1].length);
-  if (entries.length === 0) return (text) => text;
-  return (text) => {
-    let out = text;
-    for (const [name, value] of entries) out = out.split(value).join(`<secret:${name}>`);
-    return out;
-  };
+function collapse(text: string): string {
+  return sanitizeText(text).replace(/\s+/g, ' ').trim();
 }
 
 function indexNodes(node: SemanticNode, into: Map<string, SemanticNode>): void {

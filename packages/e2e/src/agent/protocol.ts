@@ -33,6 +33,23 @@ export interface LocateResponse {
   readonly target: LocateTarget | null;
   /** Why the node was selected, or why no node matches. Untrusted prose. */
   readonly explanation: string;
+  /**
+   * How the instruction picked the node out, as the model reports it.
+   *
+   * `content` means by what the node says — "the Save button". `position` means
+   * by where it sits — "the first result". `unreported` means the model did not
+   * say, and is deliberately distinct from `content`: a derived locator is
+   * always content-addressed, so replaying one for a positional instruction
+   * resolves whatever now carries that content rather than whatever now sits in
+   * that position. That is a wrong answer, and the cache is never allowed to
+   * produce one. Only `content` is recordable, so a model that omits the field
+   * costs a model locate per run and can never cause a wrong action.
+   *
+   * There is no structural substitute for this report. Derived queries never
+   * contain an index node (`deriveQueries`), so a locator's shape cannot reveal
+   * whether the instruction behind it was positional.
+   */
+  readonly targeting: 'content' | 'position' | 'unreported';
 }
 
 /** True when a validated target names an observation node rather than a point. */
@@ -84,17 +101,30 @@ const POINT_TARGET_SCHEMA: JSONSchema7 = {
   },
 };
 
+/**
+ * The structured-output schema one locate call is made under.
+ *
+ * `positional` is declared and required here even though the protocol tolerates
+ * its absence. The two are not in tension: `additionalProperties` is false, so a
+ * field this schema does not declare is one a strict provider forbids the model
+ * from sending — asking for it in the prompt alone got it silently stripped from
+ * every response, which left every locate unrecordable and the cache
+ * permanently cold. Requiring it is how the runner actually asks. The
+ * validator's tolerance stays a backstop for a provider that does not enforce
+ * schemas, not the expected path.
+ */
 function locateSchema(targets: readonly JSONSchema7[]): JSONSchema7 {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['protocolVersion', 'target', 'explanation'],
+    required: ['protocolVersion', 'target', 'explanation', 'positional'],
     properties: {
       // Single-value enum rather than const: strict structured-output modes
       // across providers accept enum but not const.
       protocolVersion: { type: 'string', enum: ['agent-locate-1'] },
       target: { anyOf: [...targets, { type: 'null' }] },
       explanation: { type: 'string', maxLength: EXPLANATION_MAX_LENGTH },
+      positional: { type: 'boolean' },
     },
   };
 }
@@ -142,22 +172,35 @@ export function validateLocateResponse(
   value: unknown,
   grammar: LocateGrammar = 'node',
 ): ProtocolValidation<LocateResponse> {
-  const record = asClosedRecord(value, ['protocolVersion', 'target', 'explanation']);
+  const record = asClosedRecord(value, [
+    'protocolVersion',
+    'target',
+    'explanation',
+    'positional',
+  ]);
   if (record === null) return fail('response is not an agent-locate-1 object');
   if (record['protocolVersion'] !== 'agent-locate-1') return fail('unknown protocolVersion');
   const explanation = asBoundedString(record['explanation'], 0, EXPLANATION_MAX_LENGTH);
   if (explanation === null) return fail('explanation must be a bounded string');
+  // Absence is its own answer rather than a default, so silence can never be
+  // read as the model asserting the recordable case.
+  const reported = record['positional'];
+  if (reported !== undefined && typeof reported !== 'boolean') {
+    return fail('positional must be a boolean when present');
+  }
+  const targeting: LocateResponse['targeting'] =
+    reported === undefined ? 'unreported' : reported ? 'position' : 'content';
   if (record['target'] === null) {
     return {
       ok: true,
-      value: { protocolVersion: 'agent-locate-1', target: null, explanation },
+      value: { protocolVersion: 'agent-locate-1', target: null, explanation, targeting },
     };
   }
   const target = validateTarget(record['target'], grammar);
   if (!target.ok) return target;
   return {
     ok: true,
-    value: { protocolVersion: 'agent-locate-1', target: target.value, explanation },
+    value: { protocolVersion: 'agent-locate-1', target: target.value, explanation, targeting },
   };
 }
 

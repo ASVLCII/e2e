@@ -1,9 +1,59 @@
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
 import {
   acceptAnyJson,
+  LOCATE_SCHEMAS,
   validateJudgmentResponse,
   validateLocateResponse,
+  type LocateGrammar,
 } from '../../src/agent/protocol.ts';
+
+const GRAMMARS = ['node', 'nodeOrPoint', 'point'] as const satisfies readonly LocateGrammar[];
+
+describe('the locate request schema', () => {
+  // A field the request schema does not declare is one a strict provider strips
+  // from the response, because additionalProperties is false. Asking for
+  // `positional` in the prompt alone therefore got it removed from every answer,
+  // which left every locate unrecordable and the cache permanently cold. The
+  // prompt is not the request; this schema is.
+  it('declares and requires every field the validator reads', () => {
+    for (const grammar of GRAMMARS) {
+      const schema = LOCATE_SCHEMAS[grammar];
+      expect(Object.keys(schema.properties ?? {}).toSorted()).toEqual([
+        'explanation',
+        'positional',
+        'protocolVersion',
+        'target',
+      ]);
+      // Strict structured-output modes emit only required properties, so an
+      // optional field here is an absent field in practice.
+      expect(schema.required?.toSorted()).toEqual([
+        'explanation',
+        'positional',
+        'protocolVersion',
+        'target',
+      ]);
+    }
+  });
+
+  it('accepts what the validator accepts, so a compliant answer round-trips', () => {
+    const ajv = new Ajv2020({ allErrors: true, strict: false });
+    // The request schema is typed as the SDK's JSONSchema7; ajv types its own
+    // input, and the two describe the same JSON.
+    const requestSchema = LOCATE_SCHEMAS.node as object;
+    const answer = {
+      protocolVersion: 'agent-locate-1',
+      target: { id: 'n7', revision: 'r3' },
+      explanation: 'the only email input',
+      positional: false,
+    };
+    expect(ajv.validate(requestSchema, answer)).toBe(true);
+    expect(validateLocateResponse(answer)).toMatchObject({
+      ok: true,
+      value: { targeting: 'content' },
+    });
+  });
+});
 
 describe('agent-locate-1', () => {
   it('accepts exactly the closed shape', () => {
@@ -18,6 +68,7 @@ describe('agent-locate-1', () => {
         protocolVersion: 'agent-locate-1',
         target: { id: 'n7', revision: 'r3' },
         explanation: 'the only email input',
+        targeting: 'unreported',
       },
     });
   });
@@ -34,8 +85,42 @@ describe('agent-locate-1', () => {
         protocolVersion: 'agent-locate-1',
         target: null,
         explanation: 'the observation shows a login page without a search box',
+        targeting: 'unreported',
       },
     });
+  });
+
+  it('distinguishes a reported positional hint from an absent one', () => {
+    const base = {
+      protocolVersion: 'agent-locate-1',
+      target: { id: 'n7', revision: 'r3' },
+      explanation: 'the first row',
+    };
+    expect(validateLocateResponse({ ...base, positional: true })).toMatchObject({
+      ok: true,
+      value: { targeting: 'position' },
+    });
+    expect(validateLocateResponse({ ...base, positional: false })).toMatchObject({
+      ok: true,
+      value: { targeting: 'content' },
+    });
+    // A model that predates the hint still produces a valid response, but its
+    // silence must never be read as the recordable answer.
+    expect(validateLocateResponse(base)).toMatchObject({
+      ok: true,
+      value: { targeting: 'unreported' },
+    });
+  });
+
+  it('rejects a non-boolean positional hint', () => {
+    expect(
+      validateLocateResponse({
+        protocolVersion: 'agent-locate-1',
+        target: { id: 'n7', revision: 'r3' },
+        explanation: 'the first row',
+        positional: 'yes',
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it('rejects a response without an explanation', () => {
@@ -124,7 +209,7 @@ describe('agent-locate-1', () => {
     it('accepts a point only when the call offered one', () => {
       expect(validateLocateResponse(pointResponse, 'nodeOrPoint')).toEqual({
         ok: true,
-        value: pointResponse,
+        value: { ...pointResponse, targeting: 'unreported' },
       });
     });
 
@@ -181,7 +266,7 @@ describe('agent-locate-1', () => {
       expect(validateLocateResponse(node, 'point')).toMatchObject({ ok: false });
       expect(validateLocateResponse(pointResponse, 'point')).toEqual({
         ok: true,
-        value: pointResponse,
+        value: { ...pointResponse, targeting: 'unreported' },
       });
     });
 

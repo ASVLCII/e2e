@@ -241,18 +241,136 @@ const PAGES: Record<string, string> = {
 </html>`,
 };
 
+/**
+ * A page whose content changes on every request while its route stays put,
+ * like a real listing with rotating prices and ordering. Used to prove the
+ * cache survives content churn.
+ */
+let feedRequests = 0;
+
+function renderFeed(): string {
+  feedRequests += 1;
+  const items = [0, 1, 2].map(
+    (offset) =>
+      `<li><a href="/about">Offer ${String(((feedRequests + offset) % 97) + 1)} — ${String(
+        1000 + ((feedRequests * 37 + offset * 13) % 9000),
+      )} zl</a></li>`,
+  );
+  return `<!doctype html>
+<html>
+<head><title>Feed</title></head>
+<body>
+  <h1>Feed</h1>
+  <button id="refresh" onclick="document.getElementById('mark').textContent = 'refreshed'">Refresh feed</button>
+  <output id="mark" role="status" aria-label="Marker">idle</output>
+  <ul>${items.join('')}</ul>
+</body>
+</html>`;
+}
+
 export interface FixtureApp {
   readonly url: string;
   close(): Promise<void>;
 }
 
+/**
+ * Three identical controls with nothing that names them or any ancestor: no test
+ * id, no form `name`, plain divs all the way to `body`. The sweep can still pin
+ * one by index, but there is no selector worth storing for it — a path counted
+ * from `body` is shifted by the widget this page appends, exactly as a chat
+ * bubble does on a production page.
+ */
+const UNANCHORED_PAGE = `<!doctype html>
+<html>
+<head><title>Unanchored</title></head>
+<body style="margin:0">
+  <output id="picked" role="status" aria-label="Picked">none</output>
+  <div>
+    <div><span>Row one</span> <button onclick="pick('1')">Zarezerwuj</button></div>
+    <div><span>Row two</span> <button onclick="pick('2')">Zarezerwuj</button></div>
+    <div><span>Row three</span> <button onclick="pick('3')">Zarezerwuj</button></div>
+  </div>
+  <script>
+    function pick(row) {
+      document.getElementById('picked').textContent = row;
+    }
+    setTimeout(() => {
+      const widget = document.createElement('div');
+      widget.textContent = 'Chat with us';
+      document.body.prepend(widget);
+    }, 150);
+  </script>
+</body>
+</html>`;
+
+/**
+ * A control repeated per row, as a listing repeats one reservation button. Every
+ * query derived from any row matches all of them, so the sweep can only resolve
+ * one by pinning an index.
+ *
+ * `?reverse=1` serves the same three offers in the opposite order. Cache route
+ * identity drops the query, so both URLs are the same place and share a key —
+ * which is how a warm run can replay an entry recorded against a page whose rows
+ * have since reordered. An index would land on the wrong offer; a selector
+ * anchored on the button's own name does not.
+ *
+ * The widget appended at body level is what a chat bubble, a consent frame, or a
+ * React portal does, and it shifts every nth-child index under body.
+ */
+function renderRepeats(reverse: boolean): string {
+  const offers = reverse ? ['C', 'B', 'A'] : ['A', 'B', 'C'];
+  const rows = offers
+    .map(
+      (offer) =>
+        `    <li><span>Offer ${offer}</span> <button name="reserve-${offer.toLowerCase()}" ` +
+        `onclick="pick('${offer}')">Reserve now</button></li>`,
+    )
+    .join('\n');
+  return `<!doctype html>
+<html>
+<head><title>Repeats</title></head>
+<body style="margin:0">
+  <output id="picked" role="status" aria-label="Picked">none</output>
+  <ul style="list-style:none;padding:0">
+${rows}
+  </ul>
+  <script>
+    function pick(offer) {
+      document.getElementById('picked').textContent = offer;
+    }
+    setTimeout(() => {
+      const widget = document.createElement('div');
+      widget.textContent = 'Chat with us';
+      document.body.prepend(widget);
+    }, 150);
+  </script>
+</body>
+</html>`;
+}
+
 /** Starts the fixture app on an ephemeral loopback port. */
 export async function startFixtureApp(): Promise<FixtureApp> {
   const server: Server = createServer((request, response) => {
-    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    const requested = new URL(request.url ?? '/', 'http://localhost');
+    const pathname = requested.pathname;
+    if (pathname === '/unanchored') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(UNANCHORED_PAGE);
+      return;
+    }
+    if (pathname === '/repeats') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(renderRepeats(requested.searchParams.get('reverse') === '1'));
+      return;
+    }
     if (pathname === '/api/flags') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ betaBoard: false }));
+      return;
+    }
+    if (pathname === '/feed') {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(renderFeed());
       return;
     }
     const page = PAGES[pathname];

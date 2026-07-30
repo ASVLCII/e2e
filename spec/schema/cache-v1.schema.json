@@ -4,13 +4,10 @@
   "title": "e2e cache-1 entry",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "kind", "key", "keyHash", "generation", "createdAt", "payload"],
+  "required": ["schemaVersion", "kind", "payload"],
   "properties": {
     "schemaVersion": { "const": "cache-1" },
     "kind": { "enum": ["locate", "path"] },
-    "key": { "$ref": "#/$defs/key" },
-    "keyHash": { "$ref": "#/$defs/sha256" },
-    "generation": { "type": "integer", "minimum": 1 },
     "createdAt": { "$ref": "#/$defs/timestamp" },
     "payload": {
       "oneOf": [
@@ -126,10 +123,32 @@
               ]
             }
           }
+        },
+        {
+          "description": "Platform selector the driver reported for the observed node. Structural rather than semantic, and never trusted: replay checks the resolved node against the recorded identity.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selector"],
+          "properties": {
+            "kind": { "const": "web-selector" },
+            "selector": { "type": "string", "minLength": 1, "maxLength": 2048 }
+          }
+        },
+        {
+          "description": "One iframe boundary along the way to the node. Neither a query nor a selector reaches across a frame on its own.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "selector", "source"],
+          "properties": {
+            "kind": { "const": "frame" },
+            "selector": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "source": { "$ref": "#/$defs/locator" }
+          }
         }
       ]
     },
     "key": {
+      "description": "Cache key. Digested with SHA-256/JCS to form the entry file name; not stored inside the entry.",
       "type": "object",
       "additionalProperties": false,
       "required": ["specVersion", "cacheSchema", "project", "testId", "targetId", "platform", "driverId", "driverVersion", "driverSpiVersion", "method", "callIndex", "instructionDigest", "inputDigest", "appIdentity", "screenFingerprint", "policyVersion"],
@@ -143,7 +162,7 @@
         "driverId": { "type": "string", "minLength": 1 },
         "driverVersion": { "type": "string", "minLength": 1 },
         "driverSpiVersion": { "const": 1 },
-        "method": { "enum": ["act", "tap", "click", "type", "scroll", "scrollTo", "longPress"] },
+        "method": { "enum": ["act", "tap", "click", "type", "scroll", "scrollTo", "longPress", "press", "hover", "select", "check", "uncheck", "dragTo", "upload"] },
         "callIndex": { "type": "integer", "minimum": 0 },
         "instructionDigest": { "$ref": "#/$defs/sha256" },
         "inputDigest": { "$ref": "#/$defs/sha256" },
@@ -153,21 +172,20 @@
       }
     },
     "semanticIdentity": {
+      "description": "Identity a replayed node must still have. Role and name only: states are re-checked by actionability before the action runs. At least one is required; an unlabelled container is identified by its accessible name alone, and a node with neither cannot be verified and is not stored.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["role"],
+      "minProperties": 1,
       "properties": {
         "role": { "type": "string", "minLength": 1 },
-        "name": { "type": "string" },
-        "states": { "type": "object", "additionalProperties": { "type": "boolean" } }
+        "name": { "type": "string", "minLength": 1 }
       }
     },
     "locatePayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "locator", "expected"],
+      "required": ["locator", "expected"],
       "properties": {
-        "type": { "const": "locate" },
         "locator": { "$ref": "#/$defs/locator" },
         "expected": { "$ref": "#/$defs/semanticIdentity" }
       }

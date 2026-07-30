@@ -10,6 +10,34 @@
 import { observedLineHasRole } from '../../src/agent/observation.ts';
 import type { ModelInstance } from '../../src/types.ts';
 
+/**
+ * Applies the request schema to a scripted answer the way a strict provider
+ * does: a property the schema does not declare is dropped, because
+ * `additionalProperties` is false.
+ *
+ * Without this, a fake could answer with fields the runner never actually asked
+ * the model for, and a schema that forgot to declare one would look fine in
+ * every test while being stripped from every real response. That is exactly how
+ * the locate `positional` hint went missing and left the cache permanently cold.
+ */
+function enforceRequestSchema(answer: unknown, schema: unknown): unknown {
+  if (
+    typeof answer !== 'object' ||
+    answer === null ||
+    Array.isArray(answer) ||
+    typeof schema !== 'object' ||
+    schema === null
+  ) {
+    return answer;
+  }
+  const shape = schema as { properties?: Record<string, unknown>; additionalProperties?: unknown };
+  if (shape.additionalProperties !== false || shape.properties === undefined) return answer;
+  const declared = new Set(Object.keys(shape.properties));
+  return Object.fromEntries(
+    Object.entries(answer as Record<string, unknown>).filter(([key]) => declared.has(key)),
+  );
+}
+
 export interface FakeCall {
   /** Model instance that received the call. */
   readonly modelId: string;
@@ -81,7 +109,7 @@ export function createFakeModel(
     supportedUrls: {},
     async doGenerate(options: {
       prompt: FakePrompt;
-      responseFormat?: { type: string; name?: string } | undefined;
+      responseFormat?: { type: string; name?: string; schema?: unknown } | undefined;
     }) {
       const system = promptText(options.prompt, 'system');
       const prompt = promptText(options.prompt, 'user');
@@ -98,7 +126,7 @@ export function createFakeModel(
         images: promptImages(options.prompt),
       };
       fakeCalls.push(parsed);
-      const raw = responder(parsed);
+      const raw = enforceRequestSchema(responder(parsed), options.responseFormat?.schema);
       return {
         content: [{ type: 'text' as const, text: JSON.stringify(raw) }],
         finishReason: { unified: 'stop' as const, raw: 'stop' },
@@ -208,13 +236,20 @@ export function bestMatch(call: FakeCall): { id: string; line: string } {
   return { id: best.id, line: best.line };
 }
 
-/** Builds a valid agent-locate-1 response for the best-matching node. */
-export function locateBestMatch(call: FakeCall): unknown {
+/**
+ * Builds a valid agent-locate-1 response for the best-matching node.
+ *
+ * `positional` is always reported, like a compliant model: the runner treats an
+ * absent field as positional and declines to record, so a fake that omitted it
+ * would silently exercise only the not-recordable path.
+ */
+export function locateBestMatch(call: FakeCall, positional = false): unknown {
   const match = bestMatch(call);
   return {
     protocolVersion: 'agent-locate-1',
     target: { id: match.id, revision: call.revision },
     explanation: `best line match: ${match.line.trim()}`,
+    positional,
   };
 }
 

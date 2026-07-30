@@ -27,7 +27,7 @@ same ambient OS authority as the runner.
 
 ## Policy authority
 
-The runner owns immutable agent policy `policy-0.2`. System policy precedes
+The runner owns immutable agent policy `policy-0.3`. System policy precedes
 project context, ledger data, app content, and model output. No lower-trust
 input can add tools, origins, credentials, budget, filesystem access, network
 destinations, or production permission.
@@ -178,7 +178,10 @@ revocation, and audit requirements before it can become normative.
 Cache files are untrusted strict JSON, not code or prompts. Schema validation,
 identity/fingerprint matching, path containment, size limits, and policy checks
 precede use. Locate/path entries contain structured actions only. Invalid cache
-content produces a miss and a sanitized diagnostic.
+content produces a miss and a sanitized diagnostic. A locate entry MAY carry a
+platform selector, which is structural rather than semantic and is gated only by
+the recorded role/name identity, so it does not restrict which nodes the entry
+may aim at; 10-determinism.md states what that concedes.
 
 Untrusted CI runs use read-only or off mode. They cannot publish to a trusted
 cache, session store, package, artifact host, or branch. Cache review does not

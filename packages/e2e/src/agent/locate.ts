@@ -13,34 +13,26 @@
  * what was found there before any dispatch.
  */
 
-import {
-  OBSERVED_NAME_LIMIT,
-  OBSERVED_TEXT_LIMIT,
-  type LocatorExpression,
-  type NodeRef,
-  type SemanticNode,
-  type ViewportPoint,
+import { cacheMethodForApi } from '../cache/index.ts';
+import type {
+  LocatorExpression,
+  NodeRef,
+  SemanticNode,
+  ViewportPoint,
 } from '../driver/index.ts';
-import {
-  describeExpression,
-  filterExpression,
-  frameExpression,
-  indexExpression,
-  roleQuery,
-  testIdQuery,
-  textQuery,
-} from '../locator/expression.ts';
-import { POLL_INTERVAL_MS, sleep } from '../internal/time.ts';
 import { agentTrace } from '../internal/trace.ts';
-import type { Role } from '../types.ts';
 import { AgentError } from './error.ts';
-import { Invocation, toAgentError } from './invocation.ts';
+import { Invocation } from './invocation.ts';
+import { openLocateCache, type OpenLocateCache } from './locate-cache.ts';
 import type { AgentObservation, AgentPixels } from './observation.ts';
+import { describeSignature, normalizeSignatureText } from './queries.ts';
+import { resolveSelected } from './resolve.ts';
 import {
   isNodeTarget,
   LOCATE_SCHEMAS,
   validateLocateResponse,
   type LocateGrammar,
+  type LocateResponse,
   type ProtocolValidation,
 } from './protocol.ts';
 import { LOCATE_REQUESTS } from './prompts.ts';
@@ -48,12 +40,27 @@ import { LOCATE_REQUESTS } from './prompts.ts';
 export interface LocatedNode {
   readonly kind: 'node';
   readonly ref: NodeRef;
-  readonly expression: LocatorExpression;
+  /**
+   * The portable query that re-found this node, or undefined when no derived
+   * query resolved it at all and it was addressed by the reference the
+   * observation handed out. A query that matched *several* nodes is pinned with
+   * an index rather than abandoned; this is the opposite case, a query that
+   * matched none because the name the driver recomputes diverges from the one
+   * the observation read.
+   */
+  readonly expression: LocatorExpression | undefined;
   /** Freshly read node behind the derived query. */
   readonly node: SemanticNode;
   readonly observation: AgentObservation;
   /** Model-reported reason for the selection. Untrusted prose. */
   readonly explanation: string;
+  /** Whether a model chose this node or a cache entry replayed it. */
+  readonly origin: 'model' | 'cache';
+  /**
+   * How the instruction picked this node out, as reported by the model. Only a
+   * `content` target is recordable; see `LocateResponse.targeting`.
+   */
+  readonly targeting: LocateResponse['targeting'];
 }
 
 /**
@@ -88,6 +95,8 @@ export type Selection =
       readonly selected: SemanticNode;
       /** Why the node was selected. Untrusted prose. */
       readonly explanation: string;
+      /** The model's report of how the instruction identified this node. */
+      readonly targeting: LocateResponse['targeting'];
     }
   | {
       readonly kind: 'point';
@@ -154,7 +163,7 @@ export async function observeAndSelect(
     agentTrace(
       () =>
         `locate ${JSON.stringify(target)}: model pointed at (${point.x}, ${point.y}) (${
-          hit === null ? 'no semantic node there' : describe(hit)
+          hit === null ? 'no semantic node there' : describeSignature(hit)
         }) — ${explanation}`,
     );
     return { kind: 'point', observation, point, hit, explanation };
@@ -163,14 +172,14 @@ export async function observeAndSelect(
   agentTrace(
     () =>
       `locate ${JSON.stringify(target)}: model selected #${answer.id} (${
-        selected === undefined ? 'not in observation' : describe(selected)
+        selected === undefined ? 'not in observation' : describeSignature(selected)
       }) — ${explanation}`,
   );
   if (selected === undefined) {
     invocation.recordPolicy('locate.node', 'denied', 'POLICY_DENIED');
     return { kind: 'absent', observation, explanation };
   }
-  return { kind: 'node', observation, selected, explanation };
+  return { kind: 'node', observation, selected, explanation, targeting: answer.targeting };
 }
 
 /**
@@ -183,7 +192,12 @@ export async function observeAndSelect(
  * or assert that a screenshot was attached.
  */
 type LocateAnswer =
-  | { readonly kind: 'node'; readonly id: string; readonly explanation: string }
+  | {
+      readonly kind: 'node';
+      readonly id: string;
+      readonly explanation: string;
+      readonly targeting: LocateResponse['targeting'];
+    }
   | { readonly kind: 'point'; readonly point: ViewportPoint; readonly explanation: string }
   | { readonly kind: 'none'; readonly explanation: string };
 
@@ -204,7 +218,7 @@ function validateAgainstObservation(
 ): ProtocolValidation<LocateAnswer> {
   const validation = validateLocateResponse(value, grammar);
   if (!validation.ok) return validation;
-  const { target, explanation } = validation.value;
+  const { target, explanation, targeting } = validation.value;
   if (target === null) return { ok: true, value: { kind: 'none', explanation } };
   if (target.revision !== observation.revision) {
     return {
@@ -219,7 +233,7 @@ function validateAgainstObservation(
         issue: `target.id "${target.id}" is not in the current observation; use a node id exactly as printed after "#", e.g. "n42"`,
       };
     }
-    return { ok: true, value: { kind: 'node', id: target.id, explanation } };
+    return { ok: true, value: { kind: 'node', id: target.id, explanation, targeting } };
   }
   if (pixels === undefined) {
     return { ok: false, issue: 'no screenshot was attached; select a node from the observation' };
@@ -316,6 +330,88 @@ export type PointPolicy<Value = never> =
 /** The policy of a caller that needs a node reference to hand the driver. */
 export const NODE_ONLY: PointPolicy = { allowed: false };
 
+export interface LocateOptions {
+  readonly testIdAttribute: string;
+  /**
+   * Non-secret parameters of the calling method, digested into the cache key.
+   * A secret contributes only its stable name and purpose, never its value.
+   *
+   * Required, and empty only for a call that genuinely has no parameters. An
+   * optional field here would let a new located action silently key on nothing
+   * and replay an entry recorded for different arguments.
+   */
+  readonly input: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Opens the cache for this call, or returns undefined when the method is not
+ * cacheable. `cache-1` admits a closed set of methods, so a located action
+ * outside it reports a bypass rather than inventing a key.
+ */
+async function openCacheFor(
+  invocation: Invocation,
+  target: string,
+  options: LocateOptions,
+): Promise<OpenLocateCache | undefined> {
+  const method = cacheMethodForApi(invocation.api);
+  if (method === undefined) {
+    return invocation.bypassCache(`${invocation.api} is not a cacheable cache-1 method`);
+  }
+  const bypass = invocation.cacheBypass;
+  if (bypass !== undefined) return invocation.bypassCache(bypass);
+  // Observed only once it is known this call will be keyed, so a non-cacheable
+  // or opted-out method never pays for it. A hit replays against this
+  // observation; a miss re-observes inside the attempt, which is one extra
+  // observation against the model call it is about to avoid paying for.
+  const observation = await invocation.observe();
+  return openLocateCache(invocation, observation, {
+    method,
+    instruction: target,
+    input: options.input,
+  });
+}
+
+/**
+ * Locates one node, scrolling and re-observing until the model finds it or the
+ * budget runs out, then hands the node back for the caller to act on.
+ *
+ * Node-only by construction: `scrollIntoView` needs a node reference, so the
+ * model is never shown the pointing grammar here and a pointed answer, which
+ * this loop would misread as "not on screen yet", cannot reach it.
+ */
+export async function locateByScrolling(
+  invocation: Invocation,
+  target: string,
+  options: LocateOptions,
+  scroll: () => Promise<void>,
+): Promise<LocatedNode> {
+  const cache = await openCacheFor(invocation, target, options);
+  const replayed = await cache?.replay();
+  if (replayed !== undefined) return replayed;
+
+  let lastExplanation = '';
+  for (let round = 1; ; round += 1) {
+    invocation.recordPoll('scrollTo', round);
+    const selection = await observeAndSelect(invocation, target);
+    if (selection.kind === 'node') {
+      const located = await resolveSelected(invocation, selection, options);
+      await cache?.record(located);
+      return located;
+    }
+    if (selection.kind === 'none') lastExplanation = selection.explanation;
+    if (invocation.deadline.expired() || !invocation.canAsk()) {
+      if (lastExplanation !== '') invocation.note({ explanation: lastExplanation });
+      throw new AgentError(
+        'LOCATOR_NOT_FOUND',
+        `scrollTo did not reach ${JSON.stringify(target)} within its budget${
+          lastExplanation === '' ? '' : `; the model reported: ${lastExplanation}`
+        }`,
+      );
+    }
+    await scroll();
+  }
+}
+
 /**
  * Selects one node and resolves it to a deterministic, unique locator, or, for
  * a caller whose policy allows it, dispatches at one screenshot point.
@@ -329,16 +425,24 @@ export const NODE_ONLY: PointPolicy = { allowed: false };
 export async function locateOne<Value = never>(
   invocation: Invocation,
   target: string,
-  options: { testIdAttribute: string; point?: PointPolicy<Value> },
+  options: LocateOptions & { point?: PointPolicy<Value> },
 ): Promise<LocatedNode | Value> {
   requirePointCapability(invocation, options.point ?? NODE_ONLY);
+
+  // Opened once, before any attempt: a vision escalation re-asks the model but
+  // stays on the same route, so it is the same key and must not be looked up
+  // twice.
+  const cache = await openCacheFor(invocation, target, options);
+  const replayed = await cache?.replay();
+  if (replayed !== undefined) return replayed;
+
   try {
     // While an escalation is still available, the first attempt does not spend
     // the clock proving a tree-only pick unresolvable: one sweep, then ask
     // again with pixels. The escalated attempt polls to the deadline as usual,
     // so the worst case is no slower than a single-tier locate.
     const poll = !invocation.canEscalateVision();
-    return await locateAttempt(invocation, target, { ...options, poll });
+    return await locateAttempt(invocation, target, { ...options, poll, cache });
   } catch (cause) {
     // Re-asked rather than reused: the first attempt spent budget and clock, and
     // escalating into an exhausted budget would replace the locator failure the
@@ -347,7 +451,7 @@ export async function locateOne<Value = never>(
       throw cause;
     }
     invocation.escalateVision();
-    return locateAttempt(invocation, target, { ...options, poll: true });
+    return locateAttempt(invocation, target, { ...options, poll: true, cache });
   }
 }
 
@@ -382,14 +486,23 @@ function isTreeMiss(cause: unknown): boolean {
 async function locateAttempt<Value>(
   invocation: Invocation,
   target: string,
-  options: { testIdAttribute: string; point?: PointPolicy<Value>; poll: boolean },
+  options: LocateOptions & {
+    point?: PointPolicy<Value>;
+    poll: boolean;
+    cache?: OpenLocateCache | undefined;
+  },
 ): Promise<LocatedNode | Value> {
   const policy = options.point ?? NODE_ONLY;
   const selection = await observeAndSelect(invocation, target, { allowPoint: policy.allowed });
   if (selection.kind === 'point' && policy.allowed) {
+    // Not recorded, and not by omission: a point is a screen coordinate, which
+    // `cache-1` must never store. Keeping the write on the node branch makes
+    // that structural rather than a check someone can forget.
     return policy.perform(invocation, acceptPoint(invocation, target, selection));
   }
-  return requireNode(invocation, target, selection, options);
+  const located = await requireNode(invocation, target, selection, options);
+  await options.cache?.record(located);
+  return located;
 }
 
 /**
@@ -446,387 +559,7 @@ function acceptPoint(
 
 /** Node identity recorded for a pointed action, per spec 13-reporting.md. */
 function describeHit(node: SemanticNode): string {
-  const name = normalize(node.name ?? node.text);
+  const name = normalizeSignatureText(node.name ?? node.text);
   const role = node.role ?? 'node';
   return name === '' ? `a ${role}` : `the ${role} ${JSON.stringify(name)}`;
-}
-
-/**
- * Resolves a selected observation node through the first derived query that
- * matches exactly one node with the same semantics.
- *
- * `poll: false` runs a single sweep instead of retrying to the deadline. The
- * node was observed a moment ago, so a sweep that resolves nothing right now is
- * evidence about the derived queries, not about timing — which is enough for a
- * fallback caller to decide to escalate, and only ever worth spending the clock
- * on once there is no escalation left.
- */
-export async function resolveSelected(
-  invocation: Invocation,
-  selection: Extract<Selection, { kind: 'node' }>,
-  options: { testIdAttribute: string; poll?: boolean },
-): Promise<LocatedNode> {
-  const candidates = deriveQueries(selection.selected, options.testIdAttribute).map((query) =>
-    scopeToFrames(query, selection.selected.framePath),
-  );
-  if (candidates.length === 0) {
-    throw new AgentError(
-      'LOCATOR_NOT_FOUND',
-      'the selected node exposes no role, name, test ID, placeholder, or text to address it portably',
-    );
-  }
-  const engine = invocation.engine;
-
-  for (;;) {
-    // Outcomes are collected per sweep: a query that stopped matching several
-    // nodes must not keep reporting LOCATOR_AMBIGUOUS from an earlier round.
-    const outcomes: string[] = [];
-    let ambiguous = false;
-    let terminal = false;
-    for (const expression of candidates) {
-      let refs: readonly NodeRef[];
-      try {
-        // The invocation deadline bounds the sweep, so a caller-supplied
-        // timeout is honored even while a driver error stays retryable.
-        refs = await engine.resolveAll(expression, invocation.deadline);
-      } catch (cause) {
-        // A query that ran out of clock is this sweep's own verdict to report, not
-        // a transport failure. Rethrowing here would race the loop's diagnosis and
-        // surface STEP_TIMEOUT instead of the ambiguity that actually blocked the
-        // locate — sending the author after their timeout rather than their
-        // instruction.
-        if (!invocation.deadline.expired()) throw toAgentError(cause);
-        outcomes.push(`${describeExpression(expression)} -> timed out`);
-        continue;
-      }
-      if (refs.length === 0) {
-        outcomes.push(`${describeExpression(expression)} -> no matches`);
-        continue;
-      }
-      // A query matching several nodes is not necessarily a dead end: the
-      // selected node is one of them, and pinning it by position turns the
-      // ambiguous query into a unique one.
-      const picked =
-        refs.length === 1
-          ? await readOnly(invocation, refs[0]!)
-          : await pinOne(invocation, refs, selection.selected);
-      if (picked.kind === 'miss') {
-        ambiguous ||= picked.ambiguous;
-        terminal ||= picked.terminal === true;
-        outcomes.push(`${describeExpression(expression)} -> ${picked.detail}`);
-        continue;
-      }
-      if (!matchesSignature(selection.selected, picked.node)) {
-        outcomes.push(
-          `${describeExpression(expression)} -> resolved a different node (${describe(picked.node)})`,
-        );
-        continue;
-      }
-      // The expression carries the index, so the action still dispatches through
-      // a query the report can show, not through a raw handle.
-      const resolved =
-        picked.index === undefined ? expression : indexExpression(expression, picked.index);
-      invocation.recordPolicy('locate.identity', 'allowed');
-      agentTrace(() => `locate: resolved via ${describeExpression(resolved)}`);
-      return {
-        kind: 'node',
-        ref: picked.ref,
-        expression: resolved,
-        node: picked.node,
-        observation: selection.observation,
-        explanation: selection.explanation,
-      };
-    }
-
-    agentTrace(() => `locate: sweep failed\n  ${outcomes.join('\n  ')}`);
-    const giveUp = (): AgentError => {
-      invocation.recordPolicy('locate.identity', 'denied');
-      return sweepFailure(selection.selected, outcomes, ambiguous);
-    };
-    // `terminal` short-circuits the wait: an instruction that lands on controls
-    // nothing can tell apart is not a page that is still settling, and spending
-    // the whole deadline before saying so buries the diagnosis in a timeout.
-    if (options.poll === false || terminal || invocation.deadline.expired()) throw giveUp();
-    await sleep(POLL_INTERVAL_MS, engine.signal);
-    // Never begin a sweep on an expired clock. A zero remaining budget reaches
-    // the driver as "no timeout" rather than "give up now", so the next query
-    // would hang and the step would die of an outer timeout — losing the
-    // diagnosis this sweep already has.
-    if (invocation.deadline.expired()) throw giveUp();
-  }
-}
-
-/**
- * The failure of a completed sweep, naming every candidate and its outcome.
- *
- * Ambiguity that survived indexing is a property of the page rather than of the
- * query vocabulary, so it comes with the only remedy that works: a more specific
- * instruction. Without that line a reader sees a list of rejected queries and
- * reaches for a longer timeout instead.
- */
-function sweepFailure(
-  selected: SemanticNode,
-  outcomes: readonly string[],
-  ambiguous: boolean,
-): AgentError {
-  const detail = outcomes.map((outcome) => `\n  ${outcome}`).join('');
-  const remedy = ambiguous
-    ? '\nthe page has several controls this instruction cannot tell apart; ' +
-      'name what distinguishes the one you mean, such as the section or row it belongs to'
-    : '';
-  return new AgentError(
-    ambiguous ? 'LOCATOR_AMBIGUOUS' : 'LOCATOR_NOT_FOUND',
-    `no derived query uniquely resolved the selected node (${describe(selected)}):${detail}${remedy}`,
-  );
-}
-
-/**
- * What one candidate query produced: the selected node pinned down, or why not.
- *
- * `ambiguous` is carried rather than inferred from the text, because it decides
- * whether the sweep reports LOCATOR_AMBIGUOUS or LOCATOR_NOT_FOUND.
- */
-type MatchOutcome =
-  | {
-      readonly kind: 'pinned';
-      readonly ref: NodeRef;
-      readonly node: SemanticNode;
-      /** Set when an index is needed to make the query resolve to one node. */
-      readonly index?: number;
-    }
-  | {
-      readonly kind: 'miss';
-      readonly detail: string;
-      readonly ambiguous: boolean;
-      /** True when re-sweeping cannot change this outcome. */
-      readonly terminal?: boolean;
-    };
-
-/** One candidate query failed to pin the node down. */
-function miss(detail: string, ambiguous = false, terminal = false): MatchOutcome {
-  return { kind: 'miss', detail, ambiguous, terminal };
-}
-
-/**
- * Beyond this many matches a query is not worth disambiguating: an instruction
- * that lands on dozens of identical controls needs rewording, not an index, and
- * reading them all would spend the sweep's budget on one hopeless candidate.
- */
-const MAX_AMBIGUOUS_MATCHES = 24;
-
-/** Reads the single match of an unambiguous query. */
-async function readOnly(invocation: Invocation, ref: NodeRef): Promise<MatchOutcome> {
-  try {
-    const node = await invocation.engine.session.screen.read(ref, invocation.operation());
-    return { kind: 'pinned', ref, node };
-  } catch {
-    return miss('matched node became unreadable');
-  }
-}
-
-/**
- * Picks the selected node out of an ambiguous query's matches.
- *
- * The index is computed here, against the match set the query actually returned,
- * rather than recorded during observation. That is what keeps `nth` honest: the
- * observation is byte-budgeted and may not even contain every match, and the page
- * can reflow between capture and resolution. Deciding at resolve time means the
- * index always refers to the list it was measured against, and the caller still
- * signature-checks the node before dispatching, so a page that reordered fails
- * the check instead of acting on the wrong control.
- *
- * Discrimination is by signature first, then by observed geometry. Two distinct
- * visible controls cannot occupy the same rectangle, so a rect that still matches
- * identifies the one the model chose; a reflow moves all of them and matches
- * none, which reports ambiguity rather than guessing.
- */
-async function pinOne(
-  invocation: Invocation,
-  refs: readonly NodeRef[],
-  selected: SemanticNode,
-): Promise<MatchOutcome> {
-  if (refs.length > MAX_AMBIGUOUS_MATCHES) {
-    return miss(`${refs.length} matches, too many to tell apart`, true);
-  }
-  const matches: Extract<MatchOutcome, { kind: 'pinned' }>[] = [];
-  let unread = 0;
-  for (const [index, ref] of refs.entries()) {
-    let node: SemanticNode;
-    try {
-      node = await invocation.engine.session.screen.read(ref, invocation.operation());
-    } catch {
-      // A match that could not be read is a match whose identity is unknown, and
-      // dropping it would shrink the set until whatever is left looks unique.
-      // Under a nearly-expired deadline that turned "indistinguishable" into a
-      // confident index onto an arbitrary element.
-      unread += 1;
-      continue;
-    }
-    if (matchesSignature(selected, node)) matches.push({ kind: 'pinned', ref, node, index });
-  }
-  if (unread > 0) {
-    return miss(`${refs.length} matches, ${unread} of them unreadable`, true);
-  }
-  if (matches.length === 0) {
-    return miss(`${refs.length} matches, none of them the selected node`, true);
-  }
-  if (matches.length === 1) return matches[0]!;
-  const byRect = matches.filter((match) => sameRect(selected.rect, match.node.rect));
-  if (byRect.length === 1) return byRect[0]!;
-  // Indistinguishable by name and by position both. Re-sweeping cannot separate
-  // them, so this is terminal: the instruction, not the locator, has to choose,
-  // and polling to the deadline would only delay saying so.
-  return miss(
-    `${matches.length} matches indistinguishable from the selected node`,
-    true,
-    true,
-  );
-}
-
-/** Exact rectangle equality, used only to tell simultaneous matches apart. */
-function sameRect(a: SemanticNode['rect'], b: SemanticNode['rect']): boolean {
-  if (a === undefined || b === undefined) return false;
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-}
-
-/**
- * Scopes one derived query to the observed node's enclosing frame chain, so a
- * node inside an iframe re-resolves through the same frames deterministically.
- */
-function scopeToFrames(
-  query: LocatorExpression,
-  framePath: readonly string[] | undefined,
-): LocatorExpression {
-  if (framePath === undefined || framePath.length === 0) return query;
-  return framePath.reduceRight((source, selector) => frameExpression(selector, source), query);
-}
-
-/**
- * Bounded prefix used to re-find nodes whose names aggregate a whole card of
- * text. Long names diverge between accessible-name computation and rendered
- * text (image alts, badges), so a role-scoped text-content prefix filter is
- * the reliable signal; the identity signature still checks the full name.
- */
-const NAME_PREFIX_LENGTH = 64;
-
-/**
- * True when an observed field was cut at the driver contract's observation
- * bound (`OBSERVED_NAME_LIMIT` / `OBSERVED_TEXT_LIMIT`). Checked on the raw
- * value — normalization only shrinks — so every value below the limit is
- * provably complete. Truncated values are matched as substrings and compared
- * as prefixes.
- */
-function truncatedAt(value: string | undefined, limit: number): boolean {
-  return (value ?? '').length >= limit;
-}
-
-/**
- * Matches an observed-text prefix regardless of whitespace differences. The
- * observed name comes from rendered text, which inserts spaces at element
- * boundaries that raw text content does not have (and vice versa), so every
- * space matches any amount of whitespace including none. Case-insensitive
- * because rendering may also apply text transforms.
- */
-function prefixPattern(value: string): RegExp {
-  const escaped = value
-    .slice(0, NAME_PREFIX_LENGTH)
-    .trim()
-    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    .replace(/ /g, '\\s*');
-  return new RegExp(escaped, 'i');
-}
-
-/**
- * Derives candidate `screen` queries for one observed node, most portable
- * first. A candidate never contains a node reference, coordinate, or selector.
- */
-export function deriveQueries(
-  node: SemanticNode,
-  testIdAttribute: string,
-): readonly LocatorExpression[] {
-  const candidates: LocatorExpression[] = [];
-  const role = node.role;
-  const name = normalize(node.name);
-  const text = normalize(node.text);
-  const nameTruncated = truncatedAt(node.name, OBSERVED_NAME_LIMIT);
-  const textTruncated = truncatedAt(node.text, OBSERVED_TEXT_LIMIT);
-  const testId = node.attributes?.[testIdAttribute];
-  const placeholder = node.attributes?.['placeholder'];
-
-  if (role !== undefined && role !== '' && name !== '') {
-    candidates.push(roleQuery(role as Role, { name, exact: !nameTruncated }, undefined));
-    if (nameTruncated) {
-      candidates.push(
-        filterExpression(roleQuery(role as Role, undefined, undefined), {
-          hasText: prefixPattern(name),
-        }),
-      );
-    }
-  }
-  if (testId !== undefined && testId !== '') {
-    const byTestId = testIdQuery(testId, undefined);
-    const disambiguator = name !== '' ? name : text;
-    if (disambiguator !== '') {
-      candidates.push(filterExpression(byTestId, { hasText: disambiguator }));
-    }
-    candidates.push(byTestId);
-  }
-  if (placeholder !== undefined && placeholder !== '') {
-    candidates.push(textQuery('placeholder', placeholder, { exact: true }, undefined));
-  }
-  if (name !== '') {
-    candidates.push(textQuery('label', name, { exact: !nameTruncated }, undefined));
-    candidates.push(textQuery('text', name, { exact: !nameTruncated }, undefined));
-  }
-  if (text !== '' && text !== name) {
-    candidates.push(textQuery('text', text, { exact: !textTruncated }, undefined));
-  }
-  if (role !== undefined && role !== '' && text !== '') {
-    candidates.push(
-      filterExpression(roleQuery(role as Role, undefined, undefined), { hasText: text }),
-    );
-  }
-  return candidates;
-}
-
-/**
- * Compares the observed node with the node a derived query resolved to. Both
- * sides are produced by the same driver reader, so role, purpose, and name are
- * directly comparable.
- */
-export function matchesSignature(observed: SemanticNode, resolved: SemanticNode): boolean {
-  if (
-    observed.role !== undefined &&
-    observed.role !== 'document' &&
-    resolved.role !== observed.role
-  ) {
-    return false;
-  }
-  if (
-    observed.inputPurpose !== undefined &&
-    resolved.inputPurpose !== undefined &&
-    observed.inputPurpose !== resolved.inputPurpose
-  ) {
-    return false;
-  }
-  const observedName = normalize(observed.name);
-  if (observedName !== '') {
-    const resolvedName = normalize(resolved.name);
-    // A truncated observed name identifies its node by prefix; the re-read
-    // node comes from an unbounded single-node read and carries the full name.
-    return truncatedAt(observed.name, OBSERVED_NAME_LIMIT)
-      ? resolvedName.startsWith(observedName)
-      : resolvedName === observedName;
-  }
-  const observedText = normalize(observed.text);
-  if (observedText === '') return true;
-  return normalize(resolved.text).includes(observedText);
-}
-
-function describe(node: SemanticNode): string {
-  return `role=${node.role ?? 'none'} name=${JSON.stringify(normalize(node.name))}`;
-}
-
-function normalize(value: string | undefined): string {
-  return (value ?? '').replace(/\s+/g, ' ').trim();
 }

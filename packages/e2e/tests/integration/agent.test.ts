@@ -99,6 +99,32 @@ test('located actions reach nodes inside iframes', async ({ app, agent, web }) =
   await expect(web.frameLocator('#child').getByRole('button')).toHaveText('Frame clicked');
 });
 
+test('taps one control among identical repeats', async ({ agent, screen, web }) => {
+  await web.goto('/repeats');
+  await agent.tap(THIRD_REPEAT);
+  await expect(screen.getByRole('status')).toHaveText('C');
+});
+
+test('waits without re-judging a page that has not changed', async ({
+  app,
+  agent,
+  screen,
+}) => {
+  await app.open('/about');
+  // Settle first, and assert it. Otherwise the first observation can catch a
+  // document still being parsed, and the tree filling in afterwards is a real
+  // change that legitimately earns a second judgment — which is not what this
+  // test is about.
+  await expect(screen.getByRole('heading')).toHaveText('About');
+  // Budget for several judgments on purpose: the point is that a static page
+  // never spends the second one.
+  await agent.waitFor('a checkout button is on the About page', {
+    intervalMs: 100,
+    timeout: 3000,
+    maxModelCalls: 4,
+  });
+});
+
 test('an explicit no-match fails with the model explanation', async ({ app, agent }) => {
   await app.open();
   await agent.tap('the shopping cart icon');
@@ -107,7 +133,9 @@ test('an explicit no-match fails with the model explanation', async ({ app, agen
 
 const FALSE_ASSERTION = 'the checkout page is visible';
 const LATE_BUTTON_CONDITION = 'the Late arrival button exists';
+const NEVER_CONDITION = 'a checkout button is on the About page';
 const NO_MATCH_TARGET = 'the shopping cart icon';
+const THIRD_REPEAT = 'the Reserve now button of the third offer';
 const NO_MATCH_EXPLANATION = 'the observation shows a counter demo without any cart icon';
 
 /** Scripted responder: locate by best line match, judge from the observation. */
@@ -115,11 +143,23 @@ function respond(call: FakeCall): unknown {
   switch (call.schemaName) {
     case 'agent-locate-1':
       if (call.instruction === NO_MATCH_TARGET) return locateNotFound(NO_MATCH_EXPLANATION);
+      if (call.instruction === THIRD_REPEAT) {
+        // Three buttons the tree cannot tell apart. The model names the third
+        // one it was shown; only its place in the observation identifies it.
+        const lines = call.lines.filter((line) => line.includes('Reserve now'));
+        const id = /#(\S+)/.exec(lines.at(-1) ?? '')?.[1] ?? '';
+        return {
+          protocolVersion: 'agent-locate-1',
+          target: { id, revision: call.revision },
+          explanation: 'the third Reserve now button',
+        };
+      }
       return locateBestMatch(call);
     case 'agent-judgment-1': {
       if (call.instruction === FALSE_ASSERTION) {
         return judgment(false, 'the observation shows the Home page, not checkout');
       }
+      if (call.instruction === NEVER_CONDITION) return judgment(false, 'no checkout button here');
       if (call.instruction === LATE_BUTTON_CONDITION) {
         const present = call.observation.includes('Late arrival');
         return judgment(present, present ? 'Late arrival is present' : 'not rendered yet');
@@ -168,8 +208,30 @@ describe('agent fixture', () => {
     await app?.close();
   });
 
+  const stepOf = (title: string, api: string) => {
+    const attempt = resultByTitle(outcome, title).attempts.at(-1)!;
+    const step = attempt.steps.find((candidate) => candidate.api === api);
+    if (step === undefined) throw new Error(`no ${api} step in "${title}"`);
+    return step;
+  };
+
   it('runs located actions, polling, and judgments against the real driver', () => {
     expect(resultByTitle(outcome, 'located actions and judgments').status).toBe('passed');
+  });
+
+  it('spends one judgment while the page it is waiting on does not change', () => {
+    // The condition is false and the About page is static, so re-judging could
+    // only repeat the same answer. Every extra round would be a model call and
+    // a few seconds, which is what made waiting on a real page sluggish.
+    const title = 'waits without re-judging a page that has not changed';
+    const result = resultByTitle(outcome, title);
+    expect(result.status).toBe('failed');
+    expect(result.attempts.at(-1)!.error?.code).toBe('STEP_TIMEOUT');
+    const step = stepOf(title, 'agent.waitFor');
+    expect(step.metrics!.modelCalls).toBe(1);
+    // It kept looking, though: observations are driver-only and cost nothing.
+    const observations = step.events.filter((event) => event.kind === 'observation').length;
+    expect(observations).toBeGreaterThan(2);
   });
 
   it('validates extracted data with Standard Schema v1', () => {
@@ -215,9 +277,9 @@ describe('agent fixture', () => {
 
   it('never exposes application-authored instructions as policy', () => {
     const system = fakeCalls[0]!.system;
-    expect(system).toContain('policy-0.2');
+    expect(system).toContain('policy-0.3');
     expect(system).toContain('This is the e2e fixture application.');
-    expect(system.indexOf('policy-0.2')).toBeLessThan(
+    expect(system.indexOf('policy-0.3')).toBeLessThan(
       system.indexOf('This is the e2e fixture application.'),
     );
   });
@@ -249,7 +311,16 @@ describe('agent fixture', () => {
     expect(agentSteps.length).toBeGreaterThan(8);
     for (const step of agentSteps) {
       expect(step.metrics).toBeDefined();
-      expect(step.cache).toEqual({ status: 'bypassed' });
+      // A step that never located anything carries no cache field: it has no
+      // cache dimension to report. Where there is one, every status but a bypass
+      // carries the key hash.
+      if (step.cache !== undefined) {
+        if (step.cache.status === 'bypassed') {
+          expect(step.cache.keyHash).toBeUndefined();
+        } else {
+          expect(step.cache.keyHash).toMatch(/^[a-f0-9]{64}$/);
+        }
+      }
     }
 
     const tap = agentSteps.find((step) => step.api === 'agent.tap')!;
@@ -259,7 +330,7 @@ describe('agent fixture', () => {
       provider: 'fake',
       model: 'scripted',
       endpoint: 'provider-default',
-      policyVersion: 'policy-0.2',
+      policyVersion: 'policy-0.3',
       calls: 1,
       tokenAccounting: 'provider',
     });
