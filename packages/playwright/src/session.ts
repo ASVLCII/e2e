@@ -47,7 +47,7 @@ import {
   sanitizeFilename,
   staleOr,
   translatePwError,
-  unsupportedDrag,
+  performPointerDrag,
   type ActionTarget,
 } from './support.ts';
 import { WebChannel, type WebSessionHost } from './web.ts';
@@ -458,10 +458,15 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
         return;
       case 'dragTo': {
         const other = this.lookupRef(action.target);
-        if (target.kind !== 'locator' || other.target.kind !== 'locator') {
-          throw unsupportedDrag();
+        // Playwright's own drag when both sides are locators: it waits for
+        // actionability on each and reports better failures than a pointer
+        // sequence can. Anything else — an observed reference on either side —
+        // is dragged with the pointer.
+        if (target.kind === 'locator' && other.target.kind === 'locator') {
+          await target.locator.dragTo(other.target.locator, { timeout });
+        } else {
+          await performPointerDrag(target, other.target, timeout);
         }
-        await target.locator.dragTo(other.target.locator, { timeout });
         return;
       }
       case 'swipe': {
@@ -804,9 +809,17 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
 
 /**
  * True when a frame document's origin is inside the app's allowed origins.
+ *
  * `about:blank` and `srcdoc` documents inherit their parent's origin, so they
- * are the app's own content (consent managers, editors) and always allowed;
- * the parent frame was already admitted to be captured at all.
+ * are the app's own content (consent managers, editors) and always allowed; the
+ * parent frame was already admitted to be captured at all.
+ *
+ * A `data:` document is *not* admitted, even though its bytes are written by the
+ * page that embeds it. It has an opaque origin rather than an inherited one, and
+ * 14-security.md denies the scheme by name alongside `file:` and `javascript:`.
+ * Admitting it would be a change to that contract, not an implementation detail,
+ * so a control inside an inline frame stays reachable deterministically and
+ * outside the agent's view.
  */
 function isAllowedFrameOrigin(url: string, allowedOrigins: readonly string[]): boolean {
   if (url === '' || url === 'about:blank' || url === 'about:srcdoc') return true;

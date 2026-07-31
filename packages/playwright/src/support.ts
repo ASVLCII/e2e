@@ -6,6 +6,19 @@ import { causeMessage as message, sanitizeFilename } from 'e2e/internal';
 
 export const DEFAULT_VIEWPORT = { width: 1280, height: 720 } as const;
 
+interface Point {
+  x: number;
+  y: number;
+}
+
+function centreOf(rect: Rect): Point {
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+
+function withinViewport(point: Point, viewport: { width: number; height: number }): boolean {
+  return point.x >= 0 && point.y >= 0 && point.x <= viewport.width && point.y <= viewport.height;
+}
+
 /**
  * A resolved node is addressed either by a deterministic locator expression or
  * by a live element handle captured during one agent observation. Handles are
@@ -66,10 +79,87 @@ export function targetBoundingBox(target: ActionTarget, timeout: number): Promis
     : target.element.boundingBox();
 }
 
-export function unsupportedDrag(): DriverError {
-  return new DriverError('UNSUPPORTED_CAPABILITY', 'dragTo requires locator-backed targets', {
-    retryable: false,
-  });
+/**
+ * Drags one target onto another with the pointer.
+ *
+ * `Locator.dragTo` exists but takes a locator on both sides, and a node the
+ * agent reached through its observed reference is an element handle — which used
+ * to make the whole verb unavailable for exactly the elements that have no
+ * locator: an unlabelled thumbnail, an empty drop zone. Driving the pointer
+ * works for both kinds because a handle has a bounding box like anything else.
+ *
+ */
+/** Minimal scroll that brings one target into view, without centring it. */
+async function scrollIntoViewNearest(target: ActionTarget): Promise<void> {
+  const scroll = (el: Element): void => {
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  };
+  if (target.kind === 'locator') await target.locator.evaluate(scroll);
+  else await target.element.evaluate(scroll);
+}
+
+export async function performPointerDrag(
+  source: ActionTarget,
+  destination: ActionTarget,
+  timeout: number,
+): Promise<void> {
+  // Hover the source first: it auto-waits for actionability and scrolls the
+  // source into view, and the gesture starts there, so its position is the one
+  // that has to hold.
+  await asActionable(source).hover({ timeout });
+  const page = await targetPage(source);
+  const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT;
+  let from = await targetBoundingBox(source, timeout);
+  let to = await targetBoundingBox(destination, timeout);
+
+  // A pointer can only be put at a viewport coordinate, so a destination below
+  // the fold has to be brought into view — `Locator.dragTo` scrolls both sides,
+  // and a pointer sequence that skips it aims where no element is and drops
+  // nothing.
+  //
+  // Neither obvious tool fits. `scrollIntoViewIfNeeded` centres the destination,
+  // which pushes the source out and costs the position hovering just
+  // established. `mouse.wheel` does not wait for the scroll it causes, so the
+  // boxes read after it are a race. `scrollIntoView({ block: 'nearest' })`
+  // scrolls the smallest amount that reveals the element, synchronously, which
+  // keeps both endpoints on screen whenever they can be.
+  if (to !== null && !withinViewport(centreOf(to), viewport)) {
+    await scrollIntoViewNearest(destination);
+    from = await targetBoundingBox(source, timeout);
+    to = await targetBoundingBox(destination, timeout);
+  }
+
+  if (from === null || to === null) {
+    throw new DriverError('NOT_ACTIONABLE', 'a drag endpoint has no visible bounding box', {
+      retryable: false,
+    });
+  }
+  const start = centreOf(from);
+  const end = centreOf(to);
+  // Endpoints that cannot be on screen together are reported rather than dragged
+  // between: a pointer sequence aimed off-screen looks like a drag that ran and
+  // leaves the page untouched, which surfaces later as a confusing assertion
+  // instead of the drag failure it is.
+  for (const [label, point] of [
+    ['source', start],
+    ['destination', end],
+  ] as const) {
+    if (!withinViewport(point, viewport)) {
+      throw new DriverError(
+        'NOT_ACTIONABLE',
+        `the drag ${label} is outside the viewport at (${Math.round(point.x)}, ${Math.round(point.y)}) ` +
+          `of ${viewport.width}x${viewport.height}: the two endpoints cannot be reached in one gesture`,
+        { retryable: false },
+      );
+    }
+  }
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  // Two moves: HTML5 drag-and-drop commits on `dragover`, and one move into the
+  // destination does not always produce one.
+  await page.mouse.move(end.x, end.y, { steps: 2 });
+  await page.mouse.move(end.x, end.y);
+  await page.mouse.up();
 }
 
 // Re-exported so the rest of the package keeps importing its text helpers from
