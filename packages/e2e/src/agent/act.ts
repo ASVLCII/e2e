@@ -202,6 +202,7 @@ class ActDispatch {
   private transcript: string | undefined;
   private inputTokens = 0;
   private outputTokens = 0;
+  private estimatedCostUsd: number | undefined;
   private peakTokensPerCall = 0;
   private providerReportedUsage = false;
   private modelProvider: string | undefined;
@@ -449,6 +450,15 @@ class ActDispatch {
     }
     if (usage?.provider !== undefined) this.modelProvider = usage.provider;
     if (usage?.modelId !== undefined) this.modelId = usage.modelId;
+    // Executors are trusted, but the report schema requires a finite,
+    // non-negative cost; a bogus value must not invalidate the whole report.
+    if (
+      usage?.estimatedCostUsd !== undefined &&
+      Number.isFinite(usage.estimatedCostUsd) &&
+      usage.estimatedCostUsd >= 0
+    ) {
+      this.estimatedCostUsd = (this.estimatedCostUsd ?? 0) + usage.estimatedCostUsd;
+    }
     this.runtime.steps.recordEvent({
       kind: 'model',
       startedAt: timestamp(),
@@ -537,6 +547,7 @@ class ActDispatch {
       peakTokensPerCall: this.peakTokensPerCall,
       inputTokens: this.inputTokens,
       outputTokens: this.outputTokens,
+      ...(this.estimatedCostUsd === undefined ? {} : { estimatedCostUsd: this.estimatedCostUsd }),
     };
   }
 

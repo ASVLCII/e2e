@@ -285,10 +285,15 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
               results.push(result);
               listReporter?.onResult(result);
             },
-            onSerialGroup: (group) => serialGroups.push(group),
+            onSerialGroup: (group) => {
+              serialGroups.push(group);
+              listReporter?.onSerialGroup(group);
+            },
             onRunError: (error) => runErrors.push(error),
             onTestStart: (testId, title, targetName) =>
               listReporter?.onTestStart({ id: testId, title, target: targetName }),
+            onProgress: (testId, targetName, progress) =>
+              listReporter?.onProgress({ testId, target: targetName, progress }),
             onDebug: (snapshot) => debug.merge(snapshot),
           },
         }),
