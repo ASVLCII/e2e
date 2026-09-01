@@ -29,7 +29,8 @@ implementation. pnpm monorepo, ESM only, TypeScript 7.
   `e2e/driver` SPI.
   - `src/run/` runner core (scheduler, units, workers, retries, sessions),
     `src/collect/` registration+selection, `src/locator/` locator AST/engine,
-    `src/agent/` agent tiers, `src/cache/` `cache-1`.
+    `src/agent/` the agent (the `act` executor socket plus the judgment
+    methods).
 - `packages/playwright` — the published `@e2edev/playwright` package: the
   reference web driver. It depends on `e2e` (peer), never the reverse. The
   runner loads it on demand for `driver: 'playwright'`; `src/config/drivers.ts`
@@ -95,19 +96,18 @@ pnpm --filter @e2edev/testbed run test:headed
   shares one registry. Stale `dist` means confusing failures — rebuild.
 - Testbed suites beyond the default one never gate a PR: `test:public` and
   `test:selenium` (real websites) run in no workflow, and `test:agent` /
-  `test:wakacje` / `test:selenium-agent` (real model calls, need
-  `E2E_MODEL_API_KEY`, optional `E2E_MODEL=provider/model-id`) run only on the
-  weekly `.github/workflows/agent.yml` schedule or by manual dispatch.
-  `test:wakacje` and `test:selenium-agent` are non-blocking there: both sites
-  are third-party.
+  `test:dogfood` (real model calls, need `E2E_MODEL_API_KEY`, optional
+  `E2E_MODEL=provider/model-id`) run only on the weekly
+  `.github/workflows/agent.yml` schedule or by manual dispatch. Both run
+  against local deterministic apps, so a failure there is ours.
 - Agentic assertions must be model-portable: assert on meaning (`toContain`)
   and pair each agentic step with a deterministic locator check.
 
 ## Gotchas
 
-- Status prose drifts. `packages/e2e/README.md` and `spec/README.md` still claim
-  things that have since landed (e.g. the locate cache exists in
-  `src/agent/locate-cache.ts` and `src/cache/`). Verify against `src/` before
+- Status prose drifts. `packages/e2e/README.md` and `spec/README.md` can claim
+  things that have since landed or been removed (the located verbs and the
+  locate cache are both gone, for example). Verify against `src/` before
   repeating or relying on any "not implemented yet" list — and fix the prose
   when you find it stale.
 - No implicit default model. Agent fixtures without model config fail with
