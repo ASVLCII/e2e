@@ -162,7 +162,7 @@ the same authorization policy as `locator.fill`.
 <Callout intent="note" title="Prefer the deterministic path for setup tests">
 A login form is the most addressable screen in your app, so filling it with
 `screen.getByLabel(...)` costs no model calls and cannot vary. Reach for
-`agent.act` when the sign-in flow itself is what varies — an IdP redirect, a
+`agent.act` when the sign-in flow itself is what varies: an IdP redirect, a
 consent screen, a first-run wizard.
 </Callout>
 
@@ -172,10 +172,10 @@ is free to mirror a typed value anywhere on screen. Fill secrets in a setup test
 and consume the session elsewhere to keep full evidence in the tests that matter.
 
 <CardGroup cols={2}>
-  <Card title="Web capabilities" icon="globe" href="/web">
+  <Card title="app and web reference" icon="globe" href="/reference/app-web">
     Cookies, routes, dialogs, frames, and downloads.
   </Card>
-  <Card title="Configuration" icon="sliders" href="/configuration">
+  <Card title="defineConfig reference" icon="sliders" href="/reference/config">
     The `credentials` block and every other key.
   </Card>
 </CardGroup>
