@@ -9,6 +9,7 @@ import type {
   secretBrand,
   testCaseBrand,
 } from './internal/brands.ts';
+import type { StepExecutor } from './agent/executor.ts';
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -160,7 +161,11 @@ export interface AgentResultWithData<Output> extends AgentResult {
 
 export type AgentErrorCode =
   | 'AUTH_CREDENTIAL_UNAVAILABLE'
+  | 'AUTH_CREDENTIAL_INVALID'
   | 'AUTHENTICATION_FAILED'
+  | 'ENVIRONMENT_UNAVAILABLE'
+  | 'SEED_DATA_MISSING'
+  | 'TEST_SETUP_FAILED'
   | 'MODEL_UNAVAILABLE'
   | 'MODEL_PROVIDER_FAILED'
   | 'MODEL_OUTPUT_INVALID'
@@ -169,6 +174,7 @@ export type AgentErrorCode =
   | 'LOCATOR_NOT_FOUND'
   | 'LOCATOR_AMBIGUOUS'
   | 'ACTION_FAILED'
+  | 'AUTOMATION_UNSUPPORTED'
   | 'CACHE_REPLAY_DIVERGED'
   | 'POLICY_DENIED'
   | 'STEP_BUDGET_EXHAUSTED'
@@ -789,6 +795,20 @@ export interface ModelInstance {
   readonly modelId: string;
 }
 
+/** Agent options for the built-in agent; `agent` also accepts a StepExecutor. */
+export interface AgentConfig {
+  model?: string | ModelConfig | ModelInstance;
+  /** Model used by calls with `vision`; falls back to `model`. */
+  visionModel?: string | ModelConfig | ModelInstance;
+  maxSteps?: number;
+  maxModelCalls?: number;
+  maxObservationBytes?: number;
+  cache?: 'off' | 'read-only' | 'read-write';
+  context?: string;
+  /** Project-wide default for the per-call `vision` option. */
+  vision?: VisionMode;
+}
+
 export interface E2EConfig {
   specVersion?: '0.1';
   projectId?: string;
@@ -804,38 +824,30 @@ export interface E2EConfig {
   retries?: number;
   workers?: number;
   artifacts?: readonly ('trace' | 'screenshot' | 'video')[];
-  reporters?: readonly ('list' | 'json' | 'html')[];
+  reporters?: readonly ('list' | 'json')[];
   screen?: {
     testIdAttribute?: string;
   };
-  agent?: {
-    model?: string | ModelConfig | ModelInstance;
-    /** Model used by calls with `vision`; falls back to `model`. */
-    visionModel?: string | ModelConfig | ModelInstance;
-    maxSteps?: number;
-    maxModelCalls?: number;
-    maxObservationBytes?: number;
-    cache?: 'off' | 'read-only' | 'read-write';
-    context?: string;
-    /** Project-wide default for the per-call `vision` option. */
-    vision?: VisionMode;
-  };
+  /**
+   * Either the agent options block, or the agent itself: `createAgent(...)`
+   * from `e2e/agent`, or any hand-rolled `StepExecutor` (RFC0001 layer 4).
+   * With an agent value, the model falls back to `E2E_MODEL` and every other
+   * option keeps its default. Agents never cross a process boundary: workers
+   * re-resolve the config module and construct their own, exactly like model
+   * instances.
+   */
+  agent?: AgentConfig | StepExecutor;
+  /**
+   * Enforced resource ceilings only. A limit exists here exactly when the
+   * runner has an enforcement site for it; aspirational knobs are not
+   * accepted, so a configured limit is never a silent no-op.
+   */
   limits?: {
-    maxDiscoveredResults?: number;
     maxCacheBytes?: number;
-    maxTerminalFieldBytes?: number;
     maxAgentContextBytes?: number;
     maxLedgerBytes?: number;
-    maxArtifactBytes?: number;
-    maxArtifactTotalBytes?: number;
-    maxDownloadBytes?: number;
-    maxDownloads?: number;
-    maxReportBytes?: number;
     maxEventsPerStep?: number;
     maxModelTokensPerCall?: number;
-    maxModelCallsPerStep?: number;
-    maxActionStepsPerStep?: number;
-    maxEstimatedCostUsd?: number;
   };
   credentials?: Readonly<
     Record<

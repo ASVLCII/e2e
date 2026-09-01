@@ -1,9 +1,10 @@
 /** Agent, model, and resource-limit resolution (spec 05-config.md, 14-security.md). */
 
 import type { LanguageModel } from 'ai';
+import { isStepExecutor, type StepExecutor } from '../agent/executor.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { isLoopbackHost } from '../internal/urls.ts';
-import type { E2EConfig, ModelConfig, ModelInstance, VisionMode } from '../types.ts';
+import type { AgentConfig, E2EConfig, ModelConfig, ModelInstance, VisionMode } from '../types.ts';
 
 /** Default environment variable holding the provider credential. */
 export const DEFAULT_API_KEY_ENV = 'E2E_MODEL_API_KEY';
@@ -33,7 +34,7 @@ export type ResolvedModel =
       /** Absolute endpoint override, or undefined for the gateway default. */
       readonly endpoint: string | undefined;
       readonly apiKeyEnv: string;
-      /** Resolved credential; absence fails at fixture acquisition, not here. */
+      /** Resolved credential; absence fails at the first model call, not here. */
       readonly apiKey: string | undefined;
     }
   | {
@@ -44,6 +45,14 @@ export type ResolvedModel =
     };
 
 export interface ResolvedAgentConfig {
+  /**
+   * The step executor `agent.act()` dispatches to, configured as the `agent`
+   * value itself (`agent: createAgent(...)` or any StepExecutor); undefined
+   * selects the default AI SDK executor at fixture time. Like model
+   * instances, an executor never crosses a process boundary: workers
+   * re-resolve the config module.
+   */
+  readonly executor: StepExecutor | undefined;
   /** Undefined until a model is configured; acquiring `agent` then fails. */
   readonly model: ResolvedModel | undefined;
   /**
@@ -62,22 +71,12 @@ export interface ResolvedAgentConfig {
 }
 
 export interface ResolvedLimits {
-  readonly maxDiscoveredResults: number;
   readonly maxCacheBytes: number;
-  readonly maxTerminalFieldBytes: number;
   readonly maxAgentContextBytes: number;
   readonly maxLedgerBytes: number;
   readonly maxObservationBytes: number;
-  readonly maxArtifactBytes: number;
-  readonly maxArtifactTotalBytes: number;
-  readonly maxDownloadBytes: number;
-  readonly maxDownloads: number;
-  readonly maxReportBytes: number;
   readonly maxEventsPerStep: number;
   readonly maxModelTokensPerCall: number;
-  readonly maxModelCallsPerStep: number;
-  readonly maxActionStepsPerStep: number;
-  readonly maxEstimatedCostUsd: number | undefined;
 }
 
 /** `ResolvedLimits` before the agent-owned observation budget is attached. */
@@ -102,20 +101,11 @@ const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Hard ceilings mirroring spec/schema/report-v1.schema.json `limits`. */
 const LIMIT_BOUNDS = {
-  maxDiscoveredResults: [1, 1_000_000, 100_000],
   maxCacheBytes: [1_024, 1_048_576, 262_144],
-  maxTerminalFieldBytes: [1_024, 65_536, 8_192],
   maxAgentContextBytes: [1_024, 65_536, 16_384],
   maxLedgerBytes: [1_024, 65_536, 8_192],
-  maxArtifactBytes: [1, 1_073_741_824, 104_857_600],
-  maxArtifactTotalBytes: [1, 10_737_418_240, 1_073_741_824],
-  maxDownloadBytes: [1, 1_073_741_824, 104_857_600],
-  maxDownloads: [0, 100, 10],
-  maxReportBytes: [1, 104_857_600, 52_428_800],
   maxEventsPerStep: [1, 10_000, 1_000],
   maxModelTokensPerCall: [1, 1_000_000, 64_000],
-  maxModelCallsPerStep: [1, 100, 25],
-  maxActionStepsPerStep: [1, 100, 25],
 } as const satisfies Record<string, readonly [number, number, number]>;
 
 type LimitKey = keyof typeof LIMIT_BOUNDS;
@@ -132,13 +122,24 @@ export function resolveAgentConfig(
   cacheOverride: 'off' | undefined,
   limits: ResolvedBaseLimits,
 ): ResolvedAgentConfig {
-  const agent = raw.agent;
+  const value = raw.agent;
+  const executor = value !== undefined && isStepExecutor(value) ? value : undefined;
+  const agent = executor === undefined ? (value as AgentConfig | undefined) : undefined;
   if (agent !== undefined) {
     if (typeof agent !== 'object' || agent === null || Array.isArray(agent)) {
-      throw new ConfigurationError('INVALID_CONFIG', 'agent must be an object');
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        'agent must be an options object or the agent itself: createAgent(...) or any { name, runStep(context) }',
+      );
     }
     for (const key of Object.keys(agent)) {
       if (!AGENT_KEYS.has(key)) {
+        if (key === 'executor') {
+          throw new ConfigurationError(
+            'INVALID_CONFIG',
+            'agent.executor was removed: pass the agent itself, e.g. agent: createAgent(...)',
+          );
+        }
         throw new ConfigurationError('INVALID_CONFIG', `unknown agent config key "${key}"`);
       }
     }
@@ -166,6 +167,7 @@ export function resolveAgentConfig(
   }
 
   return {
+    executor,
     model: resolveModel(agent?.model, env),
     visionModel: resolveModel(agent?.visionModel, env, 'agent.visionModel', 'E2E_VISION_MODEL'),
     maxSteps,
@@ -185,7 +187,7 @@ export function resolveLimits(raw: E2EConfig): ResolvedBaseLimits {
       throw new ConfigurationError('INVALID_CONFIG', 'limits must be an object');
     }
     for (const key of Object.keys(limits)) {
-      if (!(key in LIMIT_BOUNDS) && key !== 'maxEstimatedCostUsd') {
+      if (!(key in LIMIT_BOUNDS)) {
         throw new ConfigurationError('INVALID_CONFIG', `unknown limits key "${key}"`);
       }
     }
@@ -197,18 +199,7 @@ export function resolveLimits(raw: E2EConfig): ResolvedBaseLimits {
     resolved[key] = boundedInt(limits?.[key], `limits.${key}`, min, max) ?? fallback;
   }
 
-  const cost = limits?.maxEstimatedCostUsd;
-  if (cost !== undefined && (!Number.isFinite(cost) || cost <= 0)) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      'limits.maxEstimatedCostUsd must be a finite positive number',
-    );
-  }
-
-  return {
-    ...(resolved as unknown as Omit<ResolvedBaseLimits, 'maxEstimatedCostUsd'>),
-    maxEstimatedCostUsd: cost,
-  };
+  return resolved as unknown as ResolvedBaseLimits;
 }
 
 /**
@@ -219,6 +210,20 @@ export function resolveLimits(raw: E2EConfig): ResolvedBaseLimits {
 /** True for the closed `vision` value set, wherever it is supplied. */
 export function isVisionMode(value: unknown): value is VisionMode {
   return typeof value === 'boolean' || value === 'fallback' || value === 'only';
+}
+
+/**
+ * Narrows a structurally verified model instance to the SDK model type. The
+ * one place this cast lives; everything downstream takes the checked type.
+ */
+export function asSdkLanguageModel(instance: ModelInstance): SdkLanguageModel {
+  if (!isModelInstance(instance)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      'value is not an AI SDK language model instance',
+    );
+  }
+  return instance as SdkLanguageModel;
 }
 
 export function isModelInstance(value: unknown): value is ModelInstance {
@@ -238,7 +243,7 @@ export function isModelInstance(value: unknown): value is ModelInstance {
  * `label` and `envName` are parameters because the same grammar serves
  * `agent.model` and `agent.visionModel`; every diagnostic then names the key the
  * author actually wrote. There is no implicit default model; an unconfigured
- * agent fails at fixture acquisition.
+ * model fails at its first model call, so a custom-executor run needs none.
  */
 function resolveModel(
   model: string | ModelConfig | ModelInstance | undefined,

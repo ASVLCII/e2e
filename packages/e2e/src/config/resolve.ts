@@ -13,7 +13,8 @@ import {
   wellKnownDriverIds,
   type WellKnownDriverId,
 } from './drivers.ts';
-import type { CommandConfig, E2EConfig, Target, WebTarget } from '../types.ts';
+import { isStepExecutor } from '../agent/executor.ts';
+import type { AgentConfig, CommandConfig, E2EConfig, Target, WebTarget } from '../types.ts';
 import {
   isModelInstance,
   resolveAgentConfig,
@@ -67,7 +68,7 @@ export interface ResolvedConfig {
   readonly retries: number;
   readonly workers: number;
   readonly artifacts: readonly ('trace' | 'screenshot' | 'video')[];
-  readonly reporters: readonly ('list' | 'json' | 'html')[];
+  readonly reporters: readonly ('list' | 'json')[];
   readonly testIdAttribute: string;
   readonly agent: ResolvedAgentConfig;
   readonly limits: ResolvedLimits;
@@ -78,7 +79,7 @@ export interface ResolvedConfig {
 export interface CliOverrides {
   retries?: number;
   workers?: number;
-  reporters?: readonly ('list' | 'json' | 'html')[];
+  reporters?: readonly ('list' | 'json')[];
   headed?: boolean;
   artifactsDir?: string;
   /** `--no-agent-cache` forces cache mode off. */
@@ -177,9 +178,9 @@ export function resolveConfig(
       throw new ConfigurationError('INVALID_CONFIG', `unknown artifact kind "${artifact}"`);
     }
   }
-  const reporters = cli.reporters ?? raw.reporters ?? (['list', 'html'] as const);
+  const reporters = cli.reporters ?? raw.reporters ?? (['list'] as const);
   for (const reporter of reporters) {
-    if (!['list', 'json', 'html'].includes(reporter)) {
+    if (!['list', 'json'].includes(reporter)) {
       throw new ConfigurationError('INVALID_CONFIG', `unknown reporter "${reporter}"`);
     }
   }
@@ -453,12 +454,15 @@ function resolveCredentials(
  * make it nondeterministic across processes.
  */
 function computeConfigDigest(raw: E2EConfig, projectId: string): string {
-  const rawModel = raw.agent?.model;
-  const forClone = isModelInstance(rawModel)
+  // `agent` may be the executor itself; its digest identity is name/version,
+  // which is exactly what survives the function-stripping JSON clone below.
+  const rawAgent = raw.agent;
+  const rawModel = rawAgent === undefined || isStepExecutor(rawAgent) ? undefined : rawAgent.model;
+  const forClone: E2EConfig = isModelInstance(rawModel)
     ? {
         ...raw,
         agent: {
-          ...raw.agent,
+          ...(rawAgent as AgentConfig),
           model: {
             provider: rawModel.provider,
             modelId: rawModel.modelId,

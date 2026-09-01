@@ -209,7 +209,7 @@
         "api": { "type": "string", "minLength": 1 },
         "label": { "type": "string", "maxLength": 8192 },
         "source": { "$ref": "#/$defs/source" },
-        "status": { "enum": ["passed", "failed", "timed-out", "cancelled"] },
+        "status": { "enum": ["passed", "failed", "blocked", "timed-out", "cancelled"] },
         "startedAt": { "$ref": "#/$defs/timestamp" },
         "durationMs": { "type": "integer", "minimum": 0 },
         "observationRevision": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -520,40 +520,28 @@
     "limits": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["maxDiscoveredResults", "maxCacheBytes", "maxTerminalFieldBytes", "maxAgentContextBytes", "maxLedgerBytes", "maxObservationBytes", "maxArtifactBytes", "maxArtifactTotalBytes", "maxDownloadBytes", "maxDownloads", "maxReportBytes", "maxEventsPerStep", "maxModelTokensPerCall", "maxModelCallsPerStep", "maxActionStepsPerStep"],
+      "required": ["maxCacheBytes", "maxAgentContextBytes", "maxLedgerBytes", "maxObservationBytes", "maxEventsPerStep", "maxModelTokensPerCall"],
       "properties": {
-        "maxDiscoveredResults": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "maxCacheBytes": { "type": "integer", "minimum": 1024, "maximum": 1048576 },
-        "maxTerminalFieldBytes": { "type": "integer", "minimum": 1024, "maximum": 65536 },
         "maxAgentContextBytes": { "type": "integer", "minimum": 1024, "maximum": 65536 },
         "maxLedgerBytes": { "type": "integer", "minimum": 1024, "maximum": 65536 },
         "maxObservationBytes": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
-        "maxArtifactBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
-        "maxArtifactTotalBytes": { "type": "integer", "minimum": 1, "maximum": 10737418240 },
-        "maxDownloadBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
-        "maxDownloads": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "maxReportBytes": { "type": "integer", "minimum": 1, "maximum": 104857600 },
         "maxEventsPerStep": { "type": "integer", "minimum": 1, "maximum": 10000 },
-        "maxModelTokensPerCall": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-        "maxModelCallsPerStep": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "maxActionStepsPerStep": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "maxEstimatedCostUsd": { "type": "number", "exclusiveMinimum": 0 }
+        "maxModelTokensPerCall": { "type": "integer", "minimum": 1, "maximum": 1000000 }
       }
     },
     "usage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["discoveredResults", "maxCacheEntryBytes", "maxTerminalFieldBytes", "maxAgentContextBytes", "maxLedgerBytes", "maxObservationBytes", "artifactBytes", "downloads", "reportBytes", "events", "modelTokens", "maxModelCallsInStep", "maxActionStepsInStep"],
+      "required": ["discoveredResults", "maxCacheEntryBytes", "maxAgentContextBytes", "maxLedgerBytes", "maxObservationBytes", "artifactBytes", "downloads", "events", "modelTokens", "maxModelCallsInStep", "maxActionStepsInStep"],
       "properties": {
         "discoveredResults": { "type": "integer", "minimum": 0 },
         "maxCacheEntryBytes": { "type": "integer", "minimum": 0 },
-        "maxTerminalFieldBytes": { "type": "integer", "minimum": 0 },
         "maxAgentContextBytes": { "type": "integer", "minimum": 0 },
         "maxLedgerBytes": { "type": "integer", "minimum": 0 },
         "maxObservationBytes": { "type": "integer", "minimum": 0 },
         "artifactBytes": { "type": "integer", "minimum": 0 },
         "downloads": { "type": "integer", "minimum": 0 },
-        "reportBytes": { "type": "integer", "minimum": 0 },
         "events": { "type": "integer", "minimum": 0 },
         "modelTokens": { "type": "integer", "minimum": 0 },
         "maxModelCallsInStep": { "type": "integer", "minimum": 0 },
@@ -577,7 +565,7 @@
             "version": { "type": "string", "minLength": 1 }
           }
         },
-        "status": { "enum": ["passed", "failed", "error", "interrupted"] },
+        "status": { "enum": ["passed", "failed", "blocked", "error", "interrupted"] },
         "exitCode": { "enum": [0, 1, 2, 3, 4, 130] },
         "startedAt": { "$ref": "#/$defs/timestamp" },
         "finishedAt": { "$ref": "#/$defs/timestamp" },

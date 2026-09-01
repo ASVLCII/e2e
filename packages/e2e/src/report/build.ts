@@ -1,7 +1,9 @@
 /** report-1 document construction (spec 13-reporting.md). */
 
 import os from 'node:os';
+import { BLOCKABLE_CODES } from '../agent/executor.ts';
 import type { ResolvedConfig, ResolvedLimits, ResolvedTarget } from '../config/resolve.ts';
+import type { AgentErrorCode } from '../types.ts';
 import type { ErrorCategory, ErrorPhase, SerializedError } from '../internal/errors.ts';
 import { resultId, timestamp } from '../internal/ids.ts';
 import { packageVersion } from '../internal/package-version.ts';
@@ -183,13 +185,11 @@ export type ReportLimits = ResolvedLimits;
 export interface ReportUsage {
   discoveredResults: number;
   maxCacheEntryBytes: number;
-  maxTerminalFieldBytes: number;
   maxAgentContextBytes: number;
   maxLedgerBytes: number;
   maxObservationBytes: number;
   artifactBytes: number;
   downloads: number;
-  reportBytes: number;
   events: number;
   modelTokens: number;
   maxModelCallsInStep: number;
@@ -213,7 +213,7 @@ export interface Report1Document {
     id: string;
     specVersion: '0.1';
     runner: { name: 'e2e'; version: string };
-    status: BuildReportOptions['status'];
+    status: BuildReportOptions['status'] | 'blocked';
     exitCode: BuildReportOptions['exitCode'];
     startedAt: string;
     finishedAt: string;
@@ -413,24 +413,40 @@ export function computeSummary(results: readonly ResultRecord[]): ReportSummary 
   return { discovered: results.length, selected, executed, passed, failed, flaky, skipped };
 }
 
+/**
+ * A run is `blocked` — not failed — when it did not pass and *every*
+ * non-passing result carries a blockable error code: credentials, the
+ * environment, or the agent's own budget prevented a product verdict, and
+ * nothing contradicts that. One genuine failure keeps the run failed;
+ * derivation requires positive evidence, never absence of it.
+ */
+function deriveRunStatus(
+  status: BuildReportOptions['status'],
+  results: readonly ResultRecord[],
+): BuildReportOptions['status'] | 'blocked' {
+  if (status !== 'failed' && status !== 'error') return status;
+  const notPassed = results.filter(
+    (result) =>
+      result.status === 'failed' ||
+      result.status === 'timed-out' ||
+      result.status === 'interrupted',
+  );
+  if (notPassed.length === 0) return status;
+  const blockable = notPassed.every((result) => {
+    const code = result.attempts.at(-1)?.error?.code;
+    return code !== undefined && BLOCKABLE_CODES.has(code as AgentErrorCode);
+  });
+  return blockable ? 'blocked' : status;
+}
+
 /** Fallback limits used when the run failed before config resolution. */
 const DEFAULT_LIMITS: ReportLimits = {
-  maxDiscoveredResults: 100_000,
   maxCacheBytes: 262_144,
-  maxTerminalFieldBytes: 8_192,
   maxAgentContextBytes: 16_384,
   maxLedgerBytes: 8_192,
   maxObservationBytes: 1_048_576,
-  maxArtifactBytes: 104_857_600,
-  maxArtifactTotalBytes: 1_073_741_824,
-  maxDownloadBytes: 104_857_600,
-  maxDownloads: 10,
-  maxReportBytes: 52_428_800,
   maxEventsPerStep: 1_000,
   maxModelTokensPerCall: 64_000,
-  maxModelCallsPerStep: 25,
-  maxActionStepsPerStep: 25,
-  maxEstimatedCostUsd: undefined,
 };
 
 /** Aggregates observed usage against the resolved limits (13-reporting.md). */
@@ -442,13 +458,11 @@ function computeUsage(options: {
   const usage: ReportUsage = {
     discoveredResults: options.discovered,
     maxCacheEntryBytes: 0,
-    maxTerminalFieldBytes: 0,
     maxAgentContextBytes: 0,
     maxLedgerBytes: 0,
     maxObservationBytes: 0,
     artifactBytes: 0,
     downloads: 0,
-    reportBytes: 0,
     events: 0,
     modelTokens: 0,
     maxModelCallsInStep: 0,
@@ -536,7 +550,7 @@ export function buildReport(options: BuildReportOptions): Report1Document {
         name: 'e2e',
         version: packageVersion(import.meta.url, '../../package.json', '0.0.0'),
       },
-      status: options.status,
+      status: deriveRunStatus(options.status, options.results),
       exitCode: options.exitCode,
       startedAt: options.startedAt,
       finishedAt: timestamp(),

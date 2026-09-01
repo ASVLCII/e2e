@@ -1,6 +1,7 @@
 /** Attempt-scoped fixture graph (spec 02-test-api.md, 08-platforms.md). */
 
-import { createAgent } from '../agent/index.ts';
+import { createAgentFixture } from '../agent/index.ts';
+import type { StepExecutor } from '../agent/executor.ts';
 import type { AgentCacheContext } from '../agent/invocation.ts';
 import { createModelRouter } from '../agent/model/router.ts';
 import { createModelAdapter } from '../agent/model/sdk.ts';
@@ -8,6 +9,7 @@ import type { DriverDialog, DriverSession, DriverWebRoute } from '../driver/inde
 import type { DebugTrace } from '../internal/debug.ts';
 import { registerWebExpectTarget } from '../expect/index.ts';
 import { ConfigurationError, TestError } from '../internal/errors.ts';
+import { validateJsonValue } from '../internal/json-value.ts';
 import { toRoutePattern } from '../internal/route-pattern.ts';
 import { resolveNavigationUrl, urlMatches } from '../internal/urls.ts';
 import { Deadline, sleep, withTimeout } from '../internal/time.ts';
@@ -17,7 +19,6 @@ import {
   createFrameScreen,
   createLocator,
   createScreen,
-  isSecret,
   type ScreenContext,
   type SecretResolver,
 } from '../locator/screen.ts';
@@ -40,8 +41,13 @@ import type {
 import type { StepRecord, StepRecorder } from './steps.ts';
 
 export interface ArtifactSink {
+  /** Absolute attempt artifact directory, for runner-written artifacts. */
+  readonly dir: string;
   /** Registers a produced artifact and returns its report artifact ID. */
-  register(kind: 'screenshot' | 'trace' | 'video' | 'download', relativePath: string): string;
+  register(
+    kind: 'screenshot' | 'trace' | 'video' | 'download' | 'log',
+    relativePath: string,
+  ): string;
 }
 
 export interface AttemptEnvironment {
@@ -131,9 +137,11 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
 
   const fixtures: TestFixtures & { session: SetupSession } = {
     get agent(): Agent {
-      agent ??= createAgent({
+      agent ??= createAgentFixture({
         engine,
         steps: environment.steps,
+        executor: environment.config.agent.executor ?? lazyDefaultExecutor(),
+        customExecutor: environment.config.agent.executor !== undefined,
         models: createModelRouter(environment.config.agent, createModelAdapter),
         config: environment.config,
         priorSteps: environment.priorSteps,
@@ -176,6 +184,26 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
   };
 
   return { fixtures, engine };
+}
+
+/**
+ * The built-in executor behind a dynamic import, so the optional `ai` peer
+ * dependency loads only if an `agent.act()` step actually runs. Deterministic
+ * suites and custom-executor projects never pay for — or fail on — it.
+ */
+function lazyDefaultExecutor(): StepExecutor {
+  let executor: StepExecutor | undefined;
+  return {
+    name: 'e2e-default-agent',
+    version: '1',
+    async runStep(context) {
+      if (executor === undefined) {
+        const { createAgent } = await import('../agent/default-agent.ts');
+        executor = createAgent();
+      }
+      return executor.runStep(context);
+    },
+  };
 }
 
 /** Trusted config context first, then test/group context. */
@@ -508,41 +536,3 @@ function createWeb(
   return web;
 }
 
-function validateJsonValue(value: unknown, label: string): void {
-  if (value === undefined) return;
-  const seen = new Set<unknown>();
-  const visit = (item: unknown): void => {
-    if (item === null) return;
-    switch (typeof item) {
-      case 'string':
-      case 'boolean':
-        return;
-      case 'number':
-        if (!Number.isFinite(item)) {
-          throw new TestError('INVALID_ARGUMENT', `${label} contains a non-finite number`);
-        }
-        return;
-      case 'object': {
-        if (isSecret(item)) {
-          throw new ConfigurationError('POLICY_DENIED', `${label} must not contain a Secret`);
-        }
-        if (seen.has(item)) {
-          throw new TestError('INVALID_ARGUMENT', `${label} contains a cycle`);
-        }
-        seen.add(item);
-        if (Array.isArray(item)) {
-          for (const entry of item) visit(entry);
-          return;
-        }
-        if (Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null) {
-          throw new TestError('INVALID_ARGUMENT', `${label} must be JSON-safe`);
-        }
-        for (const entry of Object.values(item)) visit(entry);
-        return;
-      }
-      default:
-        throw new TestError('INVALID_ARGUMENT', `${label} must be JSON-safe, found ${typeof item}`);
-    }
-  };
-  visit(value);
-}

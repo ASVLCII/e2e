@@ -133,7 +133,7 @@ behavior locally.
 | Key | Type | Default | Note |
 | --- | --- | --- | --- |
 | `artifacts` | `('screenshot' \| 'trace' \| 'video')[]` | `['screenshot', 'trace']` | Validated before collection; `video` is not implemented yet and fails with `UNSUPPORTED_ARTIFACT` |
-| `reporters` | `('list' \| 'json' \| 'html')[]` | `['list', 'html']` | Select with `--reporter`; `.e2e/report.json` is written either way. `html` is not implemented yet, and `json` cannot be combined with `list`. |
+| `reporters` | `('list' \| 'json')[]` | `['list']` | Select with `--reporter`; `.e2e/report.json` is written either way. `json` cannot be combined with `list`. |
 
 ## screen
 
@@ -151,6 +151,11 @@ behavior locally.
 | `agent.maxModelCalls` | `number` | `25` | Model calls per agent call, 1 to 100 |
 | `agent.maxObservationBytes` | `number` | `1048576` | 1 KiB to 16 MiB |
 
+The `agent` key also accepts the agent itself instead of the options block:
+`agent: createAgent({...})` from `e2e/agent`, or any hand-rolled
+`StepExecutor`. Options then keep their defaults, and the model still resolves
+from `E2E_MODEL`. See [Agents](/agents).
+
 ## credentials
 
 | Key | Type | Note |
@@ -164,9 +169,9 @@ Passwords reach your test as an opaque handle, never a string. See
 
 ## Advanced limits
 
-A `limits` block exists for byte and cost ceilings - artifact sizes, download
-counts, observation bytes, and `maxEstimatedCostUsd`. You will not need it until
-you do; the defaults are listed in the
+A `limits` block exists for byte ceilings — cache entries, agent context, the
+prior-step ledger, events per step, and model tokens per call. Every key is
+enforced; the defaults are listed in the
 [defineConfig reference](/reference/config).
 
 <CardGroup cols={2}>

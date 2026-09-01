@@ -29,6 +29,11 @@ Check `code` rather than using `instanceof`.
 | Code | When it happens | Class | Exit |
 | --- | --- | --- | ---: |
 | `AUTH_CREDENTIAL_UNAVAILABLE` | A `Secret` or `credentials.user()` names a credential absent from `config.credentials`, or the call happened outside an active runner | configuration | 2 |
+| `AUTH_CREDENTIAL_INVALID` | A configured credential was rejected by the application (blocked: credentials) | configuration | 2 |
+| `ENVIRONMENT_UNAVAILABLE` | The environment under test is down or unreachable beyond the app itself (blocked: environment) | infrastructure | 3 |
+| `SEED_DATA_MISSING` | Data the step depends on does not exist in the environment (blocked: seed_data) | configuration | 2 |
+| `TEST_SETUP_FAILED` | Test prerequisites outside the product failed to arrange (blocked: test_setup) | configuration | 2 |
+| `AUTOMATION_UNSUPPORTED` | The step needs an interaction the available toolset cannot perform, e.g. drag-and-drop (blocked: automation) | test | 1 |
 | `MODEL_UNAVAILABLE` | No model configured, an unknown provider, or a missing provider credential. Raised when the `agent` fixture is acquired. | configuration | 2 |
 | `POLICY_DENIED` | Origin, sink, or purpose denied before dispatch. Also reading a value from a secure field. | configuration | 2 |
 | `APP_UNREACHABLE` | The app process or URL did not respond | infrastructure | 3 |
@@ -62,7 +67,7 @@ These appear in terminal output and in the report as plain string codes.
 | `PLATFORM_UNSUPPORTED` | A target requested a platform other than `web`. Mobile platforms are rejected. | configuration | 2 |
 | `DRIVER_NOT_INSTALLED` | A target names a well-known driver whose package is not installed. `driver: 'playwright'` needs `@e2edev/playwright`. | configuration | 2 |
 | `UNSUPPORTED_ARTIFACT` | A configured artifact kind the driver cannot produce. `video` is not implemented yet. | configuration | 2 |
-| `UNSUPPORTED_CAPABILITY` | The `web` fixture on a target without the `web` capability, the `device` fixture, state restore without state capability, or `agent.act` and `agent.login` | configuration | 2 |
+| `UNSUPPORTED_CAPABILITY` | The `web` fixture on a target without the `web` capability, the `device` fixture, state restore without state capability, `agent.login`, or `agent.act` options that are not implemented yet (`schema`, `vision`, `cache`, `Secret` params) | configuration | 2 |
 | `NO_TESTS` | Zero runnable ordinary test-target pairs. Suppress with `--pass-with-no-tests`. | configuration | 2 |
 | `ONLY_IN_CI` | A focused test reached a CI run | configuration | 2 |
 | `COLLECTION_ERROR` | Registration outside collection, an invalid title, a non-function body, an async `describe` body, nested serial groups, an option forbidden inside a serial group, a setup test inside `describe`, an invalid session name, or a positional path outside the project root | configuration | 2 |
