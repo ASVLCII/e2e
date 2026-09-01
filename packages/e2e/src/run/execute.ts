@@ -15,6 +15,7 @@ import {
 import { DebugTrace } from '../internal/debug.ts';
 import { canonicalDigest, timestamp, uuidv7 } from '../internal/ids.ts';
 import { Deadline, withTimeout } from '../internal/time.ts';
+import { createAgentCacheContext, flushStagedTraces } from '../cache/context.ts';
 import type { CollectedFile } from '../collect/collect.ts';
 import type { RegisteredTest } from '../collect/registry.ts';
 import type { TestTargetPair } from '../collect/select.ts';
@@ -410,6 +411,22 @@ export class TargetExecutor implements SerialHost {
     let failurePhase: AttemptPhase | undefined;
     let phase: AttemptPhase = 'launch';
     let timedOut = false;
+    // Captured the moment the primary failure lands: steps that pass later —
+    // afterEach cleanup, teardown — must not confirm traces the failure
+    // implicated (a cleanup navigation says nothing about the failed flow).
+    let lastPassedAtFailure = -1;
+    const recordFailure = (cause: unknown, atPhase: AttemptPhase): void => {
+      if (failure === undefined) lastPassedAtFailure = lastPassedStepIndex(steps.all());
+      failure = classifyError(cause);
+      failurePhase = atPhase;
+    };
+    const cache = createAgentCacheContext({
+      cache: this.config.cache,
+      projectId: this.config.projectId,
+      testId: pair.test.id,
+      target: this.sessionIdentity,
+      attemptIndex,
+    });
 
     try {
       const session =
@@ -447,6 +464,7 @@ export class TargetExecutor implements SerialHost {
         agentContext: pair.options.agentContext,
         opened: shared?.opened ?? { value: false },
         saveSession,
+        ...(cache === undefined ? {} : { cache }),
         debug: this.debug,
       });
 
@@ -473,8 +491,7 @@ export class TargetExecutor implements SerialHost {
           }),
         );
       } catch (cause) {
-        failure = classifyError(cause);
-        failurePhase = phase;
+        recordFailure(cause, phase);
       }
 
       phase = 'afterEach';
@@ -486,18 +503,15 @@ export class TargetExecutor implements SerialHost {
             () => new TestTimeoutError('afterEach hook timed out'),
           );
         } catch (cause) {
-          const hookError = classifyError(cause);
           if (failure === undefined) {
-            failure = hookError;
-            failurePhase = 'afterEach';
+            recordFailure(cause, 'afterEach');
           } else {
-            secondaryErrors.push(serializeError(hookError, { phase: 'afterEach' }));
+            secondaryErrors.push(serializeError(classifyError(cause), { phase: 'afterEach' }));
           }
         }
       }
     } catch (cause) {
-      failure = classifyError(cause);
-      failurePhase = phase;
+      recordFailure(cause, phase);
     } finally {
       this.interruptSignal.removeEventListener('abort', onInterrupt);
       if (driverSession !== null && shared === undefined) {
@@ -521,6 +535,28 @@ export class TargetExecutor implements SerialHost {
       }
       record.error = serializeError(failure, { phase: reportPhase });
     }
+
+    if (cache !== undefined) {
+      // Settled only after the status is classified: an interrupted attempt
+      // implicates nothing, so Ctrl-C can never evict a good entry. On a
+      // failure, confirmation stops at what had passed when the failure
+      // landed — later teardown steps prove nothing about the failed flow.
+      const lastPassed =
+        failure === undefined ? lastPassedStepIndex(record.steps) : lastPassedAtFailure;
+      await flushStagedTraces(
+        cache,
+        lastPassed,
+        record.status === 'passed' ? 'passed' : record.status === 'interrupted' ? 'interrupted' : 'failed',
+      );
+    }
     return record;
   }
+}
+
+/** Highest timeline index among steps that passed, or -1 when none have. */
+function lastPassedStepIndex(steps: readonly { index: number; status: string }[]): number {
+  return steps.reduce(
+    (max, step) => (step.status === 'passed' && step.index > max ? step.index : max),
+    -1,
+  );
 }

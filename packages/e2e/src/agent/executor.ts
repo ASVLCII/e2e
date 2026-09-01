@@ -59,7 +59,15 @@ export interface ExecutorTarget {
  * The action grammar. Every executor action bottoms out here, where the
  * harness enforces the deadline, the action budget, origin policy, and
  * recording. Node ids are only valid against the newest observation; a stale
- * id fails the action rather than acting on the wrong node.
+ * id fails the action rather than acting on the wrong node. Actions and
+ * observations are serialized in call order: a call issued while another is
+ * in flight queues behind it and resolves its target against the newest
+ * observation, so concurrency can never soften the staleness rule. A
+ * committed mutation does not mint a new observation: ids from the newest
+ * observation stay addressable afterward (batching independent targets — a
+ * form fill — is legitimate), the driver rejects references it can no longer
+ * bind (`NODE_STALE`), and the mutation's effects are visible only through a
+ * fresh `observe()`.
  */
 export interface ExecutorActions {
   tap(target: ExecutorTarget): Promise<void>;
@@ -112,8 +120,47 @@ export interface ExecutorBudgets {
   recordToolCall(call: { name: string; mutates: boolean; durationMs?: number }): void;
 }
 
+/**
+ * Why a cached replay stopped before finishing its trace. A closed union: the
+ * executor sees a reason token and prose summaries, never descriptors,
+ * outputs, or error objects.
+ */
+export type ReplayHandOffReason =
+  | 'gap'
+  | 'target-not-found'
+  | 'target-ambiguous'
+  | 'action-failed'
+  | 'action-uncertain'
+  | 'end-mismatch';
+
+/**
+ * The mid-step hand-off from a diverged cache replay (RFC0001 layer 4). The
+ * replayed actions already ran against the live app under the same budgets
+ * and recording as the executor's own; the executor continues the step from
+ * the current application state and must not redo them.
+ */
+export interface ReplayedPrefix {
+  /** Prose summaries of the actions replay performed, in order. */
+  readonly replayedActions: readonly string[];
+  readonly totalActions: number;
+  readonly stopReason: ReplayHandOffReason;
+  /**
+   * Present exactly when `stopReason` is `action-uncertain`: the summary of a
+   * replayed action whose input may have reached the app even though it
+   * failed (spec 09, ACTION_MAY_HAVE_COMMITTED). The executor must verify the
+   * current state before re-attempting anything like it — repeating it blind
+   * would double-commit a mutation the runner promised not to repeat.
+   */
+  readonly uncertainAction?: string;
+}
+
 export interface StepExecutorContext {
   readonly step: ExecutorStep;
+  /**
+   * Present when a cached replay ran part of this step before handing it
+   * over. Absent on a cache miss or when caching is off.
+   */
+  readonly replayedPrefix?: ReplayedPrefix;
   /**
    * Aborts when the test is cancelled, when the step deadline expires, or on
    * any other hard stop. An executor must stop promptly on abort; the harness

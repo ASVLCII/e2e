@@ -6,7 +6,8 @@
  * configured executor and maps its verdict back onto the runner's error
  * taxonomy. The executor never touches the driver: everything bottoms out in
  * the context built here, on the same accounting core (phases.ts) the
- * locate/judgment tier runs on.
+ * locate/judgment tier runs on. Trace-cache participation — replay, live
+ * recording, staging — lives beside the dispatch in `StepTraceSession`.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -14,11 +15,10 @@ import { join } from 'node:path';
 import { DriverError, type SemanticNode } from '../driver/index.ts';
 import { ConfigurationError, TestError } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
-import { validateJsonValue } from '../internal/json-value.ts';
+import { createRedactor } from '../internal/redact.ts';
 import type { Deadline } from '../internal/time.ts';
 import { resolveNavigationUrl } from '../internal/urls.ts';
 import type { StepMetrics, StepModelInfo } from '../run/steps.ts';
-import { isSecret } from '../locator/screen.ts';
 import type {
   AgentErrorCode,
   AgentOptions,
@@ -30,10 +30,16 @@ import type {
   Secret,
 } from '../types.ts';
 import { AgentError, CATEGORY_BY_CODE, isAgentError, toAgentError } from './error.ts';
+import {
+  rejectUnsupportedActOptions,
+  validateInstruction,
+  validateParams,
+  validateVerdict,
+} from './act-validation.ts';
 import { resolveBoundedBudget, resolveTimeout } from './call-options.ts';
 import {
-  BLOCKABLE_CODES,
   RUNTIME_CODES,
+  type ExecutorActions,
   type ExecutorModelCall,
   type ExecutorObservation,
   type ExecutorTarget,
@@ -43,18 +49,10 @@ import {
 import type { AgentContext } from './invocation.ts';
 import { serializeLedger } from './ledger.ts';
 import { instantiateLanguageModel } from './model/sdk.ts';
-import { prepareObservation, type AgentObservation } from './observation.ts';
+import { observationShape, prepareObservation, type AgentObservation } from './observation.ts';
 import { checkStepClock, instrumentPhase, retryingObserve } from './phases.ts';
 import { authorizeSecretFill } from './secrets.ts';
-
-const MAX_SUMMARY_CHARS = 2_000;
-
-/** Spec 02: instructions are 1 through 8 KiB UTF-8 after NFC. */
-const MAX_INSTRUCTION_BYTES = 8_192;
-
-/** Spec 02: canonical non-secret parameters are capped at 64 KiB, 32 levels. */
-const MAX_PARAMS_BYTES = 65_536;
-const MAX_PARAMS_DEPTH = 32;
+import { StepTraceSession, type StepCacheHost } from './step-cache.ts';
 
 /** Everything one dispatched step is, resolved before the step opens. */
 interface DispatchSpec {
@@ -128,51 +126,37 @@ export async function runAssertStep(
   });
 }
 
-/** Opens the step, delegates to the executor, and settles the verdict. */
+/**
+ * Opens the step, tries a cached replay, delegates to the executor when the
+ * cache misses or diverges, settles the verdict, and — on a pass in
+ * read-write mode — stages the step's action trace for attempt-end
+ * settlement. A step that settles non-passed after consuming a cached replay
+ * evicts that entry, so a poisoned flow re-records instead of replaying
+ * forever; cancellation evicts nothing, exactly like an interrupted attempt.
+ */
 async function dispatchAgentStep(runtime: AgentContext, spec: DispatchSpec): Promise<void> {
   await runtime.steps.run('agent', spec.api, spec.instruction, async () => {
     const dispatch = new ActDispatch(runtime, spec);
     try {
-      let verdict: StepVerdict;
       try {
-        verdict = await dispatch.runExecutor();
+        let verdict: StepVerdict;
+        try {
+          verdict = await dispatch.run();
+        } catch (cause) {
+          throw dispatch.settleThrown(toAgentError(cause));
+        }
+        dispatch.settle(validateVerdict(verdict, runtime.executor.name));
+        await dispatch.stageTrace();
       } catch (cause) {
-        throw dispatch.settleThrown(toAgentError(cause));
+        if (!(isAgentError(cause) && cause.code === 'CANCELLED')) {
+          await dispatch.evictConsumedReplay();
+        }
+        throw cause;
       }
-      dispatch.settle(validateVerdict(verdict, runtime.executor.name));
     } finally {
       dispatch.finish();
     }
   });
-}
-
-/** Normalizes and bounds the instruction per spec 02. */
-function validateInstruction(instruction: string, api: string): string {
-  if (typeof instruction !== 'string' || instruction.trim() === '') {
-    throw new TestError('INVALID_ARGUMENT', `${api} requires a non-empty instruction`);
-  }
-  const normalized = instruction.normalize('NFC');
-  const bytes = new TextEncoder().encode(normalized).byteLength;
-  if (bytes > MAX_INSTRUCTION_BYTES) {
-    throw new TestError(
-      'INVALID_ARGUMENT',
-      `${api} instruction is ${bytes} bytes; the maximum is ${MAX_INSTRUCTION_BYTES}`,
-    );
-  }
-  return normalized;
-}
-
-/** Options the socket does not support yet fail loudly, like `schema` does. */
-function rejectUnsupportedActOptions(options: AgentOptions | undefined): void {
-  if (options === undefined) return;
-  const unsupported = (name: string): never => {
-    throw new ConfigurationError(
-      'UNSUPPORTED_CAPABILITY',
-      `agent.act ${name} is not part of this milestone`,
-    );
-  };
-  if ('schema' in options && options.schema !== undefined) unsupported('structured output (options.schema)');
-  if (options.vision !== undefined) unsupported('vision evidence (options.vision)');
 }
 
 /**
@@ -197,6 +181,20 @@ class ActDispatch {
   private hardStop: AgentError | undefined;
   /** Aborts the executor on any hard stop, so a step never outlives its clock. */
   private readonly stepAbort = new AbortController();
+  /**
+   * Serializes observations and actions in call order. An executor (or an AI
+   * SDK loop running parallel tool calls) that issues a second action before
+   * the first settles would otherwise resolve both targets against the same
+   * pre-action observation — exactly the wrong-node hazard the staleness rule
+   * exists to prevent. Queued, the second call sees the newest observation
+   * and a stale id fails loud instead of acting on the wrong node.
+   *
+   * Invariant: a serialized body must never call `observe()` or `runAction()`
+   * itself — the inner call would queue behind its own caller and deadlock.
+   * Grammar bodies call the driver session directly, and secret authorization
+   * never observes; keep it that way.
+   */
+  private grammarChain: Promise<unknown> = Promise.resolve();
   private sdkModel: ModelInstance | undefined;
   private sdkModelResolved = false;
   private transcript: string | undefined;
@@ -207,6 +205,9 @@ class ActDispatch {
   private providerReportedUsage = false;
   private modelProvider: string | undefined;
   private modelId: string | undefined;
+  private readonly redact: (text: string) => string;
+  /** The step's trace-cache session; undefined when caching is off or the kind is not cacheable. */
+  private readonly stepCache: StepTraceSession | undefined;
 
   constructor(
     private readonly runtime: AgentContext,
@@ -225,6 +226,32 @@ class ActDispatch {
       'maxModelCalls',
     );
     this.metrics.contextBytes = new TextEncoder().encode(runtime.agentContext ?? '').byteLength;
+    this.redact = createRedactor(runtime.secretValues);
+    // Only act steps are cacheable: an assert must not change state, so its
+    // trace would be empty — nothing to replay, nothing worth a read. The
+    // dispatch always runs inside a recorded step; a missing index would mean
+    // that invariant broke, and withholding the whole session is the safe
+    // answer.
+    const cache = spec.kind === 'act' ? runtime.cache : undefined;
+    const stepIndex = runtime.steps.currentStepIndex;
+    this.stepCache =
+      cache === undefined || stepIndex === undefined
+        ? undefined
+        : new StepTraceSession({
+            cache,
+            instruction: spec.instruction,
+            params: spec.params,
+            executor: {
+              name: runtime.executor.name,
+              ...(runtime.executor.version === undefined
+                ? {}
+                : { version: runtime.executor.version }),
+            },
+            redact: this.redact,
+            testIdAttribute: runtime.config.testIdAttribute,
+            maxActions: this.maxActions,
+            stepIndex,
+          });
   }
 
   /** Builds the executor-facing context. */
@@ -237,6 +264,7 @@ class ActDispatch {
       this.runtime.config.limits.maxLedgerBytes,
     );
     this.metrics.ledgerBytes = ledger.bytes;
+    const replayedPrefix = this.stepCache?.replayedPrefix;
     return {
       step: {
         kind: this.spec.kind,
@@ -247,6 +275,7 @@ class ActDispatch {
           purpose: secret.purpose,
         })),
       },
+      ...(replayedPrefix === undefined ? {} : { replayedPrefix }),
       signal: AbortSignal.any([this.runtime.signal, this.stepAbort.signal]),
       // Resolved on first read, so executors that bring their own model (or
       // none) never pay for — or fail on — config model resolution.
@@ -270,53 +299,75 @@ class ActDispatch {
           this.transcript = text;
         }
       },
-      actions: {
-        tap: (target) =>
-          this.commitTargeted('tap', target, (node) =>
-            this.session.actions.tap({ ref: node.ref }, this.operation()),
-          ),
-        type: (target, value) => {
-          if (typeof value !== 'string') {
-            throw new TestError('INVALID_ARGUMENT', 'type value must be a string');
-          }
-          return this.commitTargeted('type', target, (node) =>
-            this.session.actions.type({ ref: node.ref }, value, false, this.operation()),
-          );
-        },
-        typeSecret: (target, name) => this.typeSecret(target, name),
-        press: (target, key) => {
-          if (typeof key !== 'string' || key.trim() === '' || key.length > 64) {
-            throw new TestError('INVALID_ARGUMENT', 'press key must be a short non-empty string');
-          }
-          return this.commitTargeted('press', target, (node) =>
-            this.session.screen.perform(node.ref, { kind: 'press', key }, this.operation()),
-          );
-        },
-        select: (target, value) => {
-          if (typeof value !== 'string' || value === '') {
-            throw new TestError('INVALID_ARGUMENT', 'select value must be a non-empty option label');
-          }
-          return this.commitTargeted('selectOption', target, (node) =>
-            this.session.screen.perform(
-              node.ref,
-              { kind: 'selectOption', value },
-              this.operation(),
-            ),
-          );
-        },
-        scroll: (direction, target) => this.scroll(direction, target),
-        navigate: (url) => this.navigate(url),
-      },
+      actions: this.buildActions(),
     };
   }
 
   /**
-   * Races the executor against the step deadline. An executor that ignores
-   * every context call still cannot outlive the clock: the timer records the
-   * timeout as the hard stop, aborts the step signal, and settles the step —
-   * the executor's promise is abandoned, never awaited past the deadline.
+   * The action grammar, shared verbatim by the executor context and the
+   * replay engine: a replayed action runs under exactly the same deadline,
+   * budget, policy, and recording as a live one. Committed actions are
+   * recorded into the step trace with the node they actually acted on —
+   * capture at commit time is what makes the descriptor durable evidence
+   * rather than a guess.
    */
-  async runExecutor(): Promise<StepVerdict> {
+  private buildActions(): ExecutorActions {
+    return {
+      tap: (target) =>
+        this.commitTargeted(
+          'tap',
+          target,
+          (node) => this.session.actions.tap({ ref: node.ref }, this.operation()),
+          (node) => this.stepCache?.record({ name: 'tap', node }),
+        ),
+      type: (target, value) => {
+        if (typeof value !== 'string') {
+          throw new TestError('INVALID_ARGUMENT', 'type value must be a string');
+        }
+        return this.commitTargeted(
+          'type',
+          target,
+          (node) => this.session.actions.type({ ref: node.ref }, value, false, this.operation()),
+          (node) => this.stepCache?.record({ name: 'type', node, value }),
+        );
+      },
+      typeSecret: (target, name) => this.typeSecret(target, name),
+      press: (target, key) => {
+        if (typeof key !== 'string' || key.trim() === '' || key.length > 64) {
+          throw new TestError('INVALID_ARGUMENT', 'press key must be a short non-empty string');
+        }
+        return this.commitTargeted(
+          'press',
+          target,
+          (node) => this.session.screen.perform(node.ref, { kind: 'press', key }, this.operation()),
+          (node) => this.stepCache?.record({ name: 'press', node, key }),
+        );
+      },
+      select: (target, value) => {
+        if (typeof value !== 'string' || value === '') {
+          throw new TestError('INVALID_ARGUMENT', 'select value must be a non-empty option label');
+        }
+        return this.commitTargeted(
+          'selectOption',
+          target,
+          (node) =>
+            this.session.screen.perform(node.ref, { kind: 'selectOption', value }, this.operation()),
+          (node) => this.stepCache?.record({ name: 'select', node, value }),
+        );
+      },
+      scroll: (direction, target) => this.scroll(direction, target),
+      navigate: (url) => this.navigate(url),
+    };
+  }
+
+  /**
+   * Races the step body — cached replay first, then the executor on a miss or
+   * divergence — against the step deadline. An executor that ignores every
+   * context call still cannot outlive the clock: the timer records the
+   * timeout as the hard stop, aborts the step signal, and settles the step —
+   * the promise is abandoned, never awaited past the deadline.
+   */
+  async run(): Promise<StepVerdict> {
     const timer = setTimeout(() => {
       this.fatalize(
         new AgentError('STEP_TIMEOUT', `${this.spec.api} exceeded its ${this.timeoutMs} ms timeout`),
@@ -324,7 +375,7 @@ class ActDispatch {
     }, Math.max(1, this.deadline.remaining()));
     try {
       return await Promise.race([
-        this.runtime.executor.runStep(this.context()),
+        this.dispatchStep(),
         new Promise<never>((_, reject) => {
           const signal = this.stepAbort.signal;
           if (signal.aborted) {
@@ -339,8 +390,55 @@ class ActDispatch {
     }
   }
 
+  private async dispatchStep(): Promise<StepVerdict> {
+    if (this.stepCache !== undefined) {
+      const replayed = await this.stepCache.tryReplay(this.replayHost());
+      if (replayed !== undefined) return replayed;
+    }
+    return this.runtime.executor.runStep(this.context());
+  }
+
+  /** The replay engine's narrow view of this dispatch. */
+  private replayHost(): StepCacheHost {
+    return {
+      observeNodes: async () => (await this.observeLatest()).nodes,
+      latestShape: () => (this.latest === undefined ? undefined : observationShape(this.latest)),
+      actions: this.buildActions(),
+      signal: AbortSignal.any([this.runtime.signal, this.stepAbort.signal]),
+      remainingMs: () => this.deadline.remaining(),
+      redact: this.redact,
+      testIdAttribute: this.runtime.config.testIdAttribute,
+      currentPath: () => this.currentPath(),
+    };
+  }
+
+  /** Best-effort current page path + query, for trace preconditions. */
+  private async currentPath(): Promise<string | undefined> {
+    const web = this.session.web;
+    if (web === undefined) return undefined;
+    try {
+      const url = new URL(await web.url(this.operation()));
+      return `${url.pathname}${url.search}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Stages the step's recorded trace for attempt-end settlement. */
+  async stageTrace(): Promise<void> {
+    if (this.stepCache === undefined || !this.stepCache.wantsStage) return;
+    // The end path is the trace's postcondition; captured only when a write
+    // can actually happen, so read-only runs pay no extra driver call.
+    this.stepCache.stage(this.explanation, await this.currentPath());
+  }
+
+  /** Evicts a consumed replay entry after a non-passed settle. */
+  async evictConsumedReplay(): Promise<void> {
+    await this.stepCache?.evictOnFailure();
+  }
+
   /** Maps the executor's verdict onto the runner outcome. Fail-closed on hard stops. */
-  settle(verdict: StepVerdict): AgentResult {
+  settle(verdict: StepVerdict): void {
     let settled = verdict;
     if (this.hardStop !== undefined) {
       if (this.hardStop.code === 'CANCELLED') throw this.hardStop;
@@ -366,7 +464,7 @@ class ActDispatch {
       throw this.invented(settled.errorCode);
     }
     this.explanation = settled.summary;
-    if (settled.status === 'passed') return { ok: true };
+    if (settled.status === 'passed') return;
     const code =
       settled.errorCode !== undefined && settled.errorCode in CATEGORY_BY_CODE
         ? settled.errorCode
@@ -494,6 +592,9 @@ class ActDispatch {
     });
     if (!call.mutates) return;
     this.metrics.actionSteps += 1;
+    // A project-tool mutation is a gap: the grammar cannot reproduce it, so a
+    // replay of this step's trace ends here rather than skipping the change.
+    this.stepCache?.recordGap(call.name);
     if (this.metrics.actionSteps > this.maxActions) {
       throw this.fatalize(
         new AgentError(
@@ -506,9 +607,11 @@ class ActDispatch {
 
   /** Attaches metrics, model provenance, and the verdict explanation to the step. */
   finish(): void {
+    const cacheInfo = this.stepCache?.cacheInfo;
     this.runtime.steps.attachAgentDetails({
       metrics: { ...this.metrics },
       ...(this.metrics.modelCalls > 0 ? { model: this.modelInfo() } : {}),
+      ...(cacheInfo === undefined ? {} : { cache: cacheInfo }),
       ...(this.explanation !== undefined ? { explanation: this.explanation } : {}),
       ...(this.latest !== undefined ? { observationRevision: this.latest.revision } : {}),
     });
@@ -555,8 +658,16 @@ class ActDispatch {
     return this.runtime.engine.session;
   }
 
+  /**
+   * One driver operation's budget: `actionTimeout`, capped by the step clock.
+   * Bounding each call independently is what keeps a single page that never
+   * settles from consuming the whole step — the hang costs one action
+   * timeout and a clearly attributed failure, not the test budget.
+   */
   private operation() {
-    return this.runtime.engine.operation(Math.max(1, this.deadline.remaining()));
+    return this.runtime.engine.operation(
+      Math.max(1, Math.min(this.runtime.config.actionTimeout, this.deadline.remaining())),
+    );
   }
 
   /** Resolves the configured model once; executors that never read it never pay. */
@@ -585,7 +696,33 @@ class ActDispatch {
     }
   }
 
+  /** Chains one grammar operation behind every earlier one, in call order. */
+  private serialized<T>(body: () => Promise<T>): Promise<T> {
+    // The chain is always already settled-to-undefined, so failures propagate
+    // to their own caller and never poison the queue.
+    const run = this.grammarChain.then(body);
+    this.grammarChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   private async observe(): Promise<ExecutorObservation> {
+    const observation = await this.observeLatest();
+    return {
+      revision: observation.revision,
+      text: observation.text,
+      truncated: observation.truncated,
+      viewport: observation.viewport,
+    };
+  }
+
+  private observeLatest(): Promise<AgentObservation> {
+    return this.serialized(() => this.observeNow());
+  }
+
+  private async observeNow(): Promise<AgentObservation> {
     this.checkpoint();
     const observation = await instrumentPhase(
       this.runtime,
@@ -608,12 +745,7 @@ class ActDispatch {
     );
     this.latest = observation;
     this.metrics.observationBytes = Math.max(this.metrics.observationBytes, observation.bytes);
-    return {
-      revision: observation.revision,
-      text: observation.text,
-      truncated: observation.truncated,
-      viewport: observation.viewport,
-    };
+    return observation;
   }
 
   /** Resolves an executor target against the newest observation. */
@@ -640,7 +772,15 @@ class ActDispatch {
   }
 
   /** Runs one grammar action against the action budget, recorded as a driver event. */
-  private async runAction(name: string, body: () => Promise<void>): Promise<void> {
+  private runAction(name: string, body: () => Promise<void>, onCommit?: () => void): Promise<void> {
+    return this.serialized(() => this.runActionNow(name, body, onCommit));
+  }
+
+  private async runActionNow(
+    name: string,
+    body: () => Promise<void>,
+    onCommit?: () => void,
+  ): Promise<void> {
     this.checkpoint();
     if (this.metrics.actionSteps >= this.maxActions) {
       throw this.fatalize(
@@ -662,6 +802,7 @@ class ActDispatch {
       this.checkpoint(cause);
       throw cause;
     }
+    onCommit?.();
   }
 
   /** One action against a resolved node; a stale ref asks for a re-observe. */
@@ -669,6 +810,7 @@ class ActDispatch {
     name: string,
     target: ExecutorTarget,
     body: (node: SemanticNode) => Promise<void>,
+    onCommit?: (node: SemanticNode) => void,
   ): Promise<void> {
     return this.runAction(name, async () => {
       const node = this.resolveTarget(target);
@@ -684,6 +826,7 @@ class ActDispatch {
         }
         throw cause;
       }
+      onCommit?.(node);
     });
   }
 
@@ -692,13 +835,18 @@ class ActDispatch {
       throw new TestError('INVALID_ARGUMENT', `invalid scroll direction "${String(direction)}"`);
     }
     if (target === undefined) {
-      await this.runAction('scroll', () =>
-        this.session.actions.scroll(direction, {}, this.operation()),
+      await this.runAction(
+        'scroll',
+        () => this.session.actions.scroll(direction, {}, this.operation()),
+        () => this.stepCache?.record({ name: 'scroll', direction }),
       );
       return;
     }
-    await this.commitTargeted('scroll', target, (node) =>
-      this.session.actions.scroll(direction, { target: node.ref }, this.operation()),
+    await this.commitTargeted(
+      'scroll',
+      target,
+      (node) => this.session.actions.scroll(direction, { target: node.ref }, this.operation()),
+      (node) => this.stepCache?.record({ name: 'scroll', direction, node }),
     );
   }
 
@@ -716,20 +864,26 @@ class ActDispatch {
         `secret "${name}" was not declared in this step's params; only declared secrets can be filled`,
       );
     }
-    await this.commitTargeted('typeSecret', target, async (node) => {
-      const plaintext = await authorizeSecretFill(
-        {
-          session: this.session,
-          operation: () => this.operation(),
-          recordPolicy: (policy, decision, code) => this.recordPolicy(policy, decision, code),
-        },
-        this.runtime,
-        secret,
-        node,
-      );
-      await this.session.actions.type({ ref: node.ref }, plaintext, true, this.operation());
-      this.runtime.taint.value = true;
-    });
+    await this.commitTargeted(
+      'typeSecret',
+      target,
+      async (node) => {
+        const plaintext = await authorizeSecretFill(
+          {
+            session: this.session,
+            operation: () => this.operation(),
+            recordPolicy: (policy, decision, code) => this.recordPolicy(policy, decision, code),
+          },
+          this.runtime,
+          secret,
+          node,
+        );
+        await this.session.actions.type({ ref: node.ref }, plaintext, true, this.operation());
+        this.runtime.taint.value = true;
+      },
+      // Recorded by stable name only; replay re-runs the full authorization.
+      (node) => this.stepCache?.record({ name: 'typeSecret', node, secret: name }),
+    );
   }
 
   /** Records one policy decision as a child event, mirroring the locate tier. */
@@ -754,99 +908,12 @@ class ActDispatch {
       this.runtime.config.app.base,
       this.runtime.config.app.allowedOrigins,
     ).url;
-    await this.runAction('navigate', () => this.session.app.open(resolved, this.operation()));
-  }
-}
-
-/**
- * Validates parameters and returns an inert, secret-free snapshot plus the
- * declared secrets. A `Secret` value is projected to
- * `{ kind: 'secret', name, purpose }` — its plaintext never enters the
- * snapshot, the prompt, or any log — and is fillable only through
- * `actions.typeSecret`. The JSON round-trip is deliberate: it bounds the
- * canonical size (spec 02) and freezes what the executor sees, so a getter
- * or proxy cannot change values — or run code — during later serialization.
- */
-function validateParams(params: AgentParams | undefined): {
-  projected: Readonly<Record<string, JsonValue>> | undefined;
-  secrets: ReadonlyMap<string, Secret>;
-} {
-  if (params === undefined) return { projected: undefined, secrets: new Map() };
-  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-    throw new TestError('INVALID_ARGUMENT', 'agent.act params must be a plain object');
-  }
-  const secrets = new Map<string, Secret>();
-  const projectedRaw = projectSecrets(params, secrets, new Set());
-  validateJsonValue(projectedRaw, 'agent.act params', { maxDepth: MAX_PARAMS_DEPTH });
-  const canonical = JSON.stringify(projectedRaw);
-  const bytes = new TextEncoder().encode(canonical).byteLength;
-  if (bytes > MAX_PARAMS_BYTES) {
-    throw new TestError(
-      'INVALID_ARGUMENT',
-      `agent.act params are ${bytes} canonical bytes; the maximum is ${MAX_PARAMS_BYTES}`,
+    // The raw argument is recorded, not the resolved URL: replay re-resolves
+    // through the same base and origin policy this call just passed.
+    await this.runAction(
+      'navigate',
+      () => this.session.app.open(resolved, this.operation()),
+      () => this.stepCache?.record({ name: 'navigate', url }),
     );
   }
-  return {
-    projected: JSON.parse(canonical) as Readonly<Record<string, JsonValue>>,
-    secrets,
-  };
-}
-
-/** Replaces every Secret leaf with its placeholder, collecting the originals. */
-function projectSecrets(value: unknown, secrets: Map<string, Secret>, seen: Set<unknown>): unknown {
-  if (isSecret(value)) {
-    secrets.set(value.name, value);
-    return { kind: 'secret', name: value.name, purpose: value.purpose };
-  }
-  if (typeof value !== 'object' || value === null) return value;
-  if (seen.has(value)) {
-    throw new TestError('INVALID_ARGUMENT', 'agent.act params contains a cycle');
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.map((entry) => projectSecrets(entry, secrets, seen));
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, projectSecrets(entry, secrets, seen)]),
-  );
-}
-
-/** Closes the verdict grammar: the executor cannot invent statuses or codes. */
-function validateVerdict(verdict: unknown, executorName: string): StepVerdict {
-  const invalid = (issue: string): never => {
-    throw new AgentError(
-      'MODEL_OUTPUT_INVALID',
-      `executor "${executorName}" returned an invalid verdict: ${issue}`,
-    );
-  };
-  if (typeof verdict !== 'object' || verdict === null) return invalid('not an object');
-  const candidate = verdict as Record<string, unknown>;
-  const status = candidate['status'];
-  if (status !== 'passed' && status !== 'failed' && status !== 'blocked') {
-    return invalid(`status must be passed, failed, or blocked, got ${JSON.stringify(status)}`);
-  }
-  const summary = candidate['summary'];
-  if (typeof summary !== 'string' || summary.trim() === '') {
-    return invalid('summary must be a non-empty string');
-  }
-  const errorCode = candidate['errorCode'];
-  if (errorCode !== undefined) {
-    if (typeof errorCode !== 'string' || !(errorCode in CATEGORY_BY_CODE)) {
-      return invalid(`unknown errorCode ${JSON.stringify(errorCode)}`);
-    }
-  }
-  const code = errorCode as AgentErrorCode | undefined;
-  if (status === 'passed' && code !== undefined) {
-    return invalid('a passed verdict cannot carry an errorCode');
-  }
-  if (status === 'blocked' && (code === undefined || !BLOCKABLE_CODES.has(code))) {
-    return invalid(
-      `blocked requires a blockable errorCode (one of ${[...BLOCKABLE_CODES].join(', ')})`,
-    );
-  }
-  return {
-    status,
-    summary: summary.trim().slice(0, MAX_SUMMARY_CHARS),
-    ...(code === undefined ? {} : { errorCode: code }),
-  };
 }

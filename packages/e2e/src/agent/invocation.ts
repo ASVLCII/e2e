@@ -6,6 +6,7 @@
  */
 
 import type { JSONSchema7 } from 'ai';
+import type { AgentCacheContext } from '../cache/context.ts';
 import type { ResolvedConfig } from '../config/resolve.ts';
 import type { DriverSession, Observation } from '../driver/index.ts';
 import type { DebugTrace } from '../internal/debug.ts';
@@ -68,6 +69,8 @@ export interface AgentContext {
   readonly taint: { value: boolean };
   readonly artifacts: ArtifactSink;
   readonly signal: AbortSignal;
+  /** The attempt's trace cache, or undefined when caching is off. */
+  readonly cache?: AgentCacheContext;
   /** `--debug` phase timings; absent when the caller collects none. */
   readonly debug?: DebugTrace;
 }
@@ -434,9 +437,15 @@ export class Invocation {
     });
   }
 
-  /** Builds a driver operation context bounded by this invocation's deadline. */
+  /**
+   * Builds a driver operation context: `actionTimeout`, capped by this
+   * invocation's deadline. Each driver call is bounded independently so one
+   * hung observation cannot consume the invocation's whole clock.
+   */
   operation(): ReturnType<LocatorEngine['operation']> {
-    return this.runtime.engine.operation(Math.max(1, this.deadline.remaining()));
+    return this.runtime.engine.operation(
+      Math.max(1, Math.min(this.runtime.config.actionTimeout, this.deadline.remaining())),
+    );
   }
 
   /** Fails when the invocation deadline has elapsed (see checkStepClock). */
