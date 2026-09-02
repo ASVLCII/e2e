@@ -1,6 +1,7 @@
 /** report-1 document construction (spec 13-reporting.md). */
 
 import os from 'node:os';
+import { BACKEND_SPI_VERSION, type BackendSpiVersion } from '../backend/contract.ts';
 import { BLOCKABLE_CODES } from '../agent/executor.ts';
 import type { ResolvedConfig, ResolvedLimits, ResolvedTarget } from '../config/resolve.ts';
 import type { AgentErrorCode } from '../types.ts';
@@ -33,12 +34,34 @@ export interface ReportSource {
 }
 
 export interface TargetProvenance {
-  browserVersion: string;
-  viewport: { width: number; height: number; scale: number };
-  driver: { id: string; version: string; spiVersion: 1 };
+  backend: { name: string; version: string; spiVersion: BackendSpiVersion };
   capabilities: string[];
-  artifactCapabilities: ('screenshot' | 'trace' | 'video')[];
+  artifactCapabilities: ('screenshot' | 'trace')[];
   stateCapability: boolean;
+}
+
+/**
+ * What a target's backend declaration says about it: the one description the
+ * runner grades against and the report records. A target without a backend is
+ * agent-tools-only and honestly reports no capabilities.
+ */
+export function describeTarget(target: ResolvedTarget): TargetProvenance {
+  const backend = target.backend;
+  const artifactCapabilities: TargetProvenance['artifactCapabilities'] = [];
+  if (backend?.artifacts !== undefined) {
+    artifactCapabilities.push('screenshot');
+    if (backend.artifacts.startTrace !== undefined) artifactCapabilities.push('trace');
+  }
+  return {
+    backend: {
+      name: backend?.name ?? 'none',
+      version: backend?.version ?? 'unversioned',
+      spiVersion: backend?.spiVersion ?? BACKEND_SPI_VERSION,
+    },
+    capabilities: [...(backend?.capabilities ?? [])].toSorted(),
+    artifactCapabilities,
+    stateCapability: backend?.state !== undefined,
+  };
 }
 
 export interface BuildReportOptions {
@@ -159,14 +182,11 @@ export interface ReportTarget {
   id: string;
   index: number;
   platform: string;
-  browser: string | undefined;
-  browserVersion: string;
-  viewport: { width: number; height: number; scale: number };
   baseOrigin: string;
   environment: string;
   allowProduction: boolean;
   testIdAttribute: string;
-  driver: { id: string; version: string; spiVersion: 1 };
+  backend: { name: string; version: string; spiVersion: BackendSpiVersion };
   capabilities: readonly string[];
   artifactCapabilities: readonly string[];
   stateCapability: boolean;
@@ -342,25 +362,17 @@ function serializeTarget(
   target: ResolvedTarget,
   provenance: TargetProvenance | undefined,
 ): ReportTarget {
+  // Provenance exists for every selected target; an unselected one is
+  // described from its declaration the same way.
   return {
     id: target.name,
     index: target.index,
     platform: target.platform,
-    browser: target.browser,
-    browserVersion: provenance?.browserVersion ?? 'unknown',
-    viewport: provenance?.viewport ?? {
-      width: target.viewport?.width ?? 1280,
-      height: target.viewport?.height ?? 720,
-      scale: 1,
-    },
     baseOrigin: config.app.base.origin,
     environment: config.app.environment,
     allowProduction: config.app.allowProduction,
     testIdAttribute: config.testIdAttribute,
-    driver: provenance?.driver ?? { id: 'playwright', version: 'unknown', spiVersion: 1 },
-    capabilities: provenance?.capabilities ?? ['web'],
-    artifactCapabilities: provenance?.artifactCapabilities ?? ['screenshot', 'trace'],
-    stateCapability: provenance?.stateCapability ?? true,
+    ...(provenance ?? describeTarget(target)),
   };
 }
 

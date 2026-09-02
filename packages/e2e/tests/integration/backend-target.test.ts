@@ -1,5 +1,5 @@
 /**
- * Backend targets (RFC0002): a driver-less target whose surface is a
+ * Backend targets (RFC0002): a target whose surface is a
  * defineBackend body. Covers the full pipeline — config, worker, adapter,
  * executor socket, lifecycle, capability gating, and the report — with a toy
  * in-memory backend and a hand-rolled executor, no model and no browser.
@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineBackend, type BackendFixtureContext } from '../../src/backend/index.ts';
 import type { StepExecutor } from '../../src/agent/executor.ts';
-import type { SemanticNode } from '../../src/driver/index.ts';
+import type { SemanticNode } from '../../src/backend/surface.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 import { createProject } from '../helpers/run-project.ts';
 
@@ -24,8 +24,7 @@ test('agent drives the toy device', async ({ agent }) => {
 
 const SCREEN_SUITE = `import { test, expect } from 'e2e';
 
-test('screen is unavailable on a backend without location', async ({ app, screen }) => {
-  await app.open();
+test('screen is unavailable on a backend without location', async ({ screen }) => {
   await expect(screen.getByRole('button')).toBeVisible();
 });
 `;
@@ -63,7 +62,13 @@ test('restores the seeded counter', { session: 'seeded' }, async ({ screen }) =>
 
 /** A two-node screen: a counter value and a button that increments it. */
 function toyBackend(
-  options: { withLocate?: boolean; withFixtures?: boolean; withState?: boolean } = {},
+  options: {
+    withLocate?: boolean;
+    withFixtures?: boolean;
+    withState?: boolean;
+    withIsolation?: boolean;
+    withoutInit?: boolean;
+  } = {},
 ) {
   const lifecycle: string[] = [];
   const fixtureCalls: string[] = [];
@@ -74,21 +79,37 @@ function toyBackend(
   ];
   const backend = defineBackend({
     name: 'toy-device',
+    version: '1.0.0',
     spiVersion: 1,
-    async init() {
-      lifecycle.push('init');
-    },
+    ...(options.withoutInit === true
+      ? {}
+      : {
+          async init() {
+            lifecycle.push('init');
+          },
+        }),
+    ...(options.withIsolation !== true
+      ? {}
+      : {
+          async startAttempt(context: { attemptId: string; artifactsDir: string }) {
+            lifecycle.push(`startAttempt:${context.artifactsDir.length > 0 ? 'dir' : 'nodir'}`);
+            count = 0;
+          },
+          async endAttempt() {
+            lifecycle.push('endAttempt');
+          },
+        }),
     async dispose() {
       lifecycle.push('dispose');
     },
     async observe() {
       return { nodes: nodes() };
     },
-    actions: {
-      async tap(target) {
-        if (target.ref.id !== 'increment') throw new Error(`no such node ${target.ref.id}`);
-        count += 1;
-      },
+    async perform(ref, action) {
+      if (ref.id !== 'increment' || action.kind !== 'tap') {
+        throw new Error(`cannot ${action.kind} node ${ref.id}`);
+      }
+      count += 1;
     },
     ...(options.withLocate !== true
       ? {}
@@ -146,6 +167,12 @@ const tapper: StepExecutor = {
   name: 'toy-tapper',
   version: '1',
   async runStep(context) {
+    // The executor is told exactly which grammar the surface honors: perform
+    // gives tap/type/press/select, and this toy has no swipe or navigate.
+    const verbs = [...context.target.verbs].toSorted();
+    if (context.target.platform !== 'ios' || verbs.join() !== 'press,select,tap,type,typeSecret') {
+      return { status: 'failed', summary: `unexpected target ${context.target.platform} ${verbs.join()}` };
+    }
     for (let round = 0; round < 5; round += 1) {
       const observation = await context.observe();
       const match = /#counter status "count" text="(\d+)"/.exec(observation.text);
@@ -178,7 +205,7 @@ describe('backend targets', () => {
       expect(toy.current()).toBe(2);
       expect(toy.lifecycle).toEqual(['init', 'dispose']);
       const reportTarget = outcome.report.run.targets.find((entry) => entry.id === 'toy-sim');
-      expect(reportTarget?.driver.id).toBe('backend:toy-device');
+      expect(reportTarget?.backend.name).toBe('toy-device');
       expect(reportTarget?.platform).toBe('ios');
       assertValidReport(outcome.report);
     } finally {
@@ -277,6 +304,65 @@ describe('backend targets', () => {
     }
   });
 
+
+  it('resets per-attempt state via startAttempt/endAttempt isolation', async () => {
+    const toy = toyBackend({ withLocate: true, withIsolation: true });
+    const suite = `import { test, expect } from 'e2e';
+
+test('first attempt starts fresh', async ({ screen }) => {
+  await screen.getByRole('button', { name: 'Increment' }).tap();
+  await expect(screen.getByRole('status')).toHaveText('1');
+});
+
+test('second attempt also starts fresh', async ({ screen }) => {
+  await screen.getByRole('button', { name: 'Increment' }).tap();
+  await expect(screen.getByRole('status')).toHaveText('1');
+});
+`;
+    const project = createProject({ 'tests/iso.e2e.ts': suite });
+    try {
+      const outcome = await run({
+        cwd: project.dir,
+        rawConfig: {
+          targets: [{ name: 'toy-sim', platform: 'ios', backend: toy.backend }],
+          cache: 'off',
+        },
+        env: { ...process.env, APP_URL: '', CI: '' },
+        quiet: true,
+      });
+      expect(outcome.exitCode).toBe(0);
+      expect(toy.lifecycle.filter((e) => e.startsWith('startAttempt'))).toEqual([
+        'startAttempt:dir',
+        'startAttempt:dir',
+      ]);
+      expect(toy.lifecycle.filter((e) => e === 'endAttempt')).toHaveLength(2);
+      assertValidReport(outcome.report);
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it('disposes a backend that declares no init', async () => {
+    const toy = toyBackend({ withLocate: true, withoutInit: true });
+    const project = createProject({ 'tests/screen.e2e.ts': DETERMINISTIC_SUITE });
+    try {
+      const outcome = await run({
+        cwd: project.dir,
+        rawConfig: {
+          targets: [{ name: 'toy-sim', platform: 'ios', backend: toy.backend }],
+          cache: 'off',
+        },
+        env: { ...process.env, APP_URL: '', CI: '' },
+        quiet: true,
+      });
+      expect(outcome.exitCode).toBe(0);
+      // Worker-end disposal is unconditional: resources acquired lazily, with
+      // no init hook to gate on, are still released.
+      expect(toy.lifecycle).toEqual(['dispose']);
+    } finally {
+      project.cleanup();
+    }
+  });
 
   it('gates an undeclared fixture at selection via requires', async () => {
     const toy = toyBackend(); // no fixtures declared

@@ -1,4 +1,5 @@
-import { test, expect } from 'e2e';
+import { test } from '@e2edev/playwright';
+import { expect } from 'e2e';
 
 /**
  * seleniumbase.io/demo_page is one wide table holding most of the HTML control
@@ -44,7 +45,7 @@ test.describe('demo page', { requires: ['web'] }, () => {
     // A read-only input is not disabled, so no state distinguishes it.
     expect(await readOnly.isEnabled()).toBe(true);
 
-    // `getAttribute` reads an *exposed* attribute only: the driver projects a
+    // `getAttribute` reads an *exposed* attribute only: the backend projects a
     // whitelist (`type`, `id`, `name`, `placeholder`, `title`, `alt`, `value`,
     // `href`, `role`, `autocomplete`, `aria-*`). `readonly` is not on it, so
     // this returns `null` for an attribute that is present — indistinguishable

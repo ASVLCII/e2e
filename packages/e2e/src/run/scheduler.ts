@@ -331,7 +331,7 @@ class Scheduler {
   /**
    * A worker for this target, spawning one if the cap allows. Retired workers
    * keep counting against the cap until they are gone, so a discarded worker
-   * never doubles the number of live browsers. At capacity this discards an
+   * never doubles the number of live surfaces. At capacity this discards an
    * idle worker bound to another target and returns nothing; its exit wakes
    * the loop and dispatch retries with the freed slot.
    */
@@ -458,6 +458,11 @@ class Scheduler {
           else worker.state = 'idle';
         }
         this.wakeUp();
+        break;
+      }
+      case 'shutdown-done': {
+        for (const runError of message.runErrors) this.options.events.onRunError(runError);
+        if (message.debug !== undefined) this.options.events.onDebug?.(message.debug);
         break;
       }
       case 'fatal': {

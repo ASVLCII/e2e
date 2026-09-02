@@ -1,18 +1,18 @@
 /** Runner-owned query polling, strictness, and action retry (spec 08-platforms.md). */
 
 import {
-  type DriverSession,
+  type TargetSession,
   type LocatorAction,
   type LocatorExpression,
   type NodeRef,
   type OperationContext,
   type SemanticNode,
-} from '../driver/index.ts';
+} from '../backend/surface.ts';
 import {
-  asDriverError,
+  asBackendError,
   E2EError,
   TestError,
-  translateDriverError as translateDriverErrorCore,
+  translateBackendError as translateBackendErrorCore,
 } from '../internal/errors.ts';
 import { describeExpression } from './expression.ts';
 import { Deadline, POLL_INTERVAL_MS, sleep } from '../internal/time.ts';
@@ -23,22 +23,20 @@ export function isNodeVisible(node: SemanticNode | null): boolean {
 }
 
 interface EngineOptions {
-  readonly session: DriverSession;
+  readonly session: TargetSession;
   readonly signal: AbortSignal;
   readonly runId: string;
   readonly attemptId: string;
   readonly actionTimeout: number;
   readonly assertionTimeout: number;
   readonly testDeadline: Deadline;
-  /** Throws APP_NOT_OPEN before UI operations when nothing was opened yet. */
-  readonly requireOpen: () => void;
 }
 
 /** Per-attempt locator execution engine. */
 export class LocatorEngine {
   constructor(private readonly options: EngineOptions) {}
 
-  get session(): DriverSession {
+  get session(): TargetSession {
     return this.options.session;
   }
 
@@ -76,21 +74,20 @@ export class LocatorEngine {
     };
   }
 
-  /** One immediate driver resolve, retrying retryable frame misses within the deadline. */
+  /** One immediate backend resolve, retrying retryable frame misses within the deadline. */
   private async resolveOnce(
     expression: LocatorExpression,
     deadline: Deadline,
   ): Promise<readonly NodeRef[]> {
-    this.options.requireOpen();
     for (;;) {
       try {
-        return await this.session.screen.resolve(expression, this.operationWithin(deadline));
+        return await this.session.locate(expression, this.operationWithin(deadline));
       } catch (cause) {
-        if (asDriverError(cause)?.retryable === true && !deadline.expired()) {
+        if (asBackendError(cause)?.retryable === true && !deadline.expired()) {
           await sleep(POLL_INTERVAL_MS, this.options.signal);
           continue;
         }
-        throw translateDriverError(cause, expression);
+        throw translateBackendError(cause, expression);
       }
     }
   }
@@ -128,7 +125,7 @@ export class LocatorEngine {
 
   /**
    * Resolves all current matches once without waiting. The caller's deadline,
-   * when given, bounds internal retries of retryable driver errors; it
+   * when given, bounds internal retries of retryable backend errors; it
    * defaults to the action timeout.
    */
   async resolveAll(
@@ -138,13 +135,24 @@ export class LocatorEngine {
     return this.resolveOnce(expression, deadline);
   }
 
-  /** Reads one node snapshot. */
+  /**
+   * Reads one node snapshot. A concurrent locator can supersede the ref
+   * between resolve and read; that is a repeatable race, so it re-resolves
+   * while the deadline remains instead of failing the test.
+   */
   async read(expression: LocatorExpression): Promise<SemanticNode> {
-    const ref = await this.resolveForRead(expression);
-    try {
-      return await this.session.screen.read(ref, this.operation());
-    } catch (cause) {
-      throw translateDriverError(cause, expression);
+    const deadline = this.deadline(this.options.actionTimeout);
+    for (;;) {
+      const ref = await this.resolveForRead(expression);
+      try {
+        return await this.session.read(ref, this.operationWithin(deadline));
+      } catch (cause) {
+        const backendError = asBackendError(cause);
+        if (backendError?.code === 'NODE_STALE' && backendError.retryable && !deadline.expired()) {
+          continue;
+        }
+        throw translateBackendError(cause, expression);
+      }
     }
   }
 
@@ -156,42 +164,44 @@ export class LocatorEngine {
     const ref = assertSingle(await this.resolveOnce(expression, deadline), expression);
     if (ref === null) return { node: null, count: 0 };
     try {
-      const node = await this.session.screen.read(ref, this.operationWithin(deadline));
+      const node = await this.session.read(ref, this.operationWithin(deadline));
       return { node, count: 1 };
     } catch (cause) {
-      if (asDriverError(cause)?.code === 'NODE_STALE') {
+      if (asBackendError(cause)?.code === 'NODE_STALE') {
         return { node: null, count: 0 };
       }
-      throw translateDriverError(cause, expression);
+      throw translateBackendError(cause, expression);
     }
   }
 
   /**
    * Performs exactly one action against exactly one match. Stale nodes are
    * re-resolved while the deadline remains; a possibly committed action is
-   * never repeated.
+   * never repeated. An action that itself names other nodes (dragTo) is built
+   * per attempt, so its refs are re-resolved together with the source.
    */
   async perform(
     expression: LocatorExpression,
-    action: LocatorAction,
+    action: LocatorAction | ((deadline: Deadline) => Promise<LocatorAction>),
     timeoutMs?: number,
   ): Promise<void> {
     const deadline = this.deadline(timeoutMs);
     for (;;) {
       const ref = await this.resolveExactlyOne(expression, deadline);
+      const resolved = typeof action === 'function' ? await action(deadline) : action;
       try {
-        await this.session.screen.perform(ref, action, this.operationWithin(deadline));
+        await this.session.perform(ref, resolved, this.operationWithin(deadline));
         return;
       } catch (cause) {
-        const driverError = asDriverError(cause);
+        const backendError = asBackendError(cause);
         if (
-          driverError?.code === 'NODE_STALE' &&
-          driverError.retryable &&
+          backendError?.code === 'NODE_STALE' &&
+          backendError.retryable &&
           !deadline.expired()
         ) {
           continue;
         }
-        throw translateDriverError(cause, expression);
+        throw translateBackendError(cause, expression);
       }
     }
   }
@@ -208,8 +218,8 @@ function assertSingle(refs: readonly NodeRef[], expression: LocatorExpression): 
   return refs[0] ?? null;
 }
 
-/** Translates a driver error into the runner-owned public taxonomy. */
-export function translateDriverError(cause: unknown, expression?: LocatorExpression): E2EError {
+/** Translates a backend error into the runner-owned public taxonomy. */
+export function translateBackendError(cause: unknown, expression?: LocatorExpression): E2EError {
   const suffix = expression === undefined ? '' : `: ${describeExpression(expression)}`;
-  return translateDriverErrorCore(cause, suffix);
+  return translateBackendErrorCore(cause, suffix);
 }

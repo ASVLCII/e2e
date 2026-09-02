@@ -1,6 +1,6 @@
 /**
  * Worker process glue. Owns nothing but the process: it loads the config
- * itself (config modules may hold live driver instances that cannot cross
+ * itself (config modules may hold live backend handles that cannot cross
  * IPC), resolves each unit's pairs by re-importing the file, and hands all
  * actual execution to `TargetWorker`.
  */
@@ -13,18 +13,39 @@ import { resolveConfig } from '../../config/resolve.ts';
 import { setCredentialRegistry } from '../../credentials.ts';
 import { DebugTrace } from '../../internal/debug.ts';
 import { classifyError, ConfigurationError, serializeError } from '../../internal/errors.ts';
-import { resolveDriver } from '../resolve-driver.ts';
 import { SessionStore } from '../sessions.ts';
 import type { ChildProcessInbound, RunUnitMessage, WorkerBootstrap, WorkerToMain } from './protocol.ts';
 import { TargetWorker, type ResolvedUnitPairs, type TargetWorkerDeps } from './session.ts';
 
+/**
+ * Outbound messages in flight. `process.send` is asynchronous and a
+ * `process.exit` right behind it can drop the message, so exiting waits for
+ * the queue to flush: the runner must see the worker's last word.
+ */
+let outbox: Promise<void> = Promise.resolve();
+
 function send(message: WorkerToMain): void {
-  process.send?.(message);
+  outbox = outbox.then(
+    () =>
+      new Promise<void>((resolve) => {
+        try {
+          if (process.send === undefined) resolve();
+          else process.send(message, undefined, undefined, () => resolve());
+        } catch {
+          // channel already closed; nothing left to deliver
+          resolve();
+        }
+      }),
+  );
 }
 
-function fatal(cause: unknown): never {
+function exitAfterFlush(code: 0 | 1): void {
+  void outbox.then(() => process.exit(code));
+}
+
+function fatal(cause: unknown): void {
   send({ type: 'fatal', error: serializeError(classifyError(cause)) });
-  process.exit(1);
+  exitAfterFlush(1);
 }
 
 /**
@@ -74,7 +95,6 @@ async function bootstrap(message: WorkerBootstrap, debug: DebugTrace): Promise<T
   return {
     config,
     target,
-    driver: await resolveDriver(target),
     sessionStore: SessionStore.forWorker(
       message.runId,
       message.sessionsRoot,
@@ -85,7 +105,6 @@ async function bootstrap(message: WorkerBootstrap, debug: DebugTrace): Promise<T
     headed: message.headed,
     resolvePairs,
     debug,
-    disposeDriver: true,
   };
 }
 
@@ -103,18 +122,18 @@ function main(): void {
   let worker: TargetWorker | undefined;
   process.on('message', (message: ChildProcessInbound) => {
     if (message.type === 'bootstrap') {
-      // This worker owns its trace outright, so each unit-done drains the
-      // entries accumulated since the previous unit and ships them along.
+      // This worker owns its trace outright, so each drain point (unit-done,
+      // shutdown-done) ships the entries accumulated since the previous one.
       const debug = new DebugTrace(message.bootstrap.debug);
       const emit = (outbound: WorkerToMain): void => {
-        if (outbound.type === 'unit-done' && debug.enabled) {
+        if ((outbound.type === 'unit-done' || outbound.type === 'shutdown-done') && debug.enabled) {
           send({ ...outbound, debug: debug.drain() });
           return;
         }
         send(outbound);
       };
       worker = new TargetWorker(
-        { emit, fatal, finished: () => process.exit(0) },
+        { emit, fatal, finished: () => exitAfterFlush(0) },
         () => bootstrap(message.bootstrap, debug),
       );
       worker.start();

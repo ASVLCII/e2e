@@ -10,9 +10,11 @@ secrets, and the report. The thinking is yours to control.
 ```ts title="e2e.config.ts"
 import { defineConfig } from 'e2e';
 import { createAgent } from 'e2e/agent';
+import { playwright } from '@e2edev/playwright';
 
 export default defineConfig({
   app: { url: 'http://localhost:3000' },
+  targets: [{ name: 'web', platform: 'web', backend: playwright() }],
   agent: createAgent({
     system: 'You are a thorough QA agent. Verify every outcome on screen.',
   }),
@@ -72,7 +74,8 @@ rather than as a failing test, so red keeps meaning "the product misbehaved".
 itself.
 
 <Callout intent="note" title="Web today">
-This release executes web targets. The API is platform-neutral, and native
+This release ships one backend, `@e2edev/playwright`, for browsers. The API
+and the runner are platform-neutral, and native
 targets are rejected rather than approximated. Other backends plug in as
-[drivers](/writing-a-driver).
+[backends](/writing-a-backend).
 </Callout>

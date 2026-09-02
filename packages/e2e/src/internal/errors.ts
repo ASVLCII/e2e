@@ -1,6 +1,11 @@
 /** Runner-owned error taxonomy and exit-code mapping (spec 06-cli.md). */
 
-import { DriverError, type DriverErrorCode } from '../driver/index.ts';
+import {
+  BACKEND_ERROR_CODES,
+  BackendError,
+  RETRYABLE_BACKEND_ERROR_CODES,
+  type BackendErrorCode,
+} from '../backend/contract.ts';
 
 /** Message of an arbitrary thrown value, for diagnostics that must not throw. */
 export function errorMessage(cause: unknown): string {
@@ -39,39 +44,33 @@ export interface SerializedError {
 /** Marks classified errors so instances survive isolated module realms. */
 const E2E_ERROR_MARKER = Symbol.for('e2e.error.v1');
 
-/** The closed driver-1 error code set, used to recognize a foreign instance. */
-const DRIVER_ERROR_CODES: ReadonlySet<string> = new Set([
-  'NODE_STALE',
-  'FRAME_NOT_FOUND',
-  'FRAME_AMBIGUOUS',
-  'NOT_ACTIONABLE',
-  'ACTION_MAY_HAVE_COMMITTED',
-  'OPERATION_TIMEOUT',
-  'CANCELLED',
-  'UNSUPPORTED_CAPABILITY',
-  'INVALID_STATE',
-  'DRIVER_FAILURE',
-]);
-
 /**
- * Normalizes a driver failure, including one thrown by another copy of the
- * driver module.
+ * Normalizes a backend failure, including one thrown by another copy of the
+ * backend module.
  *
- * A driver imported by a config file is loaded through a different module
- * registry than the runner, so its `DriverError` is a different class and
+ * A backend imported by a config file is loaded through a different module
+ * registry than the runner, so its `BackendError` is a different class and
  * `instanceof` misses it. Detection is therefore structural, keyed on the
- * closed code set: without this, every third-party driver's typed failures
- * silently degrade to a generic error and lose their taxonomy.
+ * closed code set: without this, every out-of-tree backend's typed failures
+ * silently degrade to a generic error and lose their taxonomy. A foreign
+ * instance is held to the same retryability rule as the local class.
  */
-export function asDriverError(
+export function asBackendError(
   value: unknown,
-): { code: DriverErrorCode; message: string; retryable: boolean } | undefined {
-  if (value instanceof DriverError) return value;
-  if (!(value instanceof Error) || value.name !== 'DriverError') return undefined;
+): { code: BackendErrorCode; message: string; retryable: boolean } | undefined {
+  if (value instanceof BackendError) return value;
+  if (!(value instanceof Error) || value.name !== 'BackendError') return undefined;
   const code = (value as unknown as { code?: unknown }).code;
-  if (typeof code !== 'string' || !DRIVER_ERROR_CODES.has(code)) return undefined;
-  const retryable = (value as unknown as { retryable?: unknown }).retryable;
-  return { code: code as DriverErrorCode, message: value.message, retryable: retryable === true };
+  if (!isBackendErrorCode(code)) return undefined;
+  const retryable = (value as unknown as { retryable?: unknown }).retryable === true;
+  if (retryable && !RETRYABLE_BACKEND_ERROR_CODES.has(code)) {
+    return { code: 'BACKEND_FAILURE', message: value.message, retryable: false };
+  }
+  return { code, message: value.message, retryable };
+}
+
+function isBackendErrorCode(value: unknown): value is BackendErrorCode {
+  return typeof value === 'string' && (BACKEND_ERROR_CODES as readonly string[]).includes(value);
 }
 
 /** Base class for every runner-classified error. */
@@ -104,7 +103,7 @@ const CATEGORIES: ReadonlySet<ErrorCategory> = new Set([
 ]);
 
 /** Detects an E2EError created by another copy of this module. */
-function isForeignE2EError(value: unknown): value is Error & {
+export function isForeignE2EError(value: unknown): value is Error & {
   category: ErrorCategory;
   code: string;
   retryable: boolean;
@@ -178,39 +177,39 @@ export function combineExitCodes(codes: readonly number[]): 0 | 1 | 2 | 3 | 4 | 
 }
 
 /**
- * Canonical DriverError -> runner taxonomy mapping (spec 09-drivers.md).
- * Applies to every driver surface: launch, app, screen, web, artifacts,
- * state capture/restore, and close. Non-DriverError causes become
- * non-retryable infrastructure DRIVER_FAILURE.
+ * Canonical BackendError -> runner taxonomy mapping.
+ * Applies to every backend surface: lifecycle, app, screen, artifacts,
+ * state capture/restore, and observation. Non-BackendError causes become
+ * non-retryable infrastructure BACKEND_FAILURE.
  */
-export function translateDriverError(cause: unknown, suffix = ''): E2EError {
+export function translateBackendError(cause: unknown, suffix = ''): E2EError {
   if (cause instanceof E2EError) return cause;
-  const driverError = asDriverError(cause);
-  if (driverError !== undefined) {
-    switch (driverError.code) {
+  const backendError = asBackendError(cause);
+  if (backendError !== undefined) {
+    switch (backendError.code) {
       case 'NODE_STALE':
         return new TestError('LOCATOR_NOT_FOUND', `node became stale${suffix}`, { cause });
       case 'FRAME_NOT_FOUND':
-        return new TestError('LOCATOR_NOT_FOUND', `${driverError.message}${suffix}`, { cause });
+        return new TestError('LOCATOR_NOT_FOUND', `${backendError.message}${suffix}`, { cause });
       case 'FRAME_AMBIGUOUS':
-        return new TestError('LOCATOR_AMBIGUOUS', `${driverError.message}${suffix}`, { cause });
+        return new TestError('LOCATOR_AMBIGUOUS', `${backendError.message}${suffix}`, { cause });
       case 'NOT_ACTIONABLE':
-        return new TestError('ACTION_FAILED', `${driverError.message}${suffix}`, { cause });
+        return new TestError('ACTION_FAILED', `${backendError.message}${suffix}`, { cause });
       case 'ACTION_MAY_HAVE_COMMITTED':
-        return new TestError('ACTION_FAILED', `${driverError.message}${suffix}`, { cause });
+        return new TestError('ACTION_FAILED', `${backendError.message}${suffix}`, { cause });
       case 'OPERATION_TIMEOUT':
         return new TestError('ACTION_FAILED', `operation timed out${suffix}`, { cause });
       case 'CANCELLED':
         return new E2EError('infrastructure', 'CANCELLED', 'operation cancelled', { cause });
       case 'UNSUPPORTED_CAPABILITY':
-        return new E2EError('configuration', 'UNSUPPORTED_CAPABILITY', driverError.message, { cause });
+        return new E2EError('configuration', 'UNSUPPORTED_CAPABILITY', backendError.message, { cause });
       case 'INVALID_STATE':
-        return new TestError('APP_NOT_OPEN', driverError.message, { cause });
-      case 'DRIVER_FAILURE':
-        return new E2EError('infrastructure', 'DRIVER_FAILURE', driverError.message, { cause });
+        return new TestError('APP_NOT_OPEN', backendError.message, { cause });
+      case 'BACKEND_FAILURE':
+        return new E2EError('infrastructure', 'BACKEND_FAILURE', backendError.message, { cause });
     }
   }
-  return new E2EError('infrastructure', 'DRIVER_FAILURE', errorMessage(cause), { cause });
+  return new E2EError('infrastructure', 'BACKEND_FAILURE', errorMessage(cause), { cause });
 }
 
 /** Classifies an arbitrary thrown value into an E2EError; unknown values become test failures. */
@@ -222,8 +221,8 @@ export function classifyError(value: unknown): E2EError {
       cause: value,
     });
   }
-  if (asDriverError(value) !== undefined) {
-    return translateDriverError(value);
+  if (asBackendError(value) !== undefined) {
+    return translateBackendError(value);
   }
   if (value instanceof Error) {
     return new TestError('ERROR', value.message, { cause: value });

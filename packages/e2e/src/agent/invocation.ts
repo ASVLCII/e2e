@@ -5,10 +5,11 @@
  * explicit deadline, a model-call budget, and no shared model transcript.
  */
 
+import type { StepExecutorContext } from './executor.ts';
 import type { JSONSchema7 } from 'ai';
 import type { AgentCacheContext } from '../cache/context.ts';
 import type { ResolvedConfig } from '../config/resolve.ts';
-import type { DriverSession, Observation } from '../driver/index.ts';
+import type { TargetSession, Observation } from '../backend/surface.ts';
 import type { DebugTrace } from '../internal/debug.ts';
 import { timestamp } from '../internal/ids.ts';
 import { Deadline } from '../internal/time.ts';
@@ -58,6 +59,8 @@ export interface AgentContext {
   /** Chooses the model for a call; a vision call may use a pinned one. */
   readonly models: ModelRouter;
   readonly config: ResolvedConfig;
+  /** The target this attempt runs on. */
+  readonly target: StepExecutorContext['target'];
   /** Completed steps quoted as prior context; serial members see the whole group. */
   readonly priorSteps: () => readonly StepRecord[];
   /** Trusted project context: config.agent.context then test/group agentContext. */
@@ -187,7 +190,7 @@ export class Invocation {
     return this.runtime.engine;
   }
 
-  get session(): DriverSession {
+  get session(): TargetSession {
     return this.runtime.engine.session;
   }
 
@@ -293,7 +296,7 @@ export class Invocation {
    * Records that requested pixels did not become model input.
    *
    * Every mode that also sends the tree degrades to it. `'only'` has nothing to
-   * degrade to: continuing would answer a question about what the page presents
+   * degrade to: continuing would answer a question about what the screen presents
    * from the tree the caller deliberately excluded, so it fails instead.
    */
   private loseVision(code: VisionDegradation): void {
@@ -314,8 +317,8 @@ export class Invocation {
    * Bytes one observation may contribute to a request.
    *
    * `agent.maxObservationBytes` is the configured ceiling, but the per-call
-   * token limit binds first on a large page. Deriving the budget from what the
-   * rest of the request actually costs makes a big page truncate visibly rather
+   * token limit binds first on a large screen. Deriving the budget from what the
+   * rest of the request actually costs makes a big screen truncate visibly rather
    * than fail the adapter's pre-flight check.
    */
   private observationByteBudget(): number {
@@ -438,8 +441,8 @@ export class Invocation {
   }
 
   /**
-   * Builds a driver operation context: `actionTimeout`, capped by this
-   * invocation's deadline. Each driver call is bounded independently so one
+   * Builds a backend operation context: `actionTimeout`, capped by this
+   * invocation's deadline. Each backend call is bounded independently so one
    * hung observation cannot consume the invocation's whole clock.
    */
   operation(): ReturnType<LocatorEngine['operation']> {

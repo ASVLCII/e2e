@@ -1,10 +1,12 @@
 /**
- * Playwright error translation at the driver SPI boundary (spec/09-drivers.md
- * "Errors"): what the runner is allowed to retry, and what it must surface.
+ * Playwright error translation at the backend contract boundary: what the
+ * runner is allowed to retry, what it must surface, and what must pass through
+ * untouched because it is already classified.
  */
 
 import { describe, expect, it } from 'vitest';
-import { DriverError } from 'e2e/driver';
+import { BackendError } from 'e2e/backend';
+import { ConfigurationError, TestError } from 'e2e/backend';
 import { navigationStaleOr, staleOr, translatePwError } from '../../src/support.ts';
 
 function pwTimeout(text: string): Error {
@@ -20,40 +22,50 @@ const NAVIGATION_RACES = [
 ];
 
 describe('translatePwError', () => {
-  it('passes driver errors through untouched', () => {
-    const original = new DriverError('NODE_STALE', 'gone', { retryable: true });
+  it('passes backend errors through untouched', () => {
+    const original = new BackendError('NODE_STALE', 'gone', { retryable: true });
     expect(translatePwError(original, 'observe')).toBe(original);
+  });
+
+  it('passes runner errors through untouched: policy never becomes infrastructure', () => {
+    const denied = new ConfigurationError('POLICY_DENIED', 'origin not allowed');
+    expect(translatePwError(denied, 'navigation')).toBe(denied);
+    const invalid = new TestError('INVALID_ARGUMENT', 'not JSON');
+    expect(translatePwError(invalid, 'evaluate')).toBe(invalid);
+  });
+
+  it('recognizes a BackendError from another module copy structurally', () => {
+    const foreign = new Error('stale');
+    foreign.name = 'BackendError';
+    Object.assign(foreign, { code: 'NODE_STALE', retryable: true });
+    expect(translatePwError(foreign, 'read')).toBe(foreign);
   });
 
   it('maps a timeout to a non-retryable OPERATION_TIMEOUT', () => {
     const error = translatePwError(pwTimeout('waiting for locator'), 'observe');
-    expect(error.code).toBe('OPERATION_TIMEOUT');
-    expect(error.retryable).toBe(false);
+    expect(error).toMatchObject({ code: 'OPERATION_TIMEOUT', retryable: false });
   });
 });
 
 describe('navigationStaleOr', () => {
   it.each(NAVIGATION_RACES)('reports a capture that lost its document as retryable: %s', (text) => {
     const error = navigationStaleOr(new Error(text), 'observe');
-    expect(error.code).toBe('NODE_STALE');
-    expect(error.retryable).toBe(true);
+    expect(error).toMatchObject({ code: 'NODE_STALE', retryable: true });
     expect(error.message).toContain('observe:');
   });
 
   it('keeps a timeout a timeout: a capture that ran out of budget is not a race', () => {
     const error = navigationStaleOr(pwTimeout('observation capture timed out'), 'observe');
-    expect(error.code).toBe('OPERATION_TIMEOUT');
-    expect(error.retryable).toBe(false);
+    expect(error).toMatchObject({ code: 'OPERATION_TIMEOUT', retryable: false });
   });
 
-  it('leaves every other failure a non-retryable DRIVER_FAILURE', () => {
+  it('leaves every other failure a non-retryable BACKEND_FAILURE', () => {
     const error = navigationStaleOr(new Error('protocol error'), 'observe');
-    expect(error.code).toBe('DRIVER_FAILURE');
-    expect(error.retryable).toBe(false);
+    expect(error).toMatchObject({ code: 'BACKEND_FAILURE', retryable: false });
   });
 
-  it('never reclassifies a driver error the capture already classified', () => {
-    const original = new DriverError('DRIVER_FAILURE', 'Execution context was destroyed', {
+  it('never reclassifies a backend error the capture already classified', () => {
+    const original = new BackendError('BACKEND_FAILURE', 'Execution context was destroyed', {
       retryable: false,
     });
     expect(navigationStaleOr(original, 'observe')).toBe(original);
@@ -63,12 +75,20 @@ describe('navigationStaleOr', () => {
 describe('staleOr', () => {
   it.each(NAVIGATION_RACES)('treats a navigation race like a stale node: %s', (text) => {
     const error = staleOr(new Error(text), 'read');
-    expect(error.code).toBe('NODE_STALE');
-    expect(error.retryable).toBe(true);
+    expect(error).toMatchObject({ code: 'NODE_STALE', retryable: true });
   });
 
   it('still reports detachment and misses as stale', () => {
-    expect(staleOr(new Error('element is not attached to the DOM'), 'read').code).toBe('NODE_STALE');
-    expect(staleOr(pwTimeout('waiting for element'), 'read').retryable).toBe(true);
+    expect(staleOr(new Error('element is not attached to the DOM'), 'read')).toMatchObject({
+      code: 'NODE_STALE',
+      retryable: true,
+    });
+  });
+
+  it('keeps a timeout a timeout: locate resolves once and never waits', () => {
+    expect(staleOr(pwTimeout('waiting for element'), 'read')).toMatchObject({
+      code: 'OPERATION_TIMEOUT',
+      retryable: false,
+    });
   });
 });

@@ -1,10 +1,10 @@
-/** First-run browser provisioning for the bundled Playwright driver. */
+/** First-run browser provisioning for the Playwright backend. */
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { InfrastructureError } from 'e2e/internal';
+import { InfrastructureError } from 'e2e/backend';
 import { browserType, type BrowserName } from './browser-pool.ts';
 
 /** Returns true when the browser's executable exists on disk. */

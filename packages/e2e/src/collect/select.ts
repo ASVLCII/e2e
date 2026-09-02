@@ -1,7 +1,6 @@
 /** Option resolution and test-target selection (spec 11-lifecycle.md). */
 
 import { ConfigurationError, CollectionError } from '../internal/errors.ts';
-import { WELL_KNOWN_DRIVERS } from '../config/drivers.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
 import type { Capability, Platform } from '../types.ts';
 import type { Collection, CollectedTest } from './collect.ts';
@@ -119,17 +118,6 @@ function matchesTags(
   if (tags === undefined || tags.length === 0) return true;
   if (tagMode === 'all') return tags.every((tag) => options.tags.includes(tag));
   return tags.some((tag) => options.tags.includes(tag));
-}
-
-function driverCapabilities(target: ResolvedTarget): readonly Capability[] {
-  // Selection runs before any driver is instantiated, so a well-known id is
-  // answered from its declared hint; the instance's real manifest is validated
-  // against it before the first launch.
-  if (typeof target.driver === 'string') return WELL_KNOWN_DRIVERS[target.driver]?.capabilities ?? [];
-  // Backend targets are graded from the backend's declared capability set:
-  // observation, actions, location, and one name per contributed fixture.
-  if (target.driver === undefined) return [...(target.backend?.capabilities ?? [])];
-  return target.driver.capabilities.fixtures;
 }
 
 /**
@@ -258,15 +246,18 @@ function classifyPair(
     };
   }
 
-  const capabilities = driverCapabilities(target);
-  const missing = options.requires.filter((capability) => !capabilities.includes(capability));
+  // Targets are graded from the backend's declared capability set: harness
+  // tiers plus one name per contributed fixture. Selection runs at config
+  // load, before any backend boots, which is why the manifest is synchronous.
+  const capabilities = target.backend?.capabilities;
+  const missing = options.requires.filter((capability) => capabilities?.has(capability) !== true);
   if (missing.length > 0) {
     return {
       ...base,
       disposition: 'skip',
       skip: {
         cause: 'capability-unavailable',
-        reason: `driver lacks required capabilities: ${missing.join(', ')}`,
+        reason: `backend lacks required capabilities: ${missing.join(', ')}`,
       },
     };
   }
