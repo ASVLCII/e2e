@@ -15,7 +15,6 @@ import { join } from 'node:path';
 import { BackendError, type SemanticNode } from '../backend/surface.ts';
 import { ConfigurationError, TestError } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
-import { createRedactor } from '../internal/redact.ts';
 import type { Deadline } from '../internal/time.ts';
 import { resolveNavigationUrl } from '../internal/urls.ts';
 import type { StepMetrics, StepModelInfo } from '../run/steps.ts';
@@ -56,6 +55,7 @@ import {
   type AgentObservation,
 } from './observation.ts';
 import { checkStepClock, instrumentPhase, retryingObserve } from './phases.ts';
+import { describeAction, type RecordableAction } from './actions.ts';
 import { authorizeSecretFill } from './secrets.ts';
 import { StepTraceSession, type StepCacheHost } from './step-cache.ts';
 
@@ -187,6 +187,13 @@ class ActDispatch {
   /** Aborts the executor on any hard stop, so a step never outlives its clock. */
   private readonly stepAbort = new AbortController();
   /**
+   * The one signal everything inside the step aborts with: the attempt's
+   * cancellation or the step's own hard stop. Built once in the constructor
+   * so the executor context, the replay host, and the settle clock can never
+   * disagree about what "the step's signal" means.
+   */
+  private readonly stepSignal: AbortSignal;
+  /**
    * Serializes observations and actions in call order. An executor (or an AI
    * SDK loop running parallel tool calls) that issues a second action before
    * the first settles would otherwise resolve both targets against the same
@@ -218,6 +225,7 @@ class ActDispatch {
     private readonly runtime: AgentContext,
     private readonly spec: DispatchSpec,
   ) {
+    this.stepSignal = AbortSignal.any([runtime.signal, this.stepAbort.signal]);
     this.timeoutMs = resolveTimeout(spec.timeout, runtime.config.timeout);
     this.deadline = runtime.engine.deadline(this.timeoutMs);
     this.maxActions = resolveBoundedBudget(
@@ -231,7 +239,7 @@ class ActDispatch {
       'maxModelCalls',
     );
     this.metrics.contextBytes = new TextEncoder().encode(runtime.agentContext ?? '').byteLength;
-    this.redact = createRedactor(runtime.secretValues);
+    this.redact = runtime.redact;
     // Only act steps are cacheable: an assert must not change state, so its
     // trace would be empty — nothing to replay, nothing worth a read. The
     // dispatch always runs inside a recorded step; a missing index would mean
@@ -282,7 +290,7 @@ class ActDispatch {
       },
       target: this.runtime.target,
       ...(replayedPrefix === undefined ? {} : { replayedPrefix }),
-      signal: AbortSignal.any([this.runtime.signal, this.stepAbort.signal]),
+      signal: this.stepSignal,
       // Resolved on first read, so executors that bring their own model (or
       // none) never pay for — or fail on — config model resolution.
       get model() {
@@ -320,46 +328,41 @@ class ActDispatch {
   private buildActions(): ExecutorActions {
     return {
       tap: (target) =>
-        this.commitTargeted(
-          'tap',
-          target,
-          (node) => this.session.perform(node.ref, { kind: 'tap' }, this.operation()),
-          (node) => this.stepCache?.record({ name: 'tap', node }),
-        ),
+        this.commitTargeted('tap', target, async (node) => {
+          await this.session.perform(node.ref, { kind: 'tap' }, this.operation());
+          return { name: 'tap', node };
+        }),
       type: (target, value) => {
         if (typeof value !== 'string') {
           throw new TestError('INVALID_ARGUMENT', 'type value must be a string');
         }
-        return this.commitTargeted(
-          'type',
-          target,
-          (node) =>
-            this.session.perform(node.ref, { kind: 'fill', value, sensitive: false }, this.operation()),
-          (node) => this.stepCache?.record({ name: 'type', node, value }),
-        );
+        return this.commitTargeted('type', target, async (node) => {
+          await this.session.perform(
+            node.ref,
+            { kind: 'fill', value, sensitive: false },
+            this.operation(),
+          );
+          return { name: 'type', node, value };
+        });
       },
       typeSecret: (target, name) => this.typeSecret(target, name),
       press: (target, key) => {
         if (typeof key !== 'string' || key.trim() === '' || key.length > 64) {
           throw new TestError('INVALID_ARGUMENT', 'press key must be a short non-empty string');
         }
-        return this.commitTargeted(
-          'press',
-          target,
-          (node) => this.session.perform(node.ref, { kind: 'press', key }, this.operation()),
-          (node) => this.stepCache?.record({ name: 'press', node, key }),
-        );
+        return this.commitTargeted('press', target, async (node) => {
+          await this.session.perform(node.ref, { kind: 'press', key }, this.operation());
+          return { name: 'press', node, key };
+        });
       },
       select: (target, value) => {
         if (typeof value !== 'string' || value === '') {
           throw new TestError('INVALID_ARGUMENT', 'select value must be a non-empty option label');
         }
-        return this.commitTargeted(
-          'selectOption',
-          target,
-          (node) => this.session.perform(node.ref, { kind: 'selectOption', value }, this.operation()),
-          (node) => this.stepCache?.record({ name: 'select', node, value }),
-        );
+        return this.commitTargeted('selectOption', target, async (node) => {
+          await this.session.perform(node.ref, { kind: 'selectOption', value }, this.operation());
+          return { name: 'select', node, value };
+        });
       },
       scroll: (direction, target) => this.scroll(direction, target),
       navigate: (url) => this.navigate(url),
@@ -407,10 +410,12 @@ class ActDispatch {
   /** The replay engine's narrow view of this dispatch. */
   private replayHost(): StepCacheHost {
     return {
-      observeNodes: async () => (await this.observeLatest()).nodes,
-      latestShape: () => (this.latest === undefined ? undefined : observationShape(this.latest)),
+      observe: async () => {
+        const observation = await this.observeLatest();
+        return { nodes: observation.nodes, shape: observationShape(observation) };
+      },
       actions: this.buildActions(),
-      signal: AbortSignal.any([this.runtime.signal, this.stepAbort.signal]),
+      signal: this.stepSignal,
       remainingMs: () => this.deadline.remaining(),
       redact: this.redact,
       testIdAttribute: this.runtime.config.testIdAttribute,
@@ -749,7 +754,7 @@ class ActDispatch {
               // The step's own hard stop must interrupt a settle sleep too —
               // the attempt signal alone would let settling outlive the step
               // by one poll interval.
-              signal: AbortSignal.any([this.runtime.signal, this.stepAbort.signal]),
+              signal: this.stepSignal,
             })
           : this.captureObservation(),
       (prepared) => ({ count: prepared.nodes.size, bytes: prepared.bytes }),
@@ -769,7 +774,7 @@ class ActDispatch {
       api: this.spec.api,
     });
     return prepareObservation(raw, {
-      secrets: this.runtime.secretValues,
+      redact: this.runtime.redact,
       maxBytes: this.runtime.config.agent.maxObservationBytes,
       testIdAttribute: this.runtime.config.testIdAttribute,
     });
@@ -798,16 +803,18 @@ class ActDispatch {
     return node;
   }
 
-  /** Runs one grammar action against the action budget, recorded as a backend event. */
-  private runAction(name: string, body: () => Promise<void>, onCommit?: () => void): Promise<void> {
-    return this.serialized(() => this.runActionNow(name, body, onCommit));
+  /**
+   * Runs one grammar action against the action budget, recorded as a backend
+   * event. The body performs the backend call and returns the committed
+   * action's recordable descriptor — one value carries both concerns: the
+   * event's `detail` prose derives from it in a pure hook, and the dispatch
+   * writes it to the trace cache after the phase settles.
+   */
+  private runAction(name: string, body: () => Promise<RecordableAction>): Promise<void> {
+    return this.serialized(() => this.runActionNow(name, body));
   }
 
-  private async runActionNow(
-    name: string,
-    body: () => Promise<void>,
-    onCommit?: () => void,
-  ): Promise<void> {
+  private async runActionNow(name: string, body: () => Promise<RecordableAction>): Promise<void> {
     this.checkpoint();
     if (this.metrics.actionSteps >= this.maxActions) {
       throw this.fatalize(
@@ -819,30 +826,33 @@ class ActDispatch {
     }
     // The budget slot is consumed either way: a failed dispatch was an attempt.
     this.metrics.actionSteps += 1;
+    let action: RecordableAction;
     try {
-      await instrumentPhase(
+      action = await instrumentPhase(
         this.runtime,
         { api: this.spec.api, kind: 'backend', phase: 'agent.action', name },
         body,
+        (committed) => ({
+          detail: describeAction(committed, this.redact, this.runtime.config.testIdAttribute).summary,
+        }),
       );
     } catch (cause) {
       this.checkpoint(cause);
       throw cause;
     }
-    onCommit?.();
+    this.stepCache?.record(action);
   }
 
   /** One action against a resolved node; a stale ref asks for a re-observe. */
   private commitTargeted(
     name: string,
     target: ExecutorTarget,
-    body: (node: SemanticNode) => Promise<void>,
-    onCommit?: (node: SemanticNode) => void,
+    perform: (node: SemanticNode) => Promise<RecordableAction>,
   ): Promise<void> {
     return this.runAction(name, async () => {
       const node = this.resolveTarget(target);
       try {
-        await body(node);
+        return await perform(node);
       } catch (cause) {
         if (cause instanceof BackendError && cause.code === 'NODE_STALE') {
           throw new AgentError(
@@ -853,7 +863,6 @@ class ActDispatch {
         }
         throw cause;
       }
-      onCommit?.(node);
     });
   }
 
@@ -862,19 +871,16 @@ class ActDispatch {
       throw new TestError('INVALID_ARGUMENT', `invalid scroll direction "${String(direction)}"`);
     }
     if (target === undefined) {
-      await this.runAction(
-        'scroll',
-        () => this.session.swipe(direction, undefined, this.operation()),
-        () => this.stepCache?.record({ name: 'scroll', direction }),
-      );
+      await this.runAction('scroll', async () => {
+        await this.session.swipe(direction, undefined, this.operation());
+        return { name: 'scroll', direction };
+      });
       return;
     }
-    await this.commitTargeted(
-      'scroll',
-      target,
-      (node) => this.session.perform(node.ref, { kind: 'swipe', direction }, this.operation()),
-      (node) => this.stepCache?.record({ name: 'scroll', direction, node }),
-    );
+    await this.commitTargeted('scroll', target, async (node) => {
+      await this.session.perform(node.ref, { kind: 'swipe', direction }, this.operation());
+      return { name: 'scroll', direction, node };
+    });
   }
 
   /**
@@ -891,30 +897,26 @@ class ActDispatch {
         `secret "${name}" was not declared in this step's params; only declared secrets can be filled`,
       );
     }
-    await this.commitTargeted(
-      'typeSecret',
-      target,
-      async (node) => {
-        const plaintext = await authorizeSecretFill(
-          {
-            session: this.session,
-            operation: () => this.operation(),
-            recordPolicy: (policy, decision, code) => this.recordPolicy(policy, decision, code),
-          },
-          this.runtime,
-          secret,
-          node,
-        );
-        await this.session.perform(
-          node.ref,
-          { kind: 'fill', value: plaintext, sensitive: true },
-          this.operation(),
-        );
-        this.runtime.taint.value = true;
-      },
+    await this.commitTargeted('typeSecret', target, async (node) => {
+      const plaintext = await authorizeSecretFill(
+        {
+          session: this.session,
+          operation: () => this.operation(),
+          recordPolicy: (policy, decision, code) => this.recordPolicy(policy, decision, code),
+        },
+        this.runtime,
+        secret,
+        node,
+      );
+      await this.session.perform(
+        node.ref,
+        { kind: 'fill', value: plaintext, sensitive: true },
+        this.operation(),
+      );
+      this.runtime.taint.value = true;
       // Recorded by stable name only; replay re-runs the full authorization.
-      (node) => this.stepCache?.record({ name: 'typeSecret', node, secret: name }),
-    );
+      return { name: 'typeSecret', node, secret: name };
+    });
   }
 
   /** Records one policy decision as a child event, mirroring the locate tier. */
@@ -941,10 +943,9 @@ class ActDispatch {
     ).url;
     // The raw argument is recorded, not the resolved URL: replay re-resolves
     // through the same base and origin policy this call just passed.
-    await this.runAction(
-      'navigate',
-      () => this.session.app.open(resolved, this.operation()),
-      () => this.stepCache?.record({ name: 'navigate', url }),
-    );
+    await this.runAction('navigate', async () => {
+      await this.session.app.open(resolved, this.operation());
+      return { name: 'navigate', url };
+    });
   }
 }

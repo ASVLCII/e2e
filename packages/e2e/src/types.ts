@@ -530,6 +530,15 @@ export interface AppConfig {
   allowedOrigins?: readonly string[];
   environment?: 'test' | 'staging' | 'production';
   allowProduction?: boolean;
+  /**
+   * Stable logical identity of the app under test. By default cache and
+   * session identity derive from the base URL's origin, so an ephemeral
+   * per-deploy origin (a PR preview) cold-starts every entry. Setting an
+   * explicit identity keys them by what the app *is* instead of where it
+   * happens to be served this run. Never set one identity across genuinely
+   * different apps or environments — recorded traces would replay across them.
+   */
+  identity?: string;
 }
 
 /**
@@ -653,9 +662,19 @@ export interface E2EConfig {
       string,
       {
         username: string;
-        password: string;
+        password: string | SecretProvider;
         allowedOrigins?: readonly string[];
       }
     >
   >;
 }
+
+/**
+ * Resolves a secret's plaintext at fill time — a vault lookup, a freshly
+ * computed TOTP — instead of a value baked at config load. Called on every
+ * fill after the full authorization policy passes; the resolved value goes
+ * straight to the trusted driver, joins runner-side redaction, and is never
+ * logged, cached, or sent to a model. Like executors and stores, a provider
+ * never crosses a process boundary: workers re-resolve the config module.
+ */
+export type SecretProvider = () => string | Promise<string>;

@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createAgentCacheContext, flushStagedTraces } from '../../src/cache/context.ts';
+import { buildTraceEntry, readTraceEntry } from '../../src/cache/trace.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
 import type { ActionTrace, TraceCacheStore } from '../../src/types.ts';
 
@@ -19,21 +20,28 @@ function resolve(
 
 const APP = { app: { url: 'http://localhost:4272' } };
 
-/** In-memory store standing in for a remote (Redis-shaped) implementation. */
-function memoryStore(): TraceCacheStore & { entries: Map<string, ActionTrace> } {
-  const entries = new Map<string, ActionTrace>();
+/**
+ * In-memory store standing in for a remote (Redis-shaped) implementation:
+ * the reference pattern a store author should copy — entries framed with
+ * `buildTraceEntry` on write and validated with `readTraceEntry` on read.
+ */
+function memoryStore(): TraceCacheStore & { entries: Map<string, string> } {
+  const entries = new Map<string, string>();
   return {
     entries,
     writable: true,
     read: async (keyHash) => {
-      const payload = entries.get(keyHash);
-      return payload === undefined
-        ? { status: 'miss' }
-        : { status: 'hit', entry: { schemaVersion: 'trace-1', createdAt: '', payload }, bytes: 1 };
+      const serialized = entries.get(keyHash);
+      if (serialized === undefined) return { status: 'miss' };
+      const entry = readTraceEntry(JSON.parse(serialized));
+      return entry === undefined
+        ? { status: 'invalid', reason: 'not a trace-1 entry', bytes: serialized.length }
+        : { status: 'hit', entry, bytes: serialized.length };
     },
     write: async (keyHash, payload) => {
-      entries.set(keyHash, payload);
-      return { bytes: 1 };
+      const serialized = JSON.stringify(buildTraceEntry(payload));
+      entries.set(keyHash, serialized);
+      return { bytes: serialized.length };
     },
     delete: async (keyHash) => {
       entries.delete(keyHash);
@@ -78,6 +86,16 @@ describe('cache config resolution', () => {
   it('forces read-write down to read-only in CI', () => {
     const resolved = resolve({ ...APP, cache: 'read-write' }, { ...BASE_ENV, CI: '1' }).cache;
     expect(resolved.mode).toBe('read-only');
+  });
+
+  it('exempts a host-supplied store from the CI clamp', () => {
+    const store = memoryStore();
+    const resolved = resolve(
+      { ...APP, cache: { mode: 'read-write', store } },
+      { ...BASE_ENV, CI: '1' },
+    ).cache;
+    expect(resolved.mode).toBe('read-write');
+    expect(resolved.store).toBe(store);
   });
 
   it('rejects unknown modes, unknown keys, and non-store store values', () => {
@@ -126,7 +144,7 @@ describe('flushStagedTraces', () => {
 
   it('confirms traces followed by a later passed step and evicts the implicated one', async () => {
     const store = memoryStore();
-    store.entries.set(KEY_B, trace('stale good flow'));
+    store.entries.set(KEY_B, JSON.stringify(buildTraceEntry(trace('stale good flow'))));
     const context = contextWith(store);
     context.staged.push({ keyHash: KEY_A, trace: trace('confirmed'), stepIndex: 1 });
     context.staged.push({ keyHash: KEY_B, trace: trace('implicated'), stepIndex: 3 });
@@ -137,13 +155,13 @@ describe('flushStagedTraces', () => {
 
   it('neither writes nor evicts on an interrupted attempt', async () => {
     const store = memoryStore();
-    store.entries.set(KEY_B, trace('still good'));
+    store.entries.set(KEY_B, JSON.stringify(buildTraceEntry(trace('still good'))));
     const context = contextWith(store);
     context.staged.push({ keyHash: KEY_A, trace: trace('unwritten'), stepIndex: 1 });
     context.staged.push({ keyHash: KEY_B, trace: trace('kept'), stepIndex: 3 });
     await flushStagedTraces(context, 3, 'interrupted');
     expect(store.entries.has(KEY_A)).toBe(false);
-    expect(store.entries.get(KEY_B)?.summary).toBe('still good');
+    expect(store.entries.get(KEY_B)).toContain('still good');
     expect(context.staged).toHaveLength(0);
   });
 

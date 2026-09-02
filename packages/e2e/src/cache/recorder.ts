@@ -16,10 +16,9 @@
  * state. A poisoned trace still documents what happened; it never replays.
  */
 
-import type { SemanticNode } from '../backend/surface.ts';
-import { sanitizeText } from '../internal/errors.ts';
-import type { ScrollDirection } from '../types.ts';
+import { describeAction, type RecordableAction } from '../agent/actions.ts';
 import {
+  bound,
   MAX_TRACE_ACTIONS,
   MAX_TRACE_DESCRIPTOR_CHARS,
   MAX_TRACE_INPUT_CHARS,
@@ -28,16 +27,6 @@ import {
   type RecordedAction,
   type TraceTargetDescriptor,
 } from './trace.ts';
-
-/** One committed grammar action, addressed by the node it actually ran against. */
-export type RecordableAction =
-  | { readonly name: 'tap'; readonly node: SemanticNode }
-  | { readonly name: 'type'; readonly node: SemanticNode; readonly value: string }
-  | { readonly name: 'typeSecret'; readonly node: SemanticNode; readonly secret: string }
-  | { readonly name: 'press'; readonly node: SemanticNode; readonly key: string }
-  | { readonly name: 'select'; readonly node: SemanticNode; readonly value: string }
-  | { readonly name: 'scroll'; readonly direction: ScrollDirection; readonly node?: SemanticNode }
-  | { readonly name: 'navigate'; readonly url: string };
 
 export interface TraceRecorderOptions {
   /** The run's secret redactor; applied to every recorded string. */
@@ -61,11 +50,8 @@ export class TraceRecorder {
 
   /** Records one committed grammar action. */
   record(action: RecordableAction): void {
-    const target =
-      action.name === 'navigate' || action.node === undefined
-        ? undefined
-        : describeTarget(action.node, this.redact, this.testIdAttribute);
-    this.push(this.toRecorded(action, target));
+    const { target, summary } = describeAction(action, this.redact, this.testIdAttribute);
+    this.push(this.toRecorded(action, target, summary));
   }
 
   /**
@@ -106,9 +92,17 @@ export class TraceRecorder {
     };
   }
 
+  /**
+   * Builds the stored variant for one action. The descriptor and the prose
+   * come from `describeAction` — already redacted and bounded, and the same
+   * text the live event carried. Stored inputs still go through `verbatim`,
+   * whose poisoning marks the trace non-replayable when a value cannot be
+   * kept whole.
+   */
   private toRecorded(
     action: RecordableAction,
     target: TraceTargetDescriptor | undefined,
+    summary: string,
   ): RecordedAction {
     // A targeted commit whose node yields no durable descriptor cannot be
     // re-found; the trace stays honest by poisoning instead of guessing.
@@ -117,65 +111,26 @@ export class TraceRecorder {
       this.truncated = true;
       return { role: 'unknown' };
     };
-    const where = describeForSummary(target);
-    // Safe values are derived first and used for both the stored input and
-    // the summary, so a value the redactor rewrites can never leak through
-    // the prose either.
     switch (action.name) {
       case 'tap':
-        return { name: 'tap', summary: bound(`tap ${where}`, MAX_TRACE_SUMMARY_CHARS), target: requireTarget() };
-      case 'type': {
-        const value = this.verbatim(action.value);
-        return {
-          name: 'type',
-          summary: bound(`type ${quote(value)} into ${where}`, MAX_TRACE_SUMMARY_CHARS),
-          target: requireTarget(),
-          value,
-        };
-      }
+        return { name: 'tap', summary, target: requireTarget() };
+      case 'type':
+        return { name: 'type', summary, target: requireTarget(), value: this.verbatim(action.value) };
       case 'typeSecret':
-        return {
-          name: 'typeSecret',
-          summary: bound(`fill secret ${quote(action.secret)} into ${where}`, MAX_TRACE_SUMMARY_CHARS),
-          target: requireTarget(),
-          secret: action.secret,
-        };
-      case 'press': {
-        const key = this.verbatim(action.key);
-        return {
-          name: 'press',
-          summary: bound(`press ${quote(key)} on ${where}`, MAX_TRACE_SUMMARY_CHARS),
-          target: requireTarget(),
-          key,
-        };
-      }
-      case 'select': {
-        const value = this.verbatim(action.value);
-        return {
-          name: 'select',
-          summary: bound(`select ${quote(value)} in ${where}`, MAX_TRACE_SUMMARY_CHARS),
-          target: requireTarget(),
-          value,
-        };
-      }
+        return { name: 'typeSecret', summary, target: requireTarget(), secret: action.secret };
+      case 'press':
+        return { name: 'press', summary, target: requireTarget(), key: this.verbatim(action.key) };
+      case 'select':
+        return { name: 'select', summary, target: requireTarget(), value: this.verbatim(action.value) };
       case 'scroll':
         return {
           name: 'scroll',
-          summary: bound(
-            target === undefined ? `scroll ${action.direction}` : `scroll ${action.direction} on ${where}`,
-            MAX_TRACE_SUMMARY_CHARS,
-          ),
+          summary,
           direction: action.direction,
           ...(target === undefined ? {} : { target }),
         };
-      case 'navigate': {
-        const url = this.verbatim(action.url);
-        return {
-          name: 'navigate',
-          summary: bound(`navigate to ${quote(url)}`, MAX_TRACE_SUMMARY_CHARS),
-          url,
-        };
-      }
+      case 'navigate':
+        return { name: 'navigate', summary, url: this.verbatim(action.url) };
     }
   }
 
@@ -199,56 +154,4 @@ export class TraceRecorder {
     }
     this.actions.push(action);
   }
-}
-
-/**
- * Builds the durable descriptor for one resolved node: the semantic fields
- * replay re-finds it by, plus the backend's structural selector hint (kept as
- * provenance for tuned policies; the conservative relocator ignores it).
- * Values a secure node holds are never part of it — descriptors carry how a
- * node is named, not what it contains.
- */
-export function describeTarget(
-  node: SemanticNode,
-  redact: (text: string) => string,
-  testIdAttribute: string,
-): TraceTargetDescriptor | undefined {
-  const field = (value: string | undefined): string | undefined => {
-    if (value === undefined) return undefined;
-    const collapsed = redact(sanitizeText(value)).replace(/\s+/g, ' ').trim();
-    return collapsed === '' ? undefined : bound(collapsed, MAX_TRACE_DESCRIPTOR_CHARS);
-  };
-  const role = field(node.role);
-  const name = field(node.name);
-  const text = field(node.text);
-  const testId = field(node.attributes?.[testIdAttribute]);
-  const placeholder = field(node.attributes?.['placeholder']);
-  const selector = node.selector === undefined ? undefined : bound(node.selector, MAX_TRACE_DESCRIPTOR_CHARS);
-  const inputPurpose =
-    node.inputPurpose === undefined || node.inputPurpose === 'none' ? undefined : node.inputPurpose;
-  const descriptor: TraceTargetDescriptor = {
-    ...(role === undefined ? {} : { role }),
-    ...(name === undefined ? {} : { name }),
-    ...(text === undefined || text === name ? {} : { text }),
-    ...(testId === undefined ? {} : { testId }),
-    ...(placeholder === undefined ? {} : { placeholder }),
-    ...(selector === undefined ? {} : { selector }),
-    ...(inputPurpose === undefined ? {} : { inputPurpose }),
-  };
-  return Object.keys(descriptor).length === 0 ? undefined : descriptor;
-}
-
-function describeForSummary(target: TraceTargetDescriptor | undefined): string {
-  if (target === undefined) return 'the screen';
-  const label = target.name ?? target.text ?? target.placeholder ?? target.testId ?? '';
-  const role = target.role ?? 'node';
-  return label === '' ? role : `${role} ${JSON.stringify(bound(label, 40))}`;
-}
-
-function quote(value: string): string {
-  return JSON.stringify(bound(value, 40));
-}
-
-function bound(text: string, maxChars: number): string {
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
 }

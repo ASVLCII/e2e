@@ -129,6 +129,57 @@ describe('resolveConfig', () => {
     ).toBe('staging');
   });
 
+  it('accepts a provider-backed credential password; env override wins over it', () => {
+    const provider = () => 'fresh-totp';
+    const withProvider = resolve({
+      app: { url: 'https://app.test' },
+      credentials: { admin: { username: 'admin', password: provider } },
+    });
+    expect(withProvider.credentials.get('admin')?.password).toBe(provider);
+    const overridden = resolve(
+      {
+        app: { url: 'https://app.test' },
+        credentials: { admin: { username: 'admin', password: provider } },
+      },
+      { E2E_USER_ADMIN_PASSWORD: 'rotated' },
+    );
+    expect(overridden.credentials.get('admin')?.password).toBe('rotated');
+    expect(() =>
+      resolve({
+        app: { url: 'https://app.test' },
+        credentials: { admin: { username: 'admin', password: 42 as never } },
+      }),
+    ).toThrow(/password must be a non-empty string or a provider function/);
+  });
+
+  it('rejects an empty credential password at config time, including an empty env override', () => {
+    expect(() =>
+      resolve({
+        app: { url: 'https://app.test' },
+        credentials: { admin: { username: 'admin', password: '' } },
+      }),
+    ).toThrow(/password must be a non-empty string/);
+    expect(() =>
+      resolve(
+        {
+          app: { url: 'https://app.test' },
+          credentials: { admin: { username: 'admin', password: 'configured' } },
+        },
+        { E2E_USER_ADMIN_PASSWORD: '' },
+      ),
+    ).toThrow(/password must be a non-empty string/);
+  });
+
+  it('accepts a stable app.identity and rejects an empty one', () => {
+    expect(resolve({ app: { url: 'https://app.test', identity: 'checkout-app' } }).app.identity).toBe(
+      'checkout-app',
+    );
+    expect(resolve({ app: { url: 'https://app.test' } }).app.identity).toBeUndefined();
+    expect(() => resolve({ app: { url: 'https://app.test', identity: '  ' } })).toThrow(
+      /app.identity must be a non-empty string/,
+    );
+  });
+
   it('rejects production without allowProduction', () => {
     expect(() =>
       resolve({ app: { url: 'https://app.example.com', environment: 'production' } }),

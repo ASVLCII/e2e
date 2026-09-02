@@ -92,7 +92,9 @@ export async function flushStagedTraces(
 /**
  * Builds one attempt's cache context, or undefined when the cache is off.
  * A configured custom store replaces the file store wholesale — that is the
- * seam a cloud-shared store (Redis, an API) plugs into.
+ * seam a cloud-shared store (Redis, an API) plugs into. Its hits are
+ * re-validated at the one read site (`StepTraceSession.tryReplay`), like
+ * every other store's.
  */
 export function createAgentCacheContext(options: {
   readonly cache: ResolvedCacheConfig;

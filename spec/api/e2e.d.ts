@@ -716,6 +716,15 @@ export interface AppConfig {
   allowedOrigins?: readonly string[];
   environment?: 'test' | 'staging' | 'production';
   allowProduction?: boolean;
+  /**
+   * Stable logical identity of the app under test. By default cache and
+   * session identity derive from the base URL's origin, so an ephemeral
+   * per-deploy origin (a PR preview) cold-starts every entry. Setting an
+   * explicit identity keys them by what the app *is* instead of where it
+   * happens to be served this run. Never set one identity across genuinely
+   * different apps or environments — recorded traces would replay across them.
+   */
+  identity?: string;
 }
 
 /**
@@ -867,6 +876,16 @@ export type CacheReadResult =
   | { readonly status: 'miss' }
   | { readonly status: 'invalid'; readonly reason: string; readonly bytes?: number };
 
+/** Wraps one trace as a fresh entry, for a custom store's write path. */
+export function buildTraceEntry(payload: ActionTrace): TraceEntry;
+
+/**
+ * Reads one document as a `trace-1` entry, or returns undefined when it is
+ * not one this runner can trust. A custom store validates its read path with
+ * exactly this — the same framing the default file store uses.
+ */
+export function readTraceEntry(document: unknown): TraceEntry | undefined;
+
 /**
  * The entry store. The default is one file per key digest under
  * `.e2e/cache/`; a custom implementation (a shared remote cache) replaces it
@@ -966,12 +985,22 @@ export interface E2EConfig {
       string,
       {
         username: string;
-        password: string;
+        password: string | SecretProvider;
         allowedOrigins?: readonly string[];
       }
     >
   >;
 }
+
+/**
+ * Resolves a secret's plaintext at fill time — a vault lookup, a freshly
+ * computed TOTP — instead of a value baked at config load. Called on every
+ * fill after the full authorization policy passes; the resolved value goes
+ * straight to the trusted driver, joins runner-side redaction, and is never
+ * logged, cached, or sent to a model. Like executors and stores, a provider
+ * never crosses a process boundary: workers re-resolve the config module.
+ */
+export type SecretProvider = () => string | Promise<string>;
 
 /** Type-checks and returns an e2e configuration object. */
 export function defineConfig(config: E2EConfig): E2EConfig;

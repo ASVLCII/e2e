@@ -13,6 +13,7 @@ import type {
   CommandConfig,
   E2EConfig,
   Platform,
+  SecretProvider,
   TraceCacheStore,
 } from '../types.ts';
 import { isBackendHandle, type BackendHandle } from '../backend/index.ts';
@@ -37,7 +38,8 @@ export interface ResolvedTarget {
 export interface ResolvedCredential {
   readonly name: string;
   readonly username: string;
-  readonly password: string;
+  /** A static value, or a provider resolved fresh on every authorized fill. */
+  readonly password: string | SecretProvider;
   readonly allowedOrigins: readonly string[] | undefined;
 }
 
@@ -56,6 +58,8 @@ export interface ResolvedConfig {
     readonly environment: 'test' | 'staging' | 'production';
     readonly allowProduction: boolean;
     readonly command: CommandConfig | undefined;
+    /** Stable logical app identity; overrides the origin for cache/session keying. */
+    readonly identity: string | undefined;
   };
   readonly targets: readonly ResolvedTarget[];
   readonly tests: readonly string[];
@@ -137,6 +141,7 @@ const APP_KEYS = new Set([
   'allowedOrigins',
   'environment',
   'allowProduction',
+  'identity',
 ]);
 
 /** True when CI mode is active per 05-config.md. */
@@ -260,9 +265,11 @@ export function resolveConfig(
  * Resolves the `cache` key. The cache is opt-out: an unset key means
  * `read-write`, so a project earns replay speed without asking for it, and
  * `cache: 'off'` or `--no-cache` (which wins over the config) turns it off.
- * CI forces read-only whatever the config or flag chose short of off:
+ * CI forces the default file store from `read-write` down to `read-only`:
  * committed caches are untrusted input, and a CI run never publishes what it
- * learned (spec 10-determinism.md).
+ * learned (spec 10-determinism.md). A host-supplied `cache.store` is exempt —
+ * it is not a committed file cache, and the host states its own trust through
+ * the store's `writable` flag.
  */
 function resolveCacheConfig(
   raw: E2EConfig,
@@ -310,7 +317,7 @@ function resolveCacheConfig(
     );
   }
   if (cliMode !== undefined) mode = cliMode;
-  if (ci && mode === 'read-write') mode = 'read-only';
+  if (ci && mode === 'read-write' && store === undefined) mode = 'read-only';
   return {
     mode,
     store,
@@ -384,6 +391,7 @@ function resolveApp(raw: E2EConfig, env: NodeJS.ProcessEnv): ResolvedConfig['app
         environment: 'test',
         allowProduction: false,
         command: undefined,
+        identity: undefined,
       };
     }
     throw new ConfigurationError(
@@ -438,6 +446,11 @@ function resolveApp(raw: E2EConfig, env: NodeJS.ProcessEnv): ResolvedConfig['app
     }
   }
 
+  const identity = raw.app?.identity;
+  if (identity !== undefined && (typeof identity !== 'string' || identity.trim() === '')) {
+    throw new ConfigurationError('INVALID_CONFIG', 'app.identity must be a non-empty string');
+  }
+
   return {
     configured: true,
     base,
@@ -446,6 +459,7 @@ function resolveApp(raw: E2EConfig, env: NodeJS.ProcessEnv): ResolvedConfig['app
     environment,
     allowProduction,
     command,
+    identity,
   };
 }
 
@@ -536,7 +550,15 @@ function resolveCredentials(
   for (const [name, credential] of Object.entries(raw.credentials ?? {})) {
     const envPrefix = `E2E_USER_${name.toUpperCase().replaceAll(/[^A-Z0-9]/g, '_')}`;
     const username = env[`${envPrefix}_USERNAME`] ?? credential.username;
+    // An env override always wins, including over a provider: the operator
+    // rotating a credential must not need to know how it was configured.
     const password = env[`${envPrefix}_PASSWORD`] ?? credential.password;
+    if ((typeof password !== 'string' && typeof password !== 'function') || password === '') {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `credential "${name}" password must be a non-empty string or a provider function`,
+      );
+    }
     resolved.set(name, {
       name,
       username,
