@@ -10,6 +10,7 @@ import type {
   testCaseBrand,
 } from './internal/brands.ts';
 import type { StepExecutor } from './agent/executor.ts';
+import type { BackendHandle } from './backend/index.ts';
 import type { TraceCacheStore } from './cache/store.ts';
 
 export type { CacheReadResult, TraceCacheStore } from './cache/store.ts';
@@ -27,7 +28,7 @@ export type JsonValue =
   | readonly JsonValue[];
 
 export type Platform = 'web' | 'ios' | 'android' | (string & {});
-export type Capability = 'web' | 'device' | (string & {});
+export type Capability = 'web' | (string & {});
 export type ScrollDirection = 'up' | 'down' | 'left' | 'right';
 export type Momentum = 'none' | 'slow' | 'fast';
 
@@ -491,26 +492,6 @@ export interface Web {
   };
 }
 
-/** Reserved mobile surface. It is not part of the web-0.1 execution profile. */
-export interface Device {
-  readonly platform: 'ios' | 'android';
-  /** Sends the device to its home screen. */
-  home(): Promise<void>;
-  /** Hides the software keyboard. */
-  hideKeyboard(): Promise<void>;
-  /** Opens a device URL. */
-  openUrl(url: string): Promise<void>;
-  /** Sets simulator location. */
-  setLocation(options: { latitude: number; longitude: number }): Promise<void>;
-  /** Sets one simulator permission. */
-  setPermission(
-    permission: 'camera' | 'location' | 'notifications' | 'contacts',
-    state: 'allow' | 'deny' | 'unset',
-  ): Promise<void>;
-  /** Injects one simulator push notification. */
-  pushNotification(payload: Record<string, unknown>): Promise<void>;
-}
-
 export interface SetupSession {
   /** Saves state under a setup-declared name. */
   save(name: string): Promise<void>;
@@ -521,8 +502,14 @@ export interface TestFixtures {
   readonly app: App;
   readonly screen: Screen;
   readonly platform: Platform;
+  /**
+   * The web capability fixture. Transitional: it is the one platform surface
+   * still declared in core, because web is driver-provided today. When
+   * playwright becomes a backend (RFC0002 migration) `web` moves to a backend
+   * contribution and is declared by augmentation like any other platform
+   * fixture (`device`, `desktop`), leaving only the universal fixtures here.
+   */
   readonly web: Web;
-  readonly device: Device;
 }
 
 export interface SetupFixtures extends TestFixtures {
@@ -554,9 +541,11 @@ export interface SetupOptions extends Omit<TestOptions, 'session' | 'only' | 'sk
   sessions: readonly string[];
 }
 
-export type TestFn = (fixtures: TestFixtures) => void | Promise<void>;
-export type SetupFn = (fixtures: SetupFixtures) => void | Promise<void>;
-export type TestHookFn = (fixtures: TestFixtures) => void | Promise<void>;
+export type TestFn<Fixtures = TestFixtures> = (fixtures: Fixtures) => void | Promise<void>;
+export type SetupFn<Fixtures = TestFixtures> = (
+  fixtures: Fixtures & SetupFixtures,
+) => void | Promise<void>;
+export type TestHookFn<Fixtures = TestFixtures> = (fixtures: Fixtures) => void | Promise<void>;
 export type SuiteHookFn = (fixtures: SuiteFixtures) => void | Promise<void>;
 export type SynchronousBody<Result> = Extract<Result, PromiseLike<unknown>> extends never
   ? () => Result
@@ -566,17 +555,26 @@ export interface TestCase {
   readonly [testCaseBrand]: true;
 }
 
-export interface TestAPI {
+export interface TestAPI<Fixtures = TestFixtures> {
   /** Registers one test synchronously during module evaluation. */
-  (title: string, fn: TestFn): TestCase;
+  (title: string, fn: TestFn<Fixtures>): TestCase;
   /** Registers one configured test synchronously during module evaluation. */
-  (title: string, options: TestOptions, fn: TestFn): TestCase;
+  (title: string, options: TestOptions, fn: TestFn<Fixtures>): TestCase;
   /** Registers one skipped test. */
-  skip(title: string, fn: TestFn): TestCase;
+  skip(title: string, fn: TestFn<Fixtures>): TestCase;
   /** Registers one focused local test. CI rejects focused tests. */
-  only(title: string, fn: TestFn): TestCase;
+  only(title: string, fn: TestFn<Fixtures>): TestCase;
   /** Registers one setup test with statically declared session outputs. */
-  setup(title: string, options: SetupOptions, fn: SetupFn): TestCase;
+  setup(title: string, options: SetupOptions, fn: SetupFn<Fixtures>): TestCase;
+  /**
+   * Returns the same runtime `test`, typed with a backend's contributed
+   * fixtures. A pure type refinement — the fixtures still resolve from the
+   * target's backend at runtime — so a project types its device/desktop/web
+   * surface without a global `declare module` augmentation:
+   *
+   *   export const test = base.extend<{ device: Device }>();
+   */
+  extend<Extra>(): TestAPI<Fixtures & Extra>;
   /** Declares a group synchronously. */
   describe<Result>(title: string, body: SynchronousBody<Result>): void;
   /** Declares a configured group synchronously. */
@@ -586,9 +584,9 @@ export interface TestAPI {
     body: SynchronousBody<Result>,
   ): void;
   /** Registers a test-attempt setup hook. */
-  beforeEach(fn: TestHookFn): void;
+  beforeEach(fn: TestHookFn<Fixtures>): void;
   /** Registers a test-attempt teardown hook. */
-  afterEach(fn: TestHookFn): void;
+  afterEach(fn: TestHookFn<Fixtures>): void;
   /** Registers a suite-instance setup hook. */
   beforeAll(fn: SuiteHookFn): void;
   /** Registers a suite-instance teardown hook. */
@@ -699,22 +697,19 @@ export interface WebTarget {
   viewport?: { width: number; height: number };
 }
 
-export interface MobileTarget {
-  name: string;
-  platform: 'ios' | 'android';
-  driver: DriverHandle;
-  app: string;
-  device?: string;
-  os?: string;
-}
-
-export interface CustomTarget {
+/**
+ * A target whose surface is a backend (RFC0002): no driver, no app server.
+ * What the target can serve is graded by the backend's declared capabilities;
+ * with no `backend` the target is agent-tools-only and everything runs
+ * opaque.
+ */
+export interface BackendTarget {
   name: string;
   platform: Platform;
-  driver: DriverHandle;
+  backend?: BackendHandle;
 }
 
-export type Target = WebTarget | MobileTarget | CustomTarget;
+export type Target = WebTarget | BackendTarget;
 
 export interface ModelConfig {
   provider: string;
@@ -758,6 +753,12 @@ export interface CacheConfig {
 
 /** Agent options for the built-in agent; `agent` also accepts a StepExecutor. */
 export interface AgentConfig {
+  /**
+   * The step executor `agent.act()` dispatches to, alongside the options —
+   * a custom brain no longer forfeits `model`, budgets, or `context`
+   * (RFC0002). Omitted selects the built-in agent.
+   */
+  executor?: StepExecutor;
   model?: string | ModelConfig | ModelInstance;
   /** Model used by calls with `vision`; falls back to `model`. */
   visionModel?: string | ModelConfig | ModelInstance;

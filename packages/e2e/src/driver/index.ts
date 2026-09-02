@@ -125,7 +125,11 @@ export interface SemanticNode {
   readonly children?: readonly SemanticNode[];
 }
 
-/** Viewport point in CSS pixels, origin at the top-left of the viewport. */
+/**
+ * Viewport point in CSS pixels, origin at the top-left of the viewport.
+ * Reserved surface with a named consumer: vision-pointing executors
+ * (TesterArmy vision tools) dispatch coordinate taps through `tapPoint`.
+ */
 export interface ViewportPoint {
   readonly x: number;
   readonly y: number;
@@ -304,12 +308,6 @@ export interface DriverScreen {
 export interface DriverAgentActions {
   /** Taps one semantic node. */
   tap(target: { readonly ref: NodeRef }, operation: OperationContext): Promise<void>;
-  /** Long-presses one semantic node. */
-  longPress(
-    target: { readonly ref: NodeRef },
-    durationMs: number | undefined,
-    operation: OperationContext,
-  ): Promise<void>;
   /** Types one plain or sensitive host-resolved value. */
   type(
     target: { readonly ref: NodeRef },
@@ -328,7 +326,8 @@ export interface DriverAgentActions {
   /**
    * Taps one runner-validated viewport point. Optional: a driver without
    * coordinate input omits it, and vision pointing that hit-tests to no
-   * semantic node then fails instead of dispatching.
+   * semantic node then fails instead of dispatching. Reserved for
+   * vision-pointing executors (TesterArmy vision tools).
    */
   tapPoint?(point: ViewportPoint, operation: OperationContext): Promise<void>;
 }

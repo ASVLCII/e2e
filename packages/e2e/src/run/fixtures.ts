@@ -8,7 +8,7 @@ import { createModelAdapter } from '../agent/model/sdk.ts';
 import type { DriverDialog, DriverSession, DriverWebRoute } from '../driver/index.ts';
 import type { DebugTrace } from '../internal/debug.ts';
 import { registerWebExpectTarget } from '../expect/index.ts';
-import { ConfigurationError, TestError } from '../internal/errors.ts';
+import { ConfigurationError, TestError, TestTimeoutError } from '../internal/errors.ts';
 import { validateJsonValue } from '../internal/json-value.ts';
 import { toRoutePattern } from '../internal/route-pattern.ts';
 import { resolveNavigationUrl, urlMatches } from '../internal/urls.ts';
@@ -27,8 +27,7 @@ import type {
   Agent,
   App,
   Cookie,
-  Device,
-  Dialog,
+    Dialog,
   JsonValue,
   Locator,
   Screen,
@@ -163,12 +162,6 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
     screen,
     platform: environment.target.platform,
     web,
-    get device(): Device {
-      throw new ConfigurationError(
-        'UNSUPPORTED_CAPABILITY',
-        'the device fixture is reserved for future mobile profiles; web-0.1 does not provide it',
-      );
-    },
     session: {
       save: async (name: string) => {
         const saveSession = environment.saveSession;
@@ -181,9 +174,58 @@ export function createFixtures(environment: AttemptEnvironment): FixtureGraph {
         await environment.steps.run('session', 'session.save', name, () => saveSession(name));
       },
     },
+    ...contributedFixtures(environment),
   };
 
   return { fixtures, engine };
+}
+
+/**
+ * Backend-contributed fixtures (RFC0002): the backend declares what calls
+ * exist, the harness owns how every call runs. Each method becomes a
+ * recorded step named `<fixture>.<method>`, bounded by the action timeout
+ * and the attempt signal. Core validates shape, never meaning.
+ */
+function contributedFixtures(environment: AttemptEnvironment): Record<string, unknown> {
+  const declared = environment.target.backend?.fixtures;
+  if (declared === undefined) return {};
+  const contributed: Record<string, unknown> = {};
+  for (const [name, factory] of Object.entries(declared)) {
+    let instance: Readonly<Record<string, (...args: never[]) => Promise<unknown>>> | undefined;
+    Object.defineProperty(contributed, name, {
+      enumerable: true,
+      get() {
+        instance ??= factory({
+          targetName: environment.target.name,
+          operation: () => ({
+            signal: environment.signal,
+            timeoutMs: environment.config.actionTimeout,
+            runId: environment.runId,
+            attemptId: environment.attemptId,
+          }),
+        });
+        const surface = instance;
+        return new Proxy(surface, {
+          get(target, property, receiver) {
+            const method = Reflect.get(target, property, receiver) as unknown;
+            if (typeof method !== 'function' || typeof property !== 'string') return method;
+            return (...args: never[]) =>
+              environment.steps.run('resource', `${name}.${property}`, '', () =>
+                withTimeout(
+                  Promise.resolve(method.apply(target, args)),
+                  environment.config.actionTimeout,
+                  () =>
+                    new TestTimeoutError(
+                      `${name}.${property} exceeded the action timeout of ${environment.config.actionTimeout}ms`,
+                    ),
+                ),
+              );
+          },
+        });
+      },
+    });
+  }
+  return contributed;
 }
 
 /**

@@ -504,13 +504,6 @@ export class PlaywrightSession implements DriverSession, WebSessionHost {
     tap: async (target, operation) => {
       await this.screen.perform(target.ref, { kind: 'tap' }, operation);
     },
-    longPress: async (target, durationMs, operation) => {
-      await this.screen.perform(
-        target.ref,
-        { kind: 'longPress', ...(durationMs !== undefined ? { durationMs } : {}) },
-        operation,
-      );
-    },
     type: async (target, value, sensitive, operation) => {
       await this.screen.perform(target.ref, { kind: 'fill', value, sensitive }, operation);
     },

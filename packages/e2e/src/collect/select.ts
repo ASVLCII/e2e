@@ -126,6 +126,9 @@ function driverCapabilities(target: ResolvedTarget): readonly Capability[] {
   // answered from its declared hint; the instance's real manifest is validated
   // against it before the first launch.
   if (typeof target.driver === 'string') return WELL_KNOWN_DRIVERS[target.driver]?.capabilities ?? [];
+  // Backend targets are graded from the backend's declared capability set:
+  // observation, actions, location, and one name per contributed fixture.
+  if (target.driver === undefined) return [...(target.backend?.capabilities ?? [])];
   return target.driver.capabilities.fixtures;
 }
 
