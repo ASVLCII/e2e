@@ -29,7 +29,7 @@ import {
 } from 'e2e/backend';
 import { matchesText } from 'e2e/backend';
 import { classifyActionError, dispatchLocatorAction } from './actions.ts';
-import { BrowserPool, type BrowserName } from './browser-pool.ts';
+import { BrowserPool, connectCdp, type BrowserName } from './browser-pool.ts';
 import { DialogRouter } from './dialogs.ts';
 import { ensureBrowsersInstalled } from './install.ts';
 import { frameSelectors, projectExpression } from './locators.ts';
@@ -104,11 +104,36 @@ function isStorageState(data: unknown): data is StorageState {
   );
 }
 
+/**
+ * Attach to a remote browser over CDP instead of launching a local one. The
+ * seam a hosted-browser backend plugs into: a per-run cloud session (its
+ * endpoint provisioned only once the run starts) resolves through
+ * `cdpEndpoint` at `init`, and again on any reconnect. CDP attach is
+ * chromium-only.
+ */
+export interface PlaywrightConnectOptions {
+  /**
+   * Resolves the CDP endpoint (a `ws://`/`wss://` or `http://` DevTools URL)
+   * to attach to. Async because a hosted endpoint is not known at config load;
+   * called once per worker in `init`, and again at the start of any attempt
+   * that finds the session dropped, so a fresh per-run URL reconnects cleanly.
+   * `signal` aborts when the init or attempt that needs the browser is
+   * cancelled or exceeds its budget: a resolver that provisions a session
+   * should stop and release it, since a browser that arrives late is detached.
+   */
+  readonly cdpEndpoint: (signal: AbortSignal) => string | Promise<string>;
+}
+
 export interface PlaywrightOptions {
   /** Browser engine; defaults to chromium. */
   readonly browser?: BrowserName;
   /** Initial viewport of every attempt's page. */
   readonly viewport?: { readonly width: number; readonly height: number };
+  /**
+   * Attach to a remote browser over CDP instead of launching locally. Requires
+   * the chromium engine (the default). Wired by a hosted-browser backend.
+   */
+  readonly connect?: PlaywrightConnectOptions;
 }
 
 export class PlaywrightSurface {
@@ -121,8 +146,11 @@ export class PlaywrightSurface {
 
   private readonly browserName: BrowserName;
   private readonly pool = new BrowserPool();
+  private readonly connect: PlaywrightConnectOptions | undefined;
   private readonly viewport: { readonly width: number; readonly height: number };
   private browser: Browser | null = null;
+  /** True once init provisioned a browser; a later disconnect may then reconnect. */
+  private booted = false;
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private app: BackendAppInfo = { allowedOrigins: [] };
@@ -145,32 +173,92 @@ export class PlaywrightSurface {
 
   constructor(options: PlaywrightOptions) {
     this.browserName = options.browser ?? 'chromium';
+    this.connect = options.connect;
     this.viewport = options.viewport ?? DEFAULT_VIEWPORT;
   }
 
   // --- lifecycle ---
 
-  /** Provisions and launches the shared browser once per worker. */
+  /** Provisions the shared browser once per worker: a local launch, or a CDP attach. */
   async init(info: BackendInitInfo): Promise<void> {
     this.app = info.app;
     this.testIdAttribute = info.testIdAttribute;
     this.headed = info.headed;
-    // Both boot steps honour the init signal: a first-run browser download
-    // and a launch are the two things here that can outlive a launch budget.
-    await ensureBrowsersInstalled([this.browserName], { signal: info.signal });
+    // A CDP attach uses the remote's browser; only a local launch needs the
+    // engine installed here. Both boot steps honour the init signal: a
+    // first-run browser download and a launch or attach are the things here
+    // that can outlive a launch budget.
+    if (this.connect === undefined) {
+      await ensureBrowsersInstalled([this.browserName], { signal: info.signal });
+    }
+    this.browser = await this.acquireBrowser(info.signal);
+    this.booted = true;
+  }
+
+  /**
+   * Provisions the shared browser through the pool — a launch, or a CDP attach
+   * via the connector — bounded by `signal`. Checked before the endpoint is
+   * resolved: a cancelled caller must never provision a remote session it will
+   * not use.
+   */
+  private async acquireBrowser(signal: AbortSignal): Promise<Browser> {
+    const verb = this.connect === undefined ? 'launch' : 'connect';
+    if (signal.aborted) throw cancelled(`browser ${verb} cancelled`);
     try {
-      this.browser = await raceAbort(
-        this.pool.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS),
-        info.signal,
-        'browser launch',
+      return await raceAbort(
+        this.pool.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS, this.connector(signal)),
+        signal,
+        `browser ${verb}`,
       );
     } catch (cause) {
       if (cause instanceof BackendError) throw cause;
-      throw new BackendError('BACKEND_FAILURE', `browser launch failed: ${message(cause)}`, {
+      throw new BackendError('BACKEND_FAILURE', `browser ${verb} failed: ${message(cause)}`, {
         retryable: false,
         cause,
       });
     }
+  }
+
+  /**
+   * Builds the pool's connector when attaching over CDP; undefined for a local
+   * launch. The connector honours `signal` at every await: the resolver
+   * receives it, the endpoint is not used once aborted, and a browser that
+   * connects after cancellation is detached at once rather than cached — the
+   * host's session is never held by an init or attempt that already gave up.
+   */
+  private connector(signal: AbortSignal): (() => Promise<Browser>) | undefined {
+    const connect = this.connect;
+    if (connect === undefined) return undefined;
+    return async () => {
+      const endpoint = await connect.cdpEndpoint(signal);
+      if (signal.aborted) throw cancelled('browser connect cancelled');
+      if (typeof endpoint !== 'string' || endpoint.trim() === '') {
+        throw new BackendError('BACKEND_FAILURE', 'connect.cdpEndpoint resolved to an empty CDP endpoint', {
+          retryable: false,
+        });
+      }
+      const browser = await connectCdp(endpoint, BROWSER_LAUNCH_TIMEOUT_MS);
+      if (signal.aborted) {
+        await browser.close().catch(() => undefined);
+        throw cancelled('browser connect cancelled');
+      }
+      return browser;
+    };
+  }
+
+  /**
+   * The browser an attempt starts on. A booted surface whose browser has since
+   * disconnected — a dropped remote session, a crashed process — reacquires
+   * through the pool, which evicts the dead browser and, for a CDP attach,
+   * runs the endpoint resolver again for a fresh session. Reconnection is an
+   * attempt-start decision only: mid-attempt the browser must stay the one the
+   * test began on, so `requireBrowser` stays strict there.
+   */
+  private async ensureBrowser(signal: AbortSignal): Promise<Browser> {
+    if (this.browser !== null && this.browser.isConnected()) return this.browser;
+    if (!this.booted) return this.requireBrowser();
+    this.browser = await this.acquireBrowser(signal);
+    return this.browser;
   }
 
   /**
@@ -187,7 +275,7 @@ export class PlaywrightSurface {
     this.traceSegments = 0;
     this.routes.length = 0;
     this.dialogs.reset();
-    await this.openContext(undefined);
+    await this.openContext(undefined, context.signal);
   }
 
   /**
@@ -205,6 +293,7 @@ export class PlaywrightSurface {
   async dispose(context: BackendCleanupContext): Promise<void> {
     await this.endAttempt(context);
     this.browser = null;
+    this.booted = false;
     await withinCleanupBudget(this.pool.dispose(), context);
   }
 
@@ -230,10 +319,18 @@ export class PlaywrightSurface {
     return this.browser;
   }
 
-  /** Creates the attempt's context, rolling back to no context on failure. */
-  private async openContext(storageState: StorageState | undefined): Promise<void> {
+  /**
+   * Creates the attempt's context, rolling back to no context on failure. With
+   * `reacquire`, a disconnected browser is reacquired first (attempt start);
+   * without it the browser must already be connected (mid-attempt replace).
+   */
+  private async openContext(
+    storageState: StorageState | undefined,
+    reacquire?: AbortSignal,
+  ): Promise<void> {
     try {
-      const browser = this.requireBrowser();
+      const browser =
+        reacquire === undefined ? this.requireBrowser() : await this.ensureBrowser(reacquire);
       this.context = await browser.newContext({
         viewport: this.viewport,
         acceptDownloads: true,
