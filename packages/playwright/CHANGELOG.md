@@ -1,0 +1,282 @@
+# @e2edev/playwright
+
+## 0.2.0
+
+### Minor Changes
+
+- [#114](https://github.com/tester-army/e2e/pull/114) [`e19b826`](https://github.com/tester-army/e2e/commit/e19b826a7f2a944122099851803f6961f107cf86) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Publish under the `@e2edev` npm scope as restricted (private) packages: the core package `e2e` is now `@e2edev/e2e`, beside `@e2edev/playwright` and `@e2edev/agent-device`. Entry points move with the name (`@e2edev/e2e/agent`, `@e2edev/e2e/backend`, `@e2edev/e2e/run`); the `e2e` CLI binary keeps its name. Provenance is off while the packages are private, since npm only attests public packages.
+
+- [#101](https://github.com/tester-army/e2e/pull/101) [`8c97039`](https://github.com/tester-army/e2e/commit/8c9703906c476af6dea063c44ddc179399b102e5) Thanks [@okwasniewski](https://github.com/okwasniewski)! - **Breaking.** Playwright is a backend, and core knows no platform (RFC0002
+  step 2'). The bumps stay `minor` under the 0.x policy, but the shapes below
+  are removed or changed and a project upgrading must migrate its config and any
+  backend it wrote.
+
+  Removed:
+
+  - `@e2edev/e2e/driver`, `defineDriver`, and every driver-SPI type; the `driver:` and
+    `browser:` target keys; the top-level `browser` config key; the implicit
+    zero-config web target. `targets` is required and a target is
+    `{ name, platform, backend? }`.
+  - The `actions` verb object on a backend (`actions: { tap, type, press,
+select, scroll, navigate, back }`). Every node action is now
+    `perform(ref, action, context)` taking one `LocatorAction`; viewport scroll
+    is `swipe(direction, momentum, context)`; `navigate` and `back` live under
+    `app: { navigate?, back?, restart?, clearState? }`. The `actions` capability
+    means `perform` is declared, and the agent offers the model only the verbs
+    the backend declares.
+  - `artifacts: ['video']` is no longer accepted in config, and `video` is gone
+    from the report's `artifactCapabilities` (a fixture may still attach a
+    `video` artifact).
+  - `DRIVER_FAILURE` is now `BACKEND_FAILURE`.
+
+  Changed:
+
+  - `Backend.version` is required (a non-empty string): it is provenance and
+    keys the trace cache.
+  - `endAttempt(context)` and `dispose(context)` receive a
+    `BackendCleanupContext` (`{ signal, timeoutMs }`) whose `signal` aborts when
+    the cleanup budget is spent. `dispose` runs whether or not `init` ran, and
+    `init` may run again after `dispose` on the same handle.
+  - `defineBackend` validates the nested `state`, `artifacts`, and `app`
+    manifests (closed keys, function members), binds every method so a class
+    instance is a valid body, and rejects unknown nested keys with
+    `INVALID_CONFIG`.
+  - `BackendInitInfo.app.baseUrl` and `BackendFixtureContext.app.baseUrl` are
+    optional; absent when no app URL is configured.
+  - `Web`, `WebRoute`, `WebResponse`, `RouteFulfillResponse`, `Cookie`,
+    `Dialog`, and `WebExpectation` moved out of `e2e` into `@e2edev/playwright`.
+    `expect(fixture)` routes to whatever expectation surface a backend attaches
+    through `BackendFixtureContext.expectable`. Every `web` method call,
+    including `url()`, `title()`, and `cookies()`, is now a recorded step.
+  - Reports and session envelopes record `backend: { name, version, spiVersion }`
+    instead of `driver`, drop `browser`/`browserVersion`/`viewport` from target
+    provenance, and step events use kind `backend` (spec `suiteVersion` 0.6.0).
+
+  Added:
+
+  - `@e2edev/playwright` exports `playwright(options)`: a `defineBackend` handle
+    with observation, actions, location, state, artifacts, and the contributed
+    `web` fixture. `browser` and `viewport` are its options. It also exports
+    `test` typed with `web`; `expect` and `credentials` still come from `e2e`.
+  - `@e2edev/e2e/backend` exports `BACKEND_ERROR_CODES` and
+    `RETRYABLE_BACKEND_ERROR_CODES` (`NODE_STALE`, `FRAME_NOT_FOUND`).
+  - `@e2edev/e2e/backend` exports the semantics the spec requires every backend to
+    reproduce exactly: `TestError`, `ConfigurationError`, `InfrastructureError`,
+    `matchesText`, `toTextPattern`, `describePattern`, `urlMatches`,
+    `pollCondition`, `Deadline`, and `validateJsonValue`. The `@e2edev/e2e/internal`
+    subpath is removed; a backend package depends on `@e2edev/e2e/backend` only.
+  - `defineTool` accepts `platforms` to scope a tool pack to targets by
+    platform, and `StepExecutorContext.target` names the target a step runs on.
+
+  Migration:
+
+  ```ts
+  // before
+  export default defineConfig({
+    browser: "chromium",
+    targets: [{ name: "web", platform: "web", driver: "playwright" }],
+  });
+
+  // after
+  import { playwright } from "@e2edev/playwright";
+
+  export default defineConfig({
+    targets: [
+      {
+        name: "web",
+        platform: "web",
+        backend: playwright({ browser: "chromium" }),
+      },
+    ],
+  });
+  ```
+
+  A backend written against the earlier `@e2edev/e2e/backend` draft moves its `actions`
+  verbs onto `perform` (switch on `action.kind`), its viewport `scroll` onto
+  `swipe`, its `navigate`/`back` under `app`, declares `version`, and accepts
+  the cleanup context on `endAttempt`/`dispose`.
+
+- [#105](https://github.com/tester-army/e2e/pull/105) [`f64b191`](https://github.com/tester-army/e2e/commit/f64b1917d3f87b84e83e7475ec9368068fc7b3ec) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `playwright({ connect })` attaches to a remote browser over the Chrome DevTools
+  Protocol instead of launching a local one. `connect.cdpEndpoint` is an async
+  resolver called at worker init, and again on any reconnect, so a hosted browser
+  whose endpoint is provisioned per run — a cloud session URL not known at config
+  load — resolves each time the pool needs it. CDP attach is chromium-only (the
+  factory rejects another engine as `INVALID_CONFIG`), a local launch skips the
+  browser-install step it no longer needs, and disposing the backend detaches the
+  CDP session without killing the remote process the host owns.
+
+- [#20](https://github.com/tester-army/e2e/pull/20) [`1e21658`](https://github.com/tester-army/e2e/commit/1e21658c949900be0191221a468647e43b6ddf2a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Move the Playwright driver into its own `@e2edev/playwright` package.
+
+  `e2e` no longer depends on `playwright`, so installs that drive another backend
+  no longer download a browser. `driver: 'playwright'` still works and is still
+  the default for web targets; the runner now loads the driver from
+  `@e2edev/playwright`, which it declares as an optional peer dependency.
+
+  **Upgrading:** install the driver alongside the runner.
+
+  ```bash
+  npm install --save-dev @e2edev/e2e @e2edev/playwright
+  ```
+
+  A target that names the driver without the package installed now fails config
+  resolution with `DRIVER_NOT_INSTALLED` and exit code 2, naming the package to
+  install.
+
+  Also in this release:
+
+  - Drivers can implement an optional `prepare` hook, run once before any session
+    launches, for slow one-time provisioning. Browser downloads now happen there,
+    so they are never charged against a launch timeout for any driver, not just
+    the built-in one. A failing `prepare` aborts the run as an infrastructure
+    error instead of a test failure.
+  - The list reporter now prints run-level errors. Previously a run that failed
+    during config, collection, or provisioning exited non-zero with the reason
+    only in `report.json`.
+  - The `e2e/playwright` subpath export is removed; import from
+    `@e2edev/playwright` instead.
+
+- [#78](https://github.com/tester-army/e2e/pull/78) [`61b31dd`](https://github.com/tester-army/e2e/commit/61b31dd95e431804e5bdb17a37da325d4dca10ef) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Locate nodes that no query can name, and observe shadow roots and `data:` frames.
+
+  An agent step whose target has no accessible name, test id, placeholder, or text
+  used to fail with `LOCATOR_NOT_FOUND` before it looked at the page. The model had
+  already selected the right node; the runner discarded it because no portable
+  query could be derived from it — so the agent tier failed hardest on exactly the
+  controls that have no deterministic address either, such as an input whose label
+  is the table cell beside it.
+
+  The locate sweep now falls through to the two paths that need no query:
+
+  - the node's **observed reference**, which the driver backs with the element
+    itself, and
+  - the driver's **platform selector** for the node when it has an anchored one, in
+    which case the located node carries a real locator instead of a reference and
+    so survives into the cache and into `dragTo`. Recorded as the
+    `locate.selector` policy decision.
+
+  Both paths re-read the live node and require its recorded identity before acting,
+  exactly as replay does, so a stale selection is still a miss rather than a blind
+  dispatch. `poll: false` callers keep their early exit for escalation.
+
+  One observation gap closes alongside it in `@e2edev/playwright`: **open shadow
+  roots are walked**, so a control that exists only in a shadow tree is now
+  selectable. Slotted content is not double-counted — slotted elements are
+  light-DOM children, and the shadow tree holds `<slot>` placeholders rather than
+  copies. A closed root stays invisible, as it is to a person reading the page.
+
+  Empty painted rectangles are observed, and a drag can end on one.
+
+  A drop zone, a colour swatch, a chart placeholder: an element defined by being
+  empty carries no role, name, text, or test id, so the observation walk skipped it
+  and no instruction could name it. An empty element that paints something — a
+  border, an outline, a background of its own — and is at least 12 CSS pixels on
+  each side is now reported with the role `box`. Nothing else changes: an unpainted
+  spacer of the same size is still omitted, because a person cannot see it either.
+
+  `dragTo` also no longer requires a locator on both sides. `Locator.dragTo` takes
+  two locators, so a destination the agent reached through its observed reference
+  made the whole verb unavailable — exactly for the elements that have no locator.
+  When either endpoint is reference-backed the driver drives the pointer instead,
+  which is also what makes HTML5 drag-and-drop commit, since it needs a real
+  `dragover`. A drag whose _source_ is reference-only still fails: `dragTo` locates
+  twice and every observation disposes the generation before it, so the source
+  handle does not survive to the dispatch. That is an observation lifecycle
+  question, not a drag one.
+
+### Patch Changes
+
+- [#86](https://github.com/tester-army/e2e/pull/86) [`347aa7d`](https://github.com/tester-army/e2e/commit/347aa7ded66fd774ffe859399a3c030cd405df3b) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `agent.act()` ships on a harness-owned step-executor socket (RFC0001 v0).
+
+  The harness owns each planned step — observation redaction, the action
+  grammar (`tap`, `type`, `typeSecret`, `press`, `select`, `scroll`,
+  `navigate`), budgets, deadlines, origin policy, and recording — and delegates
+  only the thinking to a pluggable `StepExecutor`, configured as the `agent`
+  value itself: `agent: createAgent({...})` or any hand-rolled executor (there
+  is no `executor` key). The `@e2edev/e2e/agent` entrypoint exports `createAgent` (the
+  built-in AI SDK tool-loop executor), `createToolLoopExecutor` (the chassis:
+  verdict tool, hard stops, loop guards, wind-down, `--debug` transcripts), and
+  `defineTool` for annotated project tools. Verdicts are ternary: `blocked` is first-class
+  in the report (step and run status) with a closed category taxonomy
+  (credentials, environment, seed_data, test_setup, automation). `Secret`
+  values flow into `act` params as placeholders and fill only through the
+  authorized `typeSecret` action. With a custom executor, `agent.assert` also
+  dispatches through the socket.
+
+  Breaking changes:
+
+  - The AI SDK (`ai`) is now an optional peer dependency (`^7.0.0`) instead of
+    a hard dependency. Model-backed calls require it installed; deterministic
+    suites and custom executors run without it.
+  - `reporters` accepts only `'list' | 'json'` (the unimplemented `'html'`
+    value is removed) and defaults to `['list']`.
+  - The `limits` block accepts only enforced keys; the ten
+    validated-but-unenforced keys (`maxDiscoveredResults`, `maxArtifactBytes`,
+    `maxArtifactTotalBytes`, `maxDownloadBytes`, `maxDownloads`,
+    `maxReportBytes`, `maxTerminalFieldBytes`, `maxModelCallsPerStep`,
+    `maxActionStepsPerStep`, `maxEstimatedCostUsd`) are rejected.
+  - `report-1` documents changed (limits/usage blocks, `blocked` statuses, new
+    error codes); the conformance `suiteVersion` is now 0.2.0.
+  - `verifyDriver` and its conformance types are removed from `@e2edev/e2e/driver`
+    until the harness can actually run vectors.
+
+- [#107](https://github.com/tester-army/e2e/pull/107) [`e0ac8af`](https://github.com/tester-army/e2e/commit/e0ac8af5ca2247eef0962945b7500efede1bbb8d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Observation and lifecycle hardening in the browser backend:
+
+  - One deadline bounds a whole observation: settling, the main document, every
+    same-origin iframe, and the pixels each spend from what remains, so nested
+    frames can no longer stretch one `observe` past the operation budget.
+  - An observation cancelled by the harness no longer publishes its handle
+    generation over the one the caller still holds refs into.
+  - `locate` no longer derives a CSS selector for every matched element on every
+    assertion poll; nothing consumed it. The tree walk memoizes role, name, and
+    direct text per element and reuses the computed style it already holds, and
+    each document is read with one fewer protocol round trip.
+  - A function dialog handler that returns without calling `accept` or `dismiss`
+    now has the dialog dismissed and fails the next step with `INVALID_STATE`
+    instead of leaving the page blocked behind it.
+  - A first-run browser download and the browser launch honour the init signal.
+  - A trace segment that cannot be written during `clearState` or session
+    restore is best-effort and can no longer leave the surface on the old context.
+
+- [#79](https://github.com/tester-army/e2e/pull/79) [`bc0f377`](https://github.com/tester-army/e2e/commit/bc0f377a0a2b5c9e9cea5cfffbcf94a1e8dcd7ae) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Harden the boundary between the runner and an out-of-tree driver.
+
+  A driver's `DriverError` is now recognized structurally rather than with
+  `instanceof`. A driver imported by a config file resolves through a different
+  module registry than the runner, so the two hold different copies of the class
+  and `instanceof` misses. Every typed driver failure then lost its taxonomy: a
+  retryable `NODE_STALE` stopped being retried and surfaced as a generic failure
+  instead of a recoverable race. This affects any driver package, including
+  `@e2edev/playwright` whenever a project ends up with more than one copy of
+  `e2e` resolved.
+
+  Builds now clear `dist` before compiling. `tsc` only writes files, so output
+  whose source has since moved or been deleted survived every later build and was
+  published: after the Playwright driver moved out of `e2e`, the `e2e` tarball
+  still carried a full copy of the old `dist/playwright` tree.
+
+- [#107](https://github.com/tester-army/e2e/pull/107) [`e0ac8af`](https://github.com/tester-army/e2e/commit/e0ac8af5ca2247eef0962945b7500efede1bbb8d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Correctness and speed fixes across the runner's support layers:
+
+  - `agent.act` params and `web.evaluate` values that reach the same object by
+    two paths are no longer rejected as cycles.
+  - A setup test filtered out by its own `platforms` list can no longer be
+    promoted to run on a target it excluded; a consumer that needs it is a
+    collection error, as for a missing capability.
+  - Trace start and end paths pass the secret redactor before they are written;
+    a redacted path marks the trace non-replayable. The start-path precondition
+    now compares by pathname like the end postcondition, so a differing query
+    string no longer cold-misses the cache.
+  - Negated assertions with a budget shorter than the one-second grace window
+    can pass again; `toHaveCount` polls within its assertion deadline.
+  - Replay relocation projects each observed node once per observation instead
+    of once per recorded action per tier; wire regexps are compiled once; text
+    sanitizing and UTF-8 truncation are single-pass; value matchers format
+    failure messages only on failure; test discovery skips dot-directories.
+  - Dead code removed: the unused `internal/backend-text` module, the unused
+    `selectorExpression`, and several exports that had no consumer.
+
+- [#74](https://github.com/tester-army/e2e/pull/74) [`9334e8f`](https://github.com/tester-army/e2e/commit/9334e8f35cbaacbe61b10b3489ea87a920aeb99a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Ship package metadata for the registry: repository, homepage, bug tracker,
+  keywords, and the MIT `LICENSE` file. Releases publish under the `beta`
+  dist-tag while the surface stabilizes, so `latest` is not moved.
+
+- [#107](https://github.com/tester-army/e2e/pull/107) [`e0ac8af`](https://github.com/tester-army/e2e/commit/e0ac8af5ca2247eef0962945b7500efede1bbb8d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `web.route` registers on the browser context, not the current page: a route
+  now applies before the first page opens, to popups, and across `app.restart()`,
+  `app.clearState()`, and session restore, as the attempt-scoped contract in the
+  spec requires. Previously a stub silently stopped firing after any of those.
