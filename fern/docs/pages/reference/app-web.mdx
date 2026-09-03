@@ -160,7 +160,7 @@ const flag = await web.evaluate(
 
 | Method | Behavior | Throws |
 | --- | --- | --- |
-| `route(pattern, handler)` | Registers an attempt-scoped route. The handler must decide exactly once with `fulfill`, `continue`, or `abort`. | `ACTION_FAILED` when the handler decides twice, or returns without deciding |
+| `route(pattern, handler)` | Registers an attempt-scoped route. It may be registered before the first page opens and stays in force across `app.restart()`, `app.clearState()`, and session restore. The handler must decide exactly once with `fulfill`, `continue`, or `abort`. | `ACTION_FAILED` when the handler decides twice, or returns without deciding |
 | `unroute(pattern)` | Removes every attempt-scoped route registered with a matching pattern | - |
 | `waitForResponse(pattern, options?)` | Resolves with a `WebResponse` whose `json()` and `text()` decode the buffered body | `ACTION_FAILED` when nothing matches inside the deadline |
 
@@ -243,7 +243,7 @@ await web.setCookies([{ url: 'http://localhost:3000', name: 'tz', value: 'UTC' }
 
 | Method | Behavior | Throws |
 | --- | --- | --- |
-| `onDialog(handler)` | Registers an attempt-scoped handler and returns an idempotent unsubscribe function. Removed automatically at attempt end. | - |
+| `onDialog(handler)` | Registers an attempt-scoped handler and returns an idempotent unsubscribe function. Removed automatically at attempt end. A function handler must call `accept` or `dismiss`; one that returns without deciding has the dialog dismissed and fails the next step with `INVALID_STATE`, like an unhandled dialog. | - |
 | `waitForDownload(trigger, options?)` | Starts a download watch, runs `trigger`, waits for completion inside the same deadline, and registers the file as a `download` artifact. A failure in `trigger` keeps its own error. | `ACTION_FAILED` (operation timed out) when the download does not complete in time |
 
 ```ts

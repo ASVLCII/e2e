@@ -29,7 +29,8 @@ import { ConfigurationError } from '../internal/errors.ts';
 // the JSON-value rules for data a fixture returns.
 export { ConfigurationError, InfrastructureError, TestError } from '../internal/errors.ts';
 export { validateJsonValue, type JsonValueRules } from '../internal/json-value.ts';
-export { describePattern, matchesText, toTextPattern, type TextMatch } from '../internal/text.ts';
+export { describePattern, matchesText, toTextPattern } from '../internal/text.ts';
+export type { TextMatch } from '../types.ts';
 export { Deadline, pollCondition, type PollConditionOptions } from '../internal/time.ts';
 export { urlMatches } from '../internal/urls.ts';
 import type { Expectable, Locator, Momentum, Screen, ScrollDirection } from '../types.ts';
@@ -521,7 +522,16 @@ export function defineBackend(spec: Backend): BackendHandle {
       }
       capabilities.add(fixture);
     }
-    handle['fixtures'] = { ...spec.fixtures };
+    // Bound like every other member, so a class-based backend keeps `this`
+    // in its fixture factories too.
+    handle['fixtures'] = Object.freeze(
+      Object.fromEntries(
+        Object.entries(spec.fixtures).map(([fixture, factory]) => [
+          fixture,
+          (factory as (...args: unknown[]) => unknown).bind(spec),
+        ]),
+      ),
+    );
   }
   if (spec.state !== undefined) {
     handle['state'] = nestedManifest(name, 'state', spec.state, ['capture', 'restore']);

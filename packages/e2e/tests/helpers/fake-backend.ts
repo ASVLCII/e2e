@@ -23,7 +23,6 @@ const { defineBackend, BackendError, BACKEND_SPI_VERSION } = (await import(
   builtBackendModule
 )) as typeof import('../../src/backend/index.ts');
 
-export { BackendError as BuiltBackendError };
 
 export interface RecordedOperation {
   readonly method: string;
@@ -94,7 +93,7 @@ export interface FakeBackendHandle {
   };
 }
 
-export const FAKE_NODE: SemanticNode = {
+const FAKE_NODE: SemanticNode = {
   ref: { id: 'node-1', revision: '' },
   role: 'button',
   name: 'Submit',

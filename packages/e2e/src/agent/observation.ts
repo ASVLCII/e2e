@@ -1,14 +1,14 @@
 /** Observation capture, redaction, and model serialization (spec 09-drivers.md, 14-security.md). */
 
 import type { Observation, ObservationPixels, SemanticNode } from '../backend/surface.ts';
-import { sanitizeText } from '../internal/errors.ts';
+import { collapseText } from '../internal/text.ts';
 import { sleep } from '../internal/time.ts';
 
 /** Appended when the node walk stopped at the observation byte budget. */
 const TRUNCATION_MARKER = '[observation truncated at the resolved observation byte limit]';
 
 /** Why pixels the caller asked for are not part of this observation. */
-export type PixelsWithheld = 'MASKING_UNPROVEN';
+type PixelsWithheld = 'MASKING_UNPROVEN';
 
 /** Masked pixel evidence cleared for model input. */
 export interface AgentPixels extends ObservationPixels {
@@ -75,11 +75,15 @@ export function prepareObservation(
   if (truncated) lines.push(TRUNCATION_MARKER);
 
   const text = lines.join('\n');
+  // Every emitted line was measured with its newline; the join has one fewer
+  // and the marker was measured up front, so the size is known without a
+  // second pass over the whole tree text.
+  const textBytes = Math.max(0, bytes + (truncated ? markerBytes : 0) - 1);
   const pixels = clearPixels(observation);
   return {
     revision: observation.revision,
     text,
-    bytes: encoder.encode(text).byteLength,
+    bytes: textBytes,
     nodes,
     viewport: observation.viewport,
     truncated,
@@ -124,7 +128,7 @@ function formatNode(
   const parts: string[] = [`#${node.ref.id}`];
   if (node.role !== undefined && node.role !== '') parts.push(node.role);
   if (node.name !== undefined && node.name !== '') parts.push(JSON.stringify(redact(node.name)));
-  const text = node.text === undefined ? '' : collapse(node.text);
+  const text = node.text === undefined ? '' : collapseText(node.text);
   if (text !== '' && text !== node.name) parts.push(`text=${JSON.stringify(redact(text))}`);
   // Disambiguators the model needs when role and name repeat. The backend has
   // already reduced href to origin and path.
@@ -208,10 +212,6 @@ export async function settleObservation<T>(
     if (stable) break;
   }
   return value;
-}
-
-function collapse(text: string): string {
-  return sanitizeText(text).replace(/\s+/g, ' ').trim();
 }
 
 function indexNodes(node: SemanticNode, into: Map<string, SemanticNode>): void {

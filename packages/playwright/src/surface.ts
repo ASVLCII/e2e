@@ -9,7 +9,7 @@
 
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Browser, BrowserContext, ElementHandle, Page } from 'playwright';
+import type { Browser, BrowserContext, ElementHandle, Page, Route } from 'playwright';
 import {
   BackendError,
   type BackendAppInfo,
@@ -36,6 +36,7 @@ import { frameSelectors, projectExpression } from './locators.ts';
 import { captureDocument, toSemanticNode } from './observation.ts';
 import { capturePixels, maskOptions, secureFieldMasks, type PixelCapture } from './observe.ts';
 import { readManySemanticsFunction, SECURE_FIELD_SELECTOR } from './read-node.ts';
+import { RefRegistry } from './refs.ts';
 import {
   cancelled,
   DEFAULT_VIEWPORT,
@@ -52,9 +53,6 @@ import {
   type ActionTarget,
 } from './support.ts';
 
-/** Located refs are pruned oldest-first past this bound so the map cannot grow unboundedly. */
-const MAX_STORED_REFS = 2048;
-
 /**
  * Safety valve on nodes in one observation. The contract has no way to report
  * a truncated tree, so this must stay well above real documents and let the
@@ -62,9 +60,6 @@ const MAX_STORED_REFS = 2048;
  * be the effective limit.
  */
 const MAX_OBSERVED_NODES = 3_000;
-
-/** Budget for capturing the main document, still capped by the operation timeout. */
-const DOCUMENT_CAPTURE_TIMEOUT_MS = 15_000;
 
 /** Bounded settle before an observation so a committing navigation is not raced. */
 const SETTLE_TIMEOUT_MS = 5_000;
@@ -90,6 +85,14 @@ type StorageState = Exclude<
   NonNullable<NonNullable<Parameters<Browser['newContext']>[0]>['storageState']>,
   string
 >;
+
+type RoutePredicate = (url: URL) => boolean;
+type RouteHandler = (route: Route) => Promise<void>;
+
+interface StoredRoute {
+  readonly predicate: RoutePredicate;
+  readonly handler: RouteHandler;
+}
 
 /** True for the storage-state object shape; a string (a file path) or anything else is refused. */
 function isStorageState(data: unknown): data is StorageState {
@@ -126,21 +129,19 @@ export class PlaywrightSurface {
   private testIdAttribute = 'data-testid';
   private headed = false;
   private artifactsDir = '';
-  private refCounter = 0;
   private artifactCounter = 0;
   private tracing = false;
   /** Trace segments already written for this attempt; a trace cannot span two contexts. */
   private traceSegments = 0;
-  /** Locator-backed refs from `locate`; they hold no live handles. */
-  private readonly refs = new Map<string, ActionTarget>();
   /**
-   * Handle-backed refs of the newest observation. One observation is one
-   * handle generation: the whole map is swapped atomically per `observe()`,
-   * and the superseded generation is disposed in one sweep. Keeping these out
-   * of `refs` means locator-ref eviction can never destroy a handle an
-   * in-flight observation still references.
+   * Attempt-scoped network routes (spec 08-platforms.md). Registered on the
+   * context, not a page, so they cover every page the attempt opens - the
+   * first navigation included - and re-applied to each context the attempt
+   * replaces on `clearState` or session restore.
    */
-  private observationRefs = new Map<string, ActionTarget>();
+  private readonly routes: StoredRoute[] = [];
+  /** Located and observed node refs; see `RefRegistry` for the two lifetimes. */
+  private readonly refs = new RefRegistry();
 
   constructor(options: PlaywrightOptions) {
     this.browserName = options.browser ?? 'chromium';
@@ -154,13 +155,17 @@ export class PlaywrightSurface {
     this.app = info.app;
     this.testIdAttribute = info.testIdAttribute;
     this.headed = info.headed;
-    await ensureBrowsersInstalled([this.browserName]);
-    if (info.signal.aborted) {
-      throw new BackendError('CANCELLED', 'backend init cancelled', { retryable: false });
-    }
+    // Both boot steps honour the init signal: a first-run browser download
+    // and a launch are the two things here that can outlive a launch budget.
+    await ensureBrowsersInstalled([this.browserName], { signal: info.signal });
     try {
-      this.browser = await this.pool.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS);
+      this.browser = await raceAbort(
+        this.pool.acquire(this.browserName, this.headed, BROWSER_LAUNCH_TIMEOUT_MS),
+        info.signal,
+        'browser launch',
+      );
     } catch (cause) {
+      if (cause instanceof BackendError) throw cause;
       throw new BackendError('BACKEND_FAILURE', `browser launch failed: ${message(cause)}`, {
         retryable: false,
         cause,
@@ -180,6 +185,7 @@ export class PlaywrightSurface {
     this.artifactsDir = context.artifactsDir;
     this.artifactCounter = 0;
     this.traceSegments = 0;
+    this.routes.length = 0;
     this.dialogs.reset();
     await this.openContext(undefined);
   }
@@ -192,8 +198,6 @@ export class PlaywrightSurface {
    */
   async endAttempt(context: BackendCleanupContext): Promise<void> {
     await this.closeContext(context);
-    PlaywrightSurface.disposeGeneration(this.observationRefs);
-    this.observationRefs = new Map();
     this.refs.clear();
   }
 
@@ -239,6 +243,7 @@ export class PlaywrightSurface {
       this.context.on('dialog', (dialog) => {
         void this.dialogs.dispatch(dialog);
       });
+      for (const stored of this.routes) await this.context.route(stored.predicate, stored.handler);
     } catch (cause) {
       await this.context?.close().catch(() => undefined);
       this.context = null;
@@ -249,6 +254,25 @@ export class PlaywrightSurface {
         cause,
       });
     }
+  }
+
+  // --- network routes shared with the web fixture ---
+
+  /** Registers one attempt-scoped route on the current context. */
+  async route(predicate: RoutePredicate, handler: RouteHandler): Promise<void> {
+    const context = this.requireContext();
+    this.routes.push({ predicate, handler });
+    await context.route(predicate, handler);
+  }
+
+  /** Removes one registered route from the attempt and the current context. */
+  async unroute(predicate: RoutePredicate, handler: RouteHandler): Promise<void> {
+    const context = this.requireContext();
+    const index = this.routes.findIndex(
+      (stored) => stored.predicate === predicate && stored.handler === handler,
+    );
+    if (index !== -1) this.routes.splice(index, 1);
+    await context.unroute(predicate, handler);
   }
 
   // --- page access shared with the web fixture ---
@@ -289,16 +313,20 @@ export class PlaywrightSurface {
   private async replaceContext(storageState: StorageState | undefined): Promise<void> {
     const context = this.requireContext();
     const resumeTrace = this.tracing;
-    if (this.tracing) {
-      this.tracing = false;
-      this.traceSegments += 1;
-      await context.tracing.stop({ path: this.tracePath(`trace-part${String(this.traceSegments)}`).absolute });
-    }
+    // The old context is released from the surface before anything awaits, so
+    // a trace segment or close that fails cannot leave the surface pointing at
+    // a context it meant to replace. A segment that cannot be written is
+    // best-effort: the final trace still records from the new context.
     this.context = null;
     this.page = null;
-    PlaywrightSurface.disposeGeneration(this.observationRefs);
-    this.observationRefs = new Map();
+    this.tracing = false;
     this.refs.clear();
+    if (resumeTrace) {
+      this.traceSegments += 1;
+      await context.tracing
+        .stop({ path: this.tracePath(`trace-part${String(this.traceSegments)}`).absolute })
+        .catch(() => undefined);
+    }
     await context.close();
     await this.openContext(storageState);
     if (resumeTrace) {
@@ -337,40 +365,6 @@ export class PlaywrightSurface {
     }
   }
 
-  private mintId(): string {
-    this.refCounter += 1;
-    return `n${this.refCounter}`;
-  }
-
-  private storeRef(target: ActionTarget): string {
-    const id = this.mintId();
-    this.refs.set(id, target);
-    for (const oldest of this.refs.keys()) {
-      if (this.refs.size <= MAX_STORED_REFS) break;
-      this.refs.delete(oldest);
-    }
-    return id;
-  }
-
-  /** Disposes every element handle in one observation generation. */
-  private static disposeGeneration(generation: ReadonlyMap<string, ActionTarget>): void {
-    for (const target of generation.values()) {
-      if (target.kind === 'element') void target.element.dispose().catch(() => undefined);
-    }
-  }
-
-  /**
-   * Ids are the backend's; revisions are the harness's. The adapter already
-   * rejected a ref from a superseded resolution, so lookup is by id alone.
-   */
-  private lookupRef(ref: NodeRef): ActionTarget {
-    const target = this.refs.get(ref.id) ?? this.observationRefs.get(ref.id);
-    if (target === undefined) {
-      throw new BackendError('NODE_STALE', `node reference ${ref.id} is stale`, { retryable: true });
-    }
-    return target;
-  }
-
   // --- navigation and app lifecycle ---
 
   navigate(url: string, operation: OperationContext): Promise<void> {
@@ -387,7 +381,7 @@ export class PlaywrightSurface {
   }
 
   restart(operation: OperationContext): Promise<void> {
-    return this.guard(operation, 'navigation', async () => {
+    return this.guard(operation, 'restart', async () => {
       const baseUrl = this.requireBaseUrl();
       const context = this.requireContext();
       for (const page of context.pages()) await page.close();
@@ -398,7 +392,7 @@ export class PlaywrightSurface {
   }
 
   clearState(operation: OperationContext): Promise<void> {
-    return this.guard(operation, 'navigation', async () => {
+    return this.guard(operation, 'state reset', async () => {
       const baseUrl = this.requireBaseUrl();
       await this.replaceContext(undefined);
       const page = await this.ensurePage();
@@ -420,7 +414,7 @@ export class PlaywrightSurface {
   locate(expression: LocatorExpression, operation: OperationContext): Promise<readonly SemanticNode[]> {
     return this.guard(
       operation,
-      'resolve',
+      'locate',
       async () => {
         const page = this.requirePage();
         await this.validateFrames(expression);
@@ -442,7 +436,7 @@ export class PlaywrightSurface {
           // ambiguous between locate and perform fails loud instead of acting
           // on whichever element is first.
           const locator = raws.length === 1 ? projected.locator : projected.locator.nth(index);
-          const id = this.storeRef({ kind: 'locator', locator });
+          const id = this.refs.storeLocated({ kind: 'locator', locator });
           nodes.push(toSemanticNode({ id, revision: '' }, raw));
         });
         return nodes;
@@ -457,8 +451,8 @@ export class PlaywrightSurface {
       action.kind,
       () => {
         this.requirePage();
-        return dispatchLocatorAction(this.lookupRef(ref), action, operation.timeoutMs, (other) =>
-          this.lookupRef(other),
+        return dispatchLocatorAction(this.refs.lookup(ref), action, operation.timeoutMs, (other) =>
+          this.refs.lookup(other),
         );
       },
       (cause) => classifyActionError(cause, action),
@@ -612,11 +606,14 @@ export class PlaywrightSurface {
     options: BackendObserveOptions | undefined,
   ): Promise<BackendSnapshot> {
     const page = this.requirePage();
+    // One deadline for the whole observation: settle, every document, and the
+    // pixels each spend from what remains of it, never from the full budget.
+    const deadline = Date.now() + operation.timeoutMs;
     // A preceding action may still be committing a navigation. Settling is
     // bounded and best-effort: a slow document never fails the observation.
     await page
       .waitForLoadState('domcontentloaded', {
-        timeout: Math.min(operation.timeoutMs, SETTLE_TIMEOUT_MS),
+        timeout: Math.max(1, Math.min(operation.timeoutMs, SETTLE_TIMEOUT_MS)),
       })
       .catch(() => undefined);
     const viewport = page.viewportSize() ?? DEFAULT_VIEWPORT;
@@ -640,26 +637,28 @@ export class PlaywrightSurface {
           {
             testIdAttribute: this.testIdAttribute,
             allowedOrigins: this.app.allowedOrigins,
-            mintId: () => this.mintId(),
+            mintId: () => this.refs.mintId(),
             commit: (id: string, element: ElementHandle<Element>) => {
               generation.set(id, { kind: 'element', element });
             },
           },
-          page.locator(':root'),
-          {
-            framePath: [],
-            budget: MAX_OBSERVED_NODES,
-            timeoutMs: Math.max(1, Math.min(operation.timeoutMs, DOCUMENT_CAPTURE_TIMEOUT_MS)),
-          },
+          page,
+          { framePath: [], budget: MAX_OBSERVED_NODES, deadline },
         ),
         pixelCapture,
       ]);
     } catch (cause) {
-      PlaywrightSurface.disposeGeneration(generation);
+      RefRegistry.dispose(generation);
       throw cause;
     }
-    PlaywrightSurface.disposeGeneration(this.observationRefs);
-    this.observationRefs = generation;
+    // `guard` already rejected the caller on abort; the capture kept running.
+    // Its generation must not be published over the one the caller still
+    // holds refs into, nor destroy that one.
+    if (operation.signal.aborted) {
+      RefRegistry.dispose(generation);
+      throw cancelled('observe cancelled');
+    }
+    this.refs.publish(generation);
     return {
       nodes: [captured.tree],
       viewport: { width: viewport.width, height: viewport.height, scale: 1 },
