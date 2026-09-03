@@ -145,6 +145,20 @@ export type StepProgress =
     }
   | { readonly phase: 'event'; readonly api: string; readonly event: StepEvent };
 
+/** Per-step options for `StepRecorder.run`. */
+export interface StepRunOptions {
+  /**
+   * Whether the step checks state rather than producing it: a deterministic
+   * assertion, a locator wait, or an agent judgment. Only such a step passing
+   * can confirm a staged action trace (cache/context.ts) — an `agent.act`
+   * passing is the executor's opinion of its own work, and an `app` or
+   * `locator` action passing proves only that the action could be performed.
+   * Declared where the step is minted, so the rule cannot drift from the api
+   * names.
+   */
+  readonly verifies?: boolean;
+}
+
 export interface StepRecorderOptions {
   /** Caps events retained per step (resolved limits.maxEventsPerStep). */
   readonly maxEventsPerStep?: number;
@@ -157,6 +171,8 @@ export class StepRecorder {
   private activeStep: StepRecord | undefined;
   /** IDs of steps whose bodies are still executing. */
   private readonly running = new Set<string>();
+  /** Highest timeline index among passed verification steps, or -1 when none has. */
+  private lastVerified = -1;
   private readonly maxEventsPerStep: number;
   private readonly onProgress: ((progress: StepProgress) => void) | undefined;
 
@@ -178,8 +194,19 @@ export class StepRecorder {
     return this.activeStep?.index;
   }
 
+  /** Highest timeline index among passed verification steps, or -1 when none has. */
+  get lastVerifiedStepIndex(): number {
+    return this.lastVerified;
+  }
+
   /** Runs one public API call as a recorded top-level step. */
-  async run<T>(kind: StepKind, api: string, label: string, body: () => Promise<T>): Promise<T> {
+  async run<T>(
+    kind: StepKind,
+    api: string,
+    label: string,
+    body: () => Promise<T>,
+    options: StepRunOptions = {},
+  ): Promise<T> {
     const index = this.steps.length;
     const startedAt = timestamp();
     const startedMs = Date.now();
@@ -204,6 +231,7 @@ export class StepRecorder {
       // Model calls made inside the body are attributed to this step.
       const result = await withAiTraceStep(api, label, body);
       record.durationMs = Date.now() - startedMs;
+      if (options.verifies === true) this.lastVerified = Math.max(this.lastVerified, index);
       return result;
     } catch (cause) {
       record.durationMs = Date.now() - startedMs;

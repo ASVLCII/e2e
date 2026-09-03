@@ -12,6 +12,7 @@
 import { isVisionMode } from '../config/agent.ts';
 import { TestError } from '../internal/errors.ts';
 import { sleep } from '../internal/time.ts';
+import type { StepRunOptions } from '../run/steps.ts';
 import type { Agent, StandardSchemaV1, VisionMode } from '../types.ts';
 import { AgentError, isAgentError, toAgentError } from './error.ts';
 import { resolveBoundedBudget, resolveTimeout } from './call-options.ts';
@@ -61,22 +62,33 @@ export function createAgentFixture(runtime: AgentContext): Agent {
     return requested;
   };
 
-  /** Runs one agent method as a top-level step carrying agent metrics. */
+  /**
+   * Runs one agent method as a top-level step carrying agent metrics. A
+   * judgment (`assert`, `waitFor`) is a verification step: its passing is what
+   * confirms the action traces staged before it (cache/context.ts).
+   */
   const step = async <Value>(
     options: InvocationOptions,
     label: string,
     body: (invocation: Invocation) => Promise<Value>,
+    stepOptions: StepRunOptions = {},
   ): Promise<Value> =>
-    runtime.steps.run('agent', options.api, label, async () => {
-      const invocation = new Invocation(runtime, { ...options, label });
-      try {
-        return await body(invocation);
-      } catch (cause) {
-        throw toAgentError(cause);
-      } finally {
-        invocation.finish();
-      }
-    });
+    runtime.steps.run(
+      'agent',
+      options.api,
+      label,
+      async () => {
+        const invocation = new Invocation(runtime, { ...options, label });
+        try {
+          return await body(invocation);
+        } catch (cause) {
+          throw toAgentError(cause);
+        } finally {
+          invocation.finish();
+        }
+      },
+      stepOptions,
+    );
 
   /** One judgment call against a fresh observation. */
   const askJudgment = (invocation: Invocation, instruction: string, observation: AgentObservation) =>
@@ -120,6 +132,7 @@ export function createAgentFixture(runtime: AgentContext): Agent {
             });
           }
         },
+        { verifies: true },
       );
     },
 
@@ -201,6 +214,7 @@ export function createAgentFixture(runtime: AgentContext): Agent {
           if (judgment.result) return;
           throw new AgentError('ASSERTION_FAILED', judgment.explanation, (screenshot === undefined ? {} : { screenshot }));
         },
+        { verifies: true },
       );
     },
   };

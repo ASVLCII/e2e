@@ -51,35 +51,36 @@ export interface AgentCacheContext {
   ): string;
   /**
    * Trace writes staged during the attempt. A trace is not trusted the moment
-   * its own step passes — the deterministic assertion right after it is what
-   * proves the flow reached the right state. The runner settles at attempt
-   * end via `flushStagedTraces`.
+   * its own step passes — the verification step after it is what proves the
+   * flow reached the right state. The runner settles at attempt end via
+   * `flushStagedTraces`.
    */
   readonly staged: StagedTraceWrite[];
 }
 
-/** How the attempt ended, as the write-settlement rule sees it. */
-export type AttemptCacheOutcome = 'passed' | 'failed' | 'interrupted';
-
 /**
- * Settles the attempt's staged trace writes. A staged trace is confirmed when
- * the attempt passed, or when any later step passed after it (the test aborts
- * at its first failure, so everything before the last passed step was
- * verified by what followed). On a failed attempt the unconfirmed trace is
- * not merely withheld: its entry is evicted, so a cached flow implicated in a
- * failure re-records on the next pass instead of replaying a poisoned state
- * forever. An interrupted attempt implicates nothing — it writes nothing and
- * evicts nothing.
+ * Settles the attempt's staged trace writes. A staged trace is confirmed only
+ * when a verification step — a deterministic assertion or an agent judgment
+ * (`run/steps.ts`, `StepRunOptions.verifies`) — passed after it: an act's own
+ * verdict is the recording executor's opinion of its work, and a later act
+ * passing says only that the executor coped with whatever state it found. A
+ * passing attempt confirms nothing by itself, so a flow no assertion ever
+ * checked is never replayed blind, and a failing attempt confirms exactly
+ * what had been verified before the failure landed. An unconfirmed trace is
+ * not merely withheld: its entry is evicted, so a cached flow implicated in
+ * a failure — or one that was never checked — re-records on the next pass
+ * instead of replaying a poisoned state forever. The runner does not call
+ * this for an interrupted attempt: interruption implicates nothing, so it
+ * writes nothing and evicts nothing.
  */
 export async function flushStagedTraces(
   context: AgentCacheContext,
-  lastPassedStepIndex: number,
-  outcome: AttemptCacheOutcome,
+  lastVerifiedStepIndex: number,
 ): Promise<void> {
   const staged = context.staged.splice(0);
-  if (context.mode !== 'read-write' || outcome === 'interrupted') return;
+  if (context.mode !== 'read-write') return;
   for (const write of staged) {
-    const confirmed = outcome === 'passed' || write.stepIndex < lastPassedStepIndex;
+    const confirmed = write.stepIndex < lastVerifiedStepIndex;
     try {
       if (confirmed) await context.store.write(write.keyHash, write.trace);
       else await context.store.delete?.(write.keyHash);
@@ -93,7 +94,7 @@ export async function flushStagedTraces(
  * Builds one attempt's cache context, or undefined when the cache is off.
  * A configured custom store replaces the file store wholesale — that is the
  * seam a cloud-shared store (Redis, an API) plugs into. Its hits are
- * re-validated at the one read site (`StepTraceSession.tryReplay`), like
+ * re-validated at the one read site (`StepTraceSession.begin`), like
  * every other store's.
  */
 export function createAgentCacheContext(options: {

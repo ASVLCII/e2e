@@ -599,10 +599,10 @@ export class TargetExecutor implements SerialHost {
     let timedOut = false;
     // Captured the moment the primary failure lands: steps that pass later —
     // afterEach cleanup, teardown — must not confirm traces the failure
-    // implicated (a cleanup navigation says nothing about the failed flow).
-    let lastPassedAtFailure = -1;
+    // implicated (a cleanup assertion says nothing about the failed flow).
+    let lastVerifiedAtFailure = -1;
     const recordFailure = (cause: unknown, atPhase: AttemptPhase): void => {
-      if (failure === undefined) lastPassedAtFailure = lastPassedStepIndex(steps.all());
+      if (failure === undefined) lastVerifiedAtFailure = steps.lastVerifiedStepIndex;
       failure = classifyError(cause);
       failurePhase = atPhase;
     };
@@ -716,17 +716,15 @@ export class TargetExecutor implements SerialHost {
       record.error = serializeError(failure, { phase: failurePhase ?? phase });
     }
 
-    if (cache !== undefined) {
+    if (cache !== undefined && record.status !== 'interrupted') {
       // Settled only after the status is classified: an interrupted attempt
-      // implicates nothing, so Ctrl-C can never evict a good entry. On a
-      // failure, confirmation stops at what had passed when the failure
-      // landed — later teardown steps prove nothing about the failed flow.
-      const lastPassed =
-        failure === undefined ? lastPassedStepIndex(record.steps) : lastPassedAtFailure;
+      // implicates nothing — it writes nothing and evicts nothing — so Ctrl-C
+      // can never evict a good entry. On a failure, confirmation stops at what
+      // had been verified when the failure landed — later teardown steps
+      // prove nothing about the flow.
       await flushStagedTraces(
         cache,
-        lastPassed,
-        record.status === 'passed' ? 'passed' : record.status === 'interrupted' ? 'interrupted' : 'failed',
+        failure === undefined ? steps.lastVerifiedStepIndex : lastVerifiedAtFailure,
       );
     }
     return record;
@@ -748,12 +746,4 @@ function classifyAttemptStatus(
     return 'timed-out';
   }
   return 'failed';
-}
-
-/** Highest timeline index among steps that passed, or -1 when none have. */
-function lastPassedStepIndex(steps: readonly { index: number; status: string }[]): number {
-  return steps.reduce(
-    (max, step) => (step.status === 'passed' && step.index > max ? step.index : max),
-    -1,
-  );
 }
