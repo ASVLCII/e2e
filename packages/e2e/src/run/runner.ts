@@ -68,7 +68,15 @@ export interface RunOptions {
   rawConfig?: E2EConfig | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   quiet?: boolean | undefined;
+  /** Cancellation: the running test ends, its teardown runs, the run finishes as `interrupted`. */
   interruptSignal?: AbortSignal | undefined;
+  /**
+   * Forced cancellation: every worker disposes its backend at once instead
+   * of finishing its test, and is killed after the cleanup budget. Counts as
+   * an interrupt on its own. The runner never handles process signals itself;
+   * the CLI's Ctrl-C ladder (`cli/signals.ts`) feeds these two.
+   */
+  forceSignal?: AbortSignal | undefined;
   /** Structured, JSON-serializable run events for embedding hosts. */
   onEvent?: RunEventSink | undefined;
 }
@@ -83,6 +91,13 @@ export interface RunOutcome {
   results: readonly ResultRecord[];
 }
 
+/**
+ * Added to the cleanup budget before a force-terminated worker is killed: its
+ * own disposal is bounded by that budget, and the margin lets a worker that
+ * used all of it still report and exit before the kill lands.
+ */
+const FORCE_KILL_MARGIN_MS = 1_000;
+
 /** Executes one complete run and returns the outcome without exiting. */
 export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   const cwd = options.cwd ?? process.cwd();
@@ -94,6 +109,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   /** The in-process recorder; child-process workers own their own. */
   let aiTraceRecorder: AiTraceRecorder | undefined;
   const interruptController = new AbortController();
+  const forceController = new AbortController();
   const runErrors: RunError[] = [];
   const results: ResultRecord[] = [];
   const serialGroups: SerialGroupRecord[] = [];
@@ -382,6 +398,8 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
         spawn: transport.spawn,
         interruptGraceMs: config.timeout + config.cleanupTimeout,
         interruptSignal: interrupted,
+        forceSignal: forceController.signal,
+        forceGraceMs: config.cleanupTimeout + FORCE_KILL_MARGIN_MS,
         events: {
           onResult: (result) => {
             results.push(result);
@@ -404,35 +422,49 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   };
 
   // The interrupt bridge is armed for the whole body — app startup, collection,
-  // scheduling — so a host's cancellation lands wherever the run is, not only
-  // once the scheduler happens to be running. From here the run owns external
-  // resources. Failures anywhere are recorded, never thrown — the outcome must
-  // survive its own execution and its own cleanup — and teardown always runs
-  // before the terminal `run-finished`, so that event means the app process
-  // and session store are gone.
-  const externalSignal = options.interruptSignal;
-  const onInterrupt = () => interruptController.abort();
-  if (externalSignal?.aborted === true) interruptController.abort();
-  externalSignal?.addEventListener('abort', onInterrupt, { once: true });
-  process.once('SIGINT', onInterrupt);
-  process.once('SIGTERM', onInterrupt);
+  // scheduling, teardown, the report — so a host's cancellation lands wherever
+  // the run is, not only once the scheduler happens to be running. From here
+  // the run owns external resources. Failures anywhere are recorded, never
+  // thrown — the outcome must survive its own execution and its own cleanup —
+  // and teardown always runs before the terminal `run-finished`, so that
+  // event means the app process and session store are gone. A forced
+  // interrupt is also an interrupt; that is enforced here, once, so the
+  // scheduler can take it for granted.
+  const interrupt = (mode: 'graceful' | 'forced'): void => {
+    if (mode === 'forced') interrupt('graceful');
+    const controller = mode === 'graceful' ? interruptController : forceController;
+    if (controller.signal.aborted) return;
+    controller.abort();
+    emit({ type: 'run-interrupted', mode });
+  };
+  const bridges = (
+    [
+      [options.interruptSignal, 'graceful'],
+      [options.forceSignal, 'forced'],
+    ] as const
+  ).map(([signal, mode]) => {
+    const onAbort = (): void => interrupt(mode);
+    if (signal?.aborted === true) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    return () => signal?.removeEventListener('abort', onAbort);
+  });
   try {
-    await executeRun();
-  } catch (cause) {
-    recordFailure(cause);
-  } finally {
-    process.removeListener('SIGINT', onInterrupt);
-    process.removeListener('SIGTERM', onInterrupt);
-    externalSignal?.removeEventListener('abort', onInterrupt);
-  }
-  for (const teardown of [() => sessionStore?.cleanup(), () => appProcess?.stop()]) {
     try {
-      await teardown();
+      await executeRun();
     } catch (cause) {
       recordFailure(cause);
     }
+    for (const teardown of [() => sessionStore?.cleanup(), () => appProcess?.stop()]) {
+      try {
+        await teardown();
+      } catch (cause) {
+        recordFailure(cause);
+      }
+    }
+    return await finish();
+  } finally {
+    for (const release of bridges) release();
   }
-  return finish();
 }
 
 /**

@@ -53,6 +53,14 @@ export interface RunUnitsOptions {
   /** Budget for a worker to finish an in-flight unit after an interrupt. */
   readonly interruptGraceMs: number;
   readonly interruptSignal: AbortSignal;
+  /**
+   * A forced interrupt: every busy worker is told to dispose its backend at
+   * once instead of finishing its unit, and is killed after `forceGraceMs`.
+   * The runner aborts it only with or after `interruptSignal`.
+   */
+  readonly forceSignal: AbortSignal;
+  /** Budget for a worker to dispose its backend after a forced interrupt. */
+  readonly forceGraceMs: number;
   readonly spawn: SpawnUnitRunner;
   readonly events: SchedulerEvents;
 }
@@ -93,6 +101,8 @@ class SchedulerWorker {
   inFlightTestId: string | undefined;
   sawFailure = false;
   becameReady = false;
+  /** Told to tear down at once by a forced interrupt; its exit is then the one asked for. */
+  terminated = false;
   private killTimer: NodeJS.Timeout | undefined;
 
   constructor(
@@ -137,6 +147,17 @@ class SchedulerWorker {
     this.killAfter(graceMs);
   }
 
+  /**
+   * Asks for immediate backend disposal and force-kills once the budget is
+   * spent, replacing the interrupt grace a busy worker was given.
+   */
+  terminate(graceMs: number): void {
+    this.terminated = true;
+    this.runner.send({ type: 'terminate' });
+    this.clearKillTimer();
+    this.killAfter(graceMs);
+  }
+
   killAfter(graceMs: number): void {
     if (this.killTimer !== undefined || !this.runner.alive) return;
     this.killTimer = setTimeout(() => this.runner.kill(), graceMs);
@@ -156,6 +177,7 @@ class Scheduler {
   private readonly workers: SchedulerWorker[] = [];
   private wake: (() => void) | undefined;
   private interruptBroadcast = false;
+  private forceBroadcast = false;
 
   constructor(private readonly options: RunUnitsOptions) {}
 
@@ -181,9 +203,11 @@ class Scheduler {
 
     const onInterrupt = (): void => this.wakeUp();
     this.options.interruptSignal.addEventListener('abort', onInterrupt, { once: true });
+    this.options.forceSignal.addEventListener('abort', onInterrupt, { once: true });
     try {
       for (;;) {
         this.broadcastInterrupt();
+        this.broadcastForce();
         this.dispatch();
         if (this.isDone()) break;
         await new Promise<void>((resolve) => {
@@ -192,6 +216,7 @@ class Scheduler {
       }
     } finally {
       this.options.interruptSignal.removeEventListener('abort', onInterrupt);
+      this.options.forceSignal.removeEventListener('abort', onInterrupt);
       await this.drain();
     }
   }
@@ -216,6 +241,21 @@ class Scheduler {
       worker.runner.send({ type: 'interrupt' });
       if (worker.state === 'busy') worker.killAfter(this.options.interruptGraceMs);
       else this.retire(worker);
+    }
+  }
+
+  /**
+   * The forced interrupt: no worker gets to finish its unit any more. Each
+   * busy one disposes its backend now and is killed after the force budget,
+   * however long the unit's own grace still had to run. Retired workers were
+   * already told to leave, on a shorter clock.
+   */
+  private broadcastForce(): void {
+    if (!this.options.forceSignal.aborted || this.forceBroadcast) return;
+    this.forceBroadcast = true;
+    // Exits arrive asynchronously, so iterating the live array is safe here.
+    for (const worker of this.workers) {
+      if (worker.state !== 'retired' && worker.runner.alive) worker.terminate(this.options.forceGraceMs);
     }
   }
 
@@ -500,14 +540,16 @@ class Scheduler {
     }
 
     if (unit !== undefined) {
-      this.options.events.onRunError({
-        error: serializeError(
-          new InfrastructureError(
-            'WORKER_EXIT',
-            `worker for target "${worker.targetName}" exited unexpectedly (${detail}) during ${unit.id}`,
+      if (!worker.terminated) {
+        this.options.events.onRunError({
+          error: serializeError(
+            new InfrastructureError(
+              'WORKER_EXIT',
+              `worker for target "${worker.targetName}" exited unexpectedly (${detail}) during ${unit.id}`,
+            ),
           ),
-        ),
-      });
+        });
+      }
       this.synthesizeCrashResults(state, worker, unit);
     } else if (tracked && !worker.becameReady) {
       state.initFailures += 1;

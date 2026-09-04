@@ -26,12 +26,15 @@ import { TargetWorker, type ResolvedUnitPairs, type TargetWorkerDeps } from './s
  */
 let outbox: Promise<void> = Promise.resolve();
 
+/** How long an exit waits for the outbox: a channel whose runner is gone may never acknowledge. */
+const FLUSH_GRACE_MS = 2_000;
+
 function send(message: WorkerToMain): void {
   outbox = outbox.then(
     () =>
       new Promise<void>((resolve) => {
         try {
-          if (process.send === undefined) resolve();
+          if (process.send === undefined || !process.connected) resolve();
           else process.send(message, undefined, undefined, () => resolve());
         } catch {
           // channel already closed; nothing left to deliver
@@ -42,7 +45,9 @@ function send(message: WorkerToMain): void {
 }
 
 function exitAfterFlush(code: 0 | 1): void {
-  void outbox.then(() => process.exit(code));
+  const exit = (): void => process.exit(code);
+  setTimeout(exit, FLUSH_GRACE_MS).unref();
+  void outbox.then(exit);
 }
 
 function fatal(cause: unknown): void {
@@ -114,6 +119,7 @@ async function bootstrap(
     runId: message.runId,
     artifactsRoot: message.artifactsRoot,
     headed: message.headed,
+    isolated: true,
     resolvePairs,
     debug,
   };
@@ -131,6 +137,16 @@ function main(): void {
   process.on('unhandledRejection', (cause) => fatal(cause));
 
   let worker: TargetWorker | undefined;
+
+  // The channel closes when the runner is gone: killed, crashed, or exited
+  // before this worker. A worker nobody is listening to must not keep driving
+  // a device or a browser: it tears its backend down right away — bounded by
+  // the cleanup budget like every disposal — and exits.
+  process.on('disconnect', () => {
+    if (worker === undefined) process.exit(1);
+    else worker.handle({ type: 'terminate' });
+  });
+
   process.on('message', (message: ChildProcessInbound) => {
     if (message.type === 'bootstrap') {
       // This worker owns its trace outright, so each drain point (unit-done,
