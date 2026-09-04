@@ -6,14 +6,35 @@
  * here (and no AI SDK) at all.
  */
 
-export { createAgent, type CreateAgentOptions } from './default-agent.ts';
+export {
+  compactSnapshotHistory,
+  createAgent,
+  formatReplayedPrefix,
+  type CreateAgentOptions,
+} from './default-agent.ts';
+export {
+  conversationMemory,
+  createGrammarTools,
+  createVerdictTool,
+  trackModelCalls,
+  VERDICT_RULES,
+  type ConversationMemory,
+  type GrammarToolOptions,
+  type ModelCallTracker,
+  type VerdictTool,
+} from './primitives.ts';
+
 export {
   createToolLoopExecutor,
   type ToolLoopExecutorOptions,
   type PreparedTurn,
   type PreparedMessages,
   type ToolLoopHelpers,
+  type WindDownPolicy,
 } from './tool-loop.ts';
+export { serializeLedger, type LedgerContext } from './ledger.ts';
+export type { LoopGuardThresholds } from './loop-guards.ts';
+
 export {
   defineTool,
   isDefinedTool,

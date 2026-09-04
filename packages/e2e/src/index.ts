@@ -21,9 +21,14 @@ export type * from './types.ts';
 export type {
   BlockedCategory,
   ExecutorActions,
+  ExecutorAttempt,
   ExecutorBudgets,
   ExecutorModelCall,
+  ExecutorNode,
   ExecutorObservation,
+  ExecutorObserveOptions,
+  ExecutorPixels,
+  ExecutorPriorStep,
   ExecutorStep,
   ExecutorTarget,
   ReplayedPrefix,
@@ -33,3 +38,4 @@ export type {
   StepVerdict,
   StepVerdictStatus,
 } from './agent/executor.ts';
+export type { VisionDegradation } from './run/steps.ts';

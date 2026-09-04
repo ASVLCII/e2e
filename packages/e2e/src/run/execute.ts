@@ -13,6 +13,7 @@ import {
   translateBackendError,
   type SerializedError,
 } from '../internal/errors.ts';
+import type { ExecutorAttempt } from '../agent/executor.ts';
 import { withAiTraceScope } from '../internal/ai-trace.ts';
 import { DebugTrace } from '../internal/debug.ts';
 import { canonicalDigest, timestamp, uuidv7 } from '../internal/ids.ts';
@@ -598,6 +599,20 @@ export class TargetExecutor implements SerialHost {
     const attemptAbort = new AbortController();
     const onInterrupt = () => attemptAbort.abort();
     this.interruptSignal.addEventListener('abort', onInterrupt, { once: true });
+    // Aborted in `finally`, so it fires once the attempt has ended on any path
+    // and an executor holding per-attempt state has one signal to release it
+    // on. Its own controller rather than `attemptAbort`, which only fires on
+    // interrupt and timeout, and which the session still reads during
+    // teardown. Serial members share the group's executor memory the way they
+    // share its ledger.
+    const attemptEnd = new AbortController();
+    const attempt: ExecutorAttempt = {
+      testId: pair.test.id,
+      attemptId,
+      index: attemptIndex,
+      signal: attemptEnd.signal,
+      memory: shared?.memory ?? new Map<string, unknown>(),
+    };
 
     const artifacts = createAttemptArtifacts({
       artifactsRoot: this.artifactsRoot,
@@ -679,6 +694,7 @@ export class TargetExecutor implements SerialHost {
         budget,
         runId: this.options.runId,
         attemptId,
+        attempt,
         artifacts: artifacts.sink,
         priorSteps,
         agentContext: pair.options.agentContext,
@@ -752,6 +768,7 @@ export class TargetExecutor implements SerialHost {
     } catch (cause) {
       recordFailure(cause, phase);
     } finally {
+      attemptEnd.abort();
       this.interruptSignal.removeEventListener('abort', onInterrupt);
       if (openSession !== null && shared === undefined) {
         await this.closeSession(openSession, attemptId, record, artifacts.sink, secondaryErrors);

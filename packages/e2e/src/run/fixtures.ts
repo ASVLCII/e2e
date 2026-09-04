@@ -1,7 +1,7 @@
 /** Attempt-scoped fixture graph (spec 02-test-api.md, 08-platforms.md). */
 
 import { createAgentFixture } from '../agent/index.ts';
-import type { StepExecutor } from '../agent/executor.ts';
+import type { ExecutorAttempt, StepExecutor } from '../agent/executor.ts';
 import type { AgentCacheContext } from '../cache/context.ts';
 import { createModelRouter } from '../agent/model/router.ts';
 import { createModelAdapter } from '../agent/model/sdk.ts';
@@ -45,6 +45,8 @@ export interface AttemptEnvironment {
   readonly budget: AttemptBudget;
   readonly runId: string;
   readonly attemptId: string;
+  /** The attempt as executors see it: identity, end-of-attempt signal, scratch memory. */
+  readonly attempt: ExecutorAttempt;
   readonly artifacts: ArtifactSink;
   /** Completed steps agent prompts quote as prior context; serial members see the whole group. */
   readonly priorSteps: () => readonly StepRecord[];
@@ -129,6 +131,7 @@ export function createFixtures(
           platform: environment.target.platform,
           verbs: environment.session.verbs,
         },
+        attempt: environment.attempt,
         priorSteps: environment.priorSteps,
         agentContext: joinAgentContext(
           environment.config.agent.context,

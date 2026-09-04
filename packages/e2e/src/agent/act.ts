@@ -41,17 +41,20 @@ import {
   type ExecutorActions,
   type ExecutorModelCall,
   type ExecutorObservation,
+  type ExecutorObserveOptions,
   type ExecutorTarget,
   type StepExecutorContext,
   type StepVerdict,
 } from './executor.ts';
 import type { AgentContext } from './invocation.ts';
 import { isDerivedValue } from './derived.ts';
-import { serializeLedger } from './ledger.ts';
+import { projectPriorSteps, serializeLedger } from './ledger.ts';
 import { instantiateLanguageModel } from './model/sdk.ts';
 import {
   observationShape,
+  pixelsForModel,
   prepareObservation,
+  projectTree,
   settleObservation,
   type AgentObservation,
 } from './observation.ts';
@@ -219,6 +222,10 @@ class ActDispatch {
   private readonly redact: (text: string) => string;
   /** The step's trace-cache session; undefined when caching is off or the kind is not cacheable. */
   private readonly stepCache: StepTraceSession | undefined;
+  /** Timeline index of the step being dispatched. */
+  private readonly stepIndex: number;
+  /** The last pixel decision recorded on this step: `allowed`, or the withheld reason. */
+  private pixelsDecided: string | undefined;
 
   constructor(
     private readonly runtime: AgentContext,
@@ -239,15 +246,18 @@ class ActDispatch {
     );
     this.metrics.contextBytes = new TextEncoder().encode(runtime.agentContext ?? '').byteLength;
     this.redact = runtime.redact;
-    // Only act steps are cacheable: an assert must not change state, so its
-    // trace would be empty — nothing to replay, nothing worth a read. The
-    // dispatch always runs inside a recorded step; a missing index would mean
-    // that invariant broke, and withholding the whole session is the safe
-    // answer.
-    const cache = spec.kind === 'act' ? runtime.cache : undefined;
+    // The dispatch always runs inside a recorded step (`dispatchAct` opens
+    // one); the index names the step to the executor and to the trace cache.
     const stepIndex = runtime.steps.currentStepIndex;
+    if (stepIndex === undefined) throw new Error('agent step dispatched outside a recorded step');
+    this.stepIndex = stepIndex;
+    // Only act steps are cacheable: an assert must not change state, so its
+    // trace would be empty — nothing to replay, nothing worth a read. An
+    // executor that declared `cache: 'off'` sees every step itself.
+    const cache =
+      spec.kind === 'act' && runtime.executor.cache !== 'off' ? runtime.cache : undefined;
     this.stepCache =
-      cache === undefined || stepIndex === undefined
+      cache === undefined
         ? undefined
         : new StepTraceSession(this.cacheHost(), {
             cache,
@@ -271,15 +281,14 @@ class ActDispatch {
     // The `model` getter below runs with the context object as `this`.
     // oxlint-disable-next-line typescript/no-this-alias
     const dispatch = this;
-    const ledger = serializeLedger(
-      this.runtime.priorSteps(),
-      this.runtime.config.limits.maxLedgerBytes,
-    );
+    const priorSteps = projectPriorSteps(this.runtime.priorSteps());
+    const ledger = serializeLedger(priorSteps, this.runtime.config.limits.maxLedgerBytes);
     this.metrics.ledgerBytes = ledger.bytes;
     const replayedPrefix = this.stepCache?.replayedPrefix;
     return {
       step: {
         kind: this.spec.kind,
+        index: this.stepIndex,
         instruction: this.spec.instruction,
         params: this.spec.params,
         secrets: [...this.spec.secrets.values()].map((secret) => ({
@@ -288,6 +297,7 @@ class ActDispatch {
         })),
       },
       target: this.runtime.target,
+      attempt: this.runtime.attempt,
       ...(replayedPrefix === undefined ? {} : { replayedPrefix }),
       signal: this.stepSignal,
       // Resolved on first read, so executors that bring their own model (or
@@ -295,6 +305,7 @@ class ActDispatch {
       get model() {
         return dispatch.resolveModel();
       },
+      priorSteps,
       ledger: ledger.text,
       agentContext: this.runtime.agentContext,
       budgets: {
@@ -305,7 +316,7 @@ class ActDispatch {
         recordModelCall: (usage) => this.recordModelCall(usage),
         recordToolCall: (call) => this.recordToolCall(call),
       },
-      observe: () => this.observe(),
+      observe: (options) => this.observe(options),
       attachTranscript: (text) => {
         // Debug detail only: transcripts are model prose and can be large.
         if (this.runtime.debug?.enabled === true && typeof text === 'string' && text !== '') {
@@ -715,8 +726,13 @@ class ActDispatch {
    * the same path (`observeSettled`); only replay's polls between retries
    * read raw (`observeLatest`).
    */
-  private async observe(): Promise<ExecutorObservation> {
-    const observation = await this.observeSettled();
+  private async observe(options: ExecutorObserveOptions = {}): Promise<ExecutorObservation> {
+    if (options === null || typeof options !== 'object') {
+      throw new TestError('INVALID_ARGUMENT', 'observe options must be an object');
+    }
+
+    const wantPixels = options.pixels === true;
+    const observation = await this.observeSettled(wantPixels);
     // The location is read after the settled capture, so it names the document
     // the tree describes; a backend without one simply leaves it out.
     const path = await this.currentPath();
@@ -726,33 +742,61 @@ class ActDispatch {
       truncated: observation.truncated,
       viewport: observation.viewport,
       ...(path === undefined ? {} : { path: this.redact(path) }),
+      ...(options.tree === true ? { tree: projectTree(observation.tree, this.redact) } : {}),
+      ...(wantPixels ? this.pixelsFor(observation) : {}),
     };
   }
 
-  private observeLatest(): Promise<AgentObservation> {
-    return this.serialized(() => this.observeNow(false));
+  /**
+   * Pixels for an executor that asked for them, or the reason they are
+   * withheld — the same decision the judgment tier makes, recorded as a
+   * policy event whenever it changes within the step.
+   */
+  private pixelsFor(observation: AgentObservation): Pick<ExecutorObservation, 'pixels' | 'pixelsWithheld'> {
+    const outcome = pixelsForModel(observation, this.runtime.taint.value);
+    if ('withheld' in outcome) {
+      this.recordPixelDecision('denied', outcome.withheld);
+      return { pixelsWithheld: outcome.withheld };
+    }
+    this.recordPixelDecision('allowed');
+    this.metrics.pixelBytes = Math.max(this.metrics.pixelBytes ?? 0, outcome.pixels.data.byteLength);
+    return { pixels: outcome.pixels };
   }
 
-  private observeSettled(): Promise<AgentObservation> {
-    return this.serialized(() => this.observeNow(true));
+  private recordPixelDecision(decision: 'allowed' | 'denied', code?: string): void {
+    const key = code ?? decision;
+    if (this.pixelsDecided === key) return;
+    this.pixelsDecided = key;
+    this.recordPolicy('vision.pixels', decision, code);
+  }
+
+  private observeLatest(): Promise<AgentObservation> {
+    return this.serialized(() => this.observeNow(false, false));
+  }
+
+  private observeSettled(pixels = false): Promise<AgentObservation> {
+    return this.serialized(() => this.observeNow(true, pixels));
   }
 
   /** One recorded observation; when `settle`, the captures loop inside it. */
-  private async observeNow(settle: boolean): Promise<AgentObservation> {
+  private async observeNow(settle: boolean, pixels: boolean): Promise<AgentObservation> {
     this.checkpoint();
+    // A tainted viewport never captures pixels: the backend would mask what it
+    // knows about, and the secret may be anywhere on screen by now.
+    const capturePixels = pixels && !this.runtime.taint.value;
     const observation = await instrumentPhase(
       this.runtime,
       { api: this.spec.api, kind: 'observation', phase: 'agent.observe' },
       () =>
         settle
-          ? settleObservation(() => this.captureObservation(), observationShape, {
+          ? settleObservation(() => this.captureObservation(capturePixels), observationShape, {
               remainingMs: () => this.deadline.remaining(),
               // The step's own hard stop must interrupt a settle sleep too —
               // the attempt signal alone would let settling outlive the step
               // by one poll interval.
               signal: this.stepSignal,
             })
-          : this.captureObservation(),
+          : this.captureObservation(capturePixels),
       (prepared) => ({ count: prepared.nodes.size, bytes: prepared.bytes }),
     );
     this.latest = observation;
@@ -761,9 +805,9 @@ class ActDispatch {
   }
 
   /** One raw observation capture: retried at the backend, then redacted and bounded. */
-  private async captureObservation(): Promise<AgentObservation> {
+  private async captureObservation(pixels: boolean): Promise<AgentObservation> {
     const raw = await retryingObserve({
-      observe: (operation) => this.session.observe(operation, { pixels: false }),
+      observe: (operation) => this.session.observe(operation, { pixels }),
       operation: () => this.operation(),
       guard: (cause) => this.checkpoint(cause),
       signal: this.runtime.engine.signal,
