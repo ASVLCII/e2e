@@ -13,12 +13,13 @@ export interface NormalizedBaseUrl {
 /**
  * Parses and normalizes the app base URL. Rejects userinfo, query, and
  * fragment. WHATWG parsing handles IDNA ASCII hosts, dot segments, and
- * default-port removal.
+ * default-port removal. A URL without a scheme gets `https://`, or `http://`
+ * for a loopback host, so `tester.army` and `localhost:3000` both work as-is.
  */
 export function normalizeBaseUrl(raw: string): NormalizedBaseUrl {
   let url: URL;
   try {
-    url = new URL(raw);
+    url = new URL(withScheme(raw));
   } catch {
     throw new ConfigurationError('INVALID_APP_URL', `invalid app URL: ${raw}`);
   }
@@ -41,6 +42,24 @@ export function normalizeBaseUrl(raw: string): NormalizedBaseUrl {
     );
   }
   return { href: url.href, origin: url.origin, basePath: url.pathname };
+}
+
+/**
+ * Prepends a scheme to a schemeless URL. `localhost:3000` parses as scheme
+ * `localhost:` under WHATWG rules, so a `scheme:` prefix counts as explicit
+ * only when what follows the colon is not a port (`file:/tmp/app` stays a
+ * file URL and is rejected downstream; `localhost:3000/app` is a host). The
+ * loopback check runs on the host the string would have under a scheme.
+ */
+function withScheme(raw: string): string {
+  if (/^[a-z][a-z0-9+.-]*:(?!\d+(?:[/?#]|$))/i.test(raw)) return raw;
+  let probe: URL;
+  try {
+    probe = new URL(`https://${raw}`);
+  } catch {
+    return raw;
+  }
+  return `${isLoopbackHost(probe.hostname) ? 'http' : 'https'}://${raw}`;
 }
 
 /** True for loopback hosts where plain HTTP is allowed. */

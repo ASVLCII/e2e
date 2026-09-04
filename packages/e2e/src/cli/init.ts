@@ -9,19 +9,20 @@ import { createAgent } from '@e2edev/e2e/agent';
 import { playwright } from '@e2edev/playwright';
 
 export default defineConfig({
-  specVersion: '0.1',
-  app: {
-    url: process.env.APP_URL ?? 'http://localhost:3000',
-  },
-  // The runner ships no intelligence: you construct the agent and pass it in.
-  // createAgent builds the built-in one; its model comes from E2E_MODEL.
+  // A scheme is optional: localhost gets http://, any other host gets https://.
+  app: { url: 'localhost:3000' },
+  // The built-in agent; its model comes from E2E_MODEL. Shape it with system,
+  // hand it tools, or pass any StepExecutor of your own instead.
   agent: createAgent({
     system: 'You are a thorough QA agent. Verify every outcome on screen.',
   }),
-  // The runner knows no platform: a target is served by the backend you pass.
-  targets: [{ name: 'web', platform: 'web', backend: playwright({ browser: 'chromium' }) }],
+  // The runner knows no platform: every target names the backend that drives it.
+  targets: [{ name: 'web', platform: 'web', backend: playwright() }],
 });
 `;
+
+/** The AI SDK is an optional peer; the scaffolded agent cannot run without it. */
+const AGENT_PEER = 'ai';
 
 const EXAMPLE_TEMPLATE = `import { test } from '@e2edev/playwright';
 import { expect } from '@e2edev/e2e';
@@ -103,6 +104,12 @@ export async function init(cwd: string, options: { yes?: boolean } = {}): Promis
     clack.log.success(`created ${file.relative}`);
   }
 
+  if (remaining.some((file) => file.relative === 'e2e.config.ts') && !declaresDependency(cwd, AGENT_PEER)) {
+    clack.log.warn(
+      `e2e.config.ts constructs the built-in agent, which runs on the AI SDK: npm install --save-dev ${AGENT_PEER}`,
+    );
+  }
+
   if (missing.length > 0) {
     const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n';
     writeFileSync(gitignorePath, `${existing}${prefix}${missing.join('\n')}\n`, 'utf8');
@@ -114,6 +121,24 @@ export async function init(cwd: string, options: { yes?: boolean } = {}): Promis
     return 0;
   }
 
-  clack.outro('next: install @e2edev/playwright, then APP_URL=http://localhost:3000 npx --no-install e2e run');
+  clack.outro('next: point app.url in e2e.config.ts at your app, then npx --no-install e2e run');
   return 0;
+}
+
+/** True when the project's package.json lists `name` as a dependency of any kind. */
+function declaresDependency(cwd: string, name: string): boolean {
+  const manifestPath = path.join(cwd, 'package.json');
+  if (!existsSync(manifestPath)) return false;
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (typeof manifest !== 'object' || manifest === null) return false;
+  const record = manifest as Record<string, unknown>;
+  return ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].some((field) => {
+    const block = record[field];
+    return typeof block === 'object' && block !== null && name in (block as object);
+  });
 }
