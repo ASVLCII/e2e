@@ -27,6 +27,7 @@ import type {
 } from '../run/steps.ts';
 import type { VisionMode } from '../types.ts';
 import { AgentError } from './error.ts';
+import { ModelUsage } from './usage.ts';
 import type { ExecutorAttempt, StepExecutor } from './executor.ts';
 import {
   boundedOperation,
@@ -147,11 +148,7 @@ export class Invocation {
   private readonly system: string;
   private readonly ledger: LedgerContext;
 
-  private inputTokens = 0;
-  private outputTokens = 0;
-  private peakTokensPerCall = 0;
-  private accounting: 'provider' | 'adapter-upper-bound' = 'provider';
-  private estimatedCostUsd: number | undefined;
+  private readonly usage = new ModelUsage();
   private observationRevision: string | undefined;
   private explanation: string | undefined;
   private visionInput = false;
@@ -373,10 +370,9 @@ export class Invocation {
               timeoutMs: Math.max(1, this.deadline.remaining()),
             }),
           (generated) => ({
-            count: generated.usage.inputTokens + generated.usage.outputTokens,
+            count: this.usage.record(generated.usage),
           }),
         );
-        this.recordUsage(result.usage);
         return result.value;
       } catch (cause) {
         if (
@@ -477,19 +473,7 @@ export class Invocation {
 
   private modelInfo(): StepModelInfo {
     const provenance = this.adapter.provenance;
-    return {
-      provider: provenance.provider,
-      model: provenance.model,
-      endpoint: provenance.endpoint,
-      adapterVersion: provenance.adapterVersion,
-      policyVersion: POLICY_VERSION,
-      calls: this.metrics.modelCalls,
-      tokenAccounting: this.accounting,
-      peakTokensPerCall: this.peakTokensPerCall,
-      inputTokens: this.inputTokens,
-      outputTokens: this.outputTokens,
-      ...(this.estimatedCostUsd !== undefined ? { estimatedCostUsd: this.estimatedCostUsd } : {}),
-    };
+    return this.usage.report({ ...provenance, policyVersion: POLICY_VERSION }, this.metrics.modelCalls);
   }
 
   private consumeModelCall(): void {
@@ -500,24 +484,6 @@ export class Invocation {
       );
     }
     this.metrics.modelCalls += 1;
-  }
-
-  private recordUsage(usage: {
-    inputTokens: number;
-    outputTokens: number;
-    accounting: 'provider' | 'adapter-upper-bound';
-    estimatedCostUsd: number | undefined;
-  }): void {
-    this.inputTokens += usage.inputTokens;
-    this.outputTokens += usage.outputTokens;
-    this.peakTokensPerCall = Math.max(
-      this.peakTokensPerCall,
-      usage.inputTokens + usage.outputTokens,
-    );
-    if (usage.accounting === 'adapter-upper-bound') this.accounting = 'adapter-upper-bound';
-    if (usage.estimatedCostUsd !== undefined) {
-      this.estimatedCostUsd = (this.estimatedCostUsd ?? 0) + usage.estimatedCostUsd;
-    }
   }
 }
 
