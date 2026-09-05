@@ -41,8 +41,9 @@ export default defineConfig({
 
 The effective base URL is `app.url`, then `APP_URL`; it is REQUIRED once a test
 calls `app.open()` and optional otherwise. There is no target-level URL
-override. `readyUrl` defaults to the effective base URL. The runner passes the
-resolved app URL, origin policy, and query context to every backend's `init`.
+override. `readyUrl` defaults to the effective base URL and, when set, MUST be
+an absolute http(s) URL, else `INVALID_CONFIG`. The runner passes the resolved
+app URL, origin policy, and query context to every backend's `init`.
 
 The base URL uses WHATWG URL parsing/serialization and MUST NOT contain
 userinfo, query, or fragment. A base URL without a scheme gets `https://`, or
@@ -187,6 +188,42 @@ seconds. A successful HTTP status is 200 through 499. On every exit path the
 runner sends the platform's graceful termination signal to the whole process
 group, waits `shutdownTimeout`, default 10 seconds, then force-terminates it.
 The runner never terminates a process it did not start.
+
+### Services
+
+`app.services` declares the dependency processes the app needs before it can
+boot: a database container, a cache, an auth emulator, a migration step. Each
+entry is a `CommandConfig` with the same shell-free spawning, the same `cwd`
+default, and the same environment rule as `app.command`: a service child
+inherits only the allowlist above plus its own `env`. `app.services` is valid
+without `app.command`; the app may already be running or be one of the
+services itself.
+
+Services start sequentially in declaration order, before `app.command` and
+before collection. Each service MUST be ready before the next one starts.
+Exactly one readiness contract is required per service, and a service with
+neither or both is `INVALID_CONFIG`:
+
+- `readyUrl`: the runner probes the URL exactly as it probes the app; a status
+  of 200 through 499 is ready.
+- `waitForExit: true`: the process itself is the step; it is ready when it
+  exits with code 0.
+
+Readiness is bounded by the service's `startupTimeout`, default 60 seconds. A
+non-zero exit, termination by a signal, a spawn failure, or an expired budget
+fails the run with `APP_UNREACHABLE`, and the message names the service by its
+position and command line.
+
+Teardown runs on every exit path: success, failure, and interrupt. The runner
+stops `app.command` first, then stops the started services in reverse
+declaration order with the same signal-then-force sequence, then runs each
+started service's optional `teardown` command in reverse order and waits for it
+to exit, bounded by the teardown's own `startupTimeout`, default 60 seconds. A
+service that already exited under `waitForExit` has nothing to stop but still
+gets its teardown. A teardown command that fails or does not exit in time is
+recorded as a `cleanup`-phase run error; it never aborts the remaining
+teardowns and never crashes the runner. Services never started because an
+earlier one failed get no teardown.
 
 ## Origins and environment
 

@@ -31,7 +31,7 @@ import { agentStepTable } from '../report/debug-steps.ts';
 import { renderJunitReport } from '../report/junit.ts';
 import { ListReporter } from '../report/list.ts';
 import { writeJsonReport, writeTextReport } from '../report/write.ts';
-import { AppProcess } from './app-process.ts';
+import { ManagedProcess, ServiceStack } from './managed-process.ts';
 import { createRunEventEmitter, toEventResult, type RunEventSink, type RunExitCode } from './events.ts';
 import { inProcessSpawner } from './in-process.ts';
 import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
@@ -117,7 +117,8 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   const results: ResultRecord[] = [];
   const serialGroups: SerialGroupRecord[] = [];
   const targetProvenance = new Map<string, TargetProvenance>();
-  let appProcess: AppProcess | undefined;
+  let appProcess: ManagedProcess | undefined;
+  let services: ServiceStack | undefined;
   let sessionStore: SessionStore | undefined;
 
   // Hoisted: workers re-resolve the same config file and need these overrides,
@@ -328,8 +329,17 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
 
   const executeRun = async (): Promise<void> => {
     const interrupted = interruptController.signal;
+    // Dependencies first, in order; the app command only starts once every
+    // service is ready. Neither spawns anything once the run was interrupted.
+    if (config.app.services.length > 0) {
+      const stack = new ServiceStack(config.app.services, config.projectRoot);
+      services = stack;
+      await debug.time('app.services.start', () => stack.start(interrupted));
+    }
     if (config.app.command !== undefined) {
-      const app = new AppProcess(config.app.command, config.projectRoot, config.app.readyUrl);
+      const app = new ManagedProcess('app.command', config.app.command, config.projectRoot, {
+        readyUrl: config.app.readyUrl,
+      });
       appProcess = app;
       await debug.time('app.start', () => app.start(interrupted));
     }
@@ -473,9 +483,9 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   // the run owns external resources. Failures anywhere are recorded, never
   // thrown — the outcome must survive its own execution and its own cleanup —
   // and teardown always runs before the terminal `run-finished`, so that
-  // event means the app process and session store are gone. A forced
-  // interrupt is also an interrupt; that is enforced here, once, so the
-  // scheduler can take it for granted.
+  // event means the app process, its services, and the session store are
+  // gone. A forced interrupt is also an interrupt; that is enforced here,
+  // once, so the scheduler can take it for granted.
   const interrupt = (mode: 'graceful' | 'forced'): void => {
     if (mode === 'forced') interrupt('graceful');
     const controller = mode === 'graceful' ? interruptController : forceController;
@@ -500,7 +510,13 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     } catch (cause) {
       recordFailure(cause);
     }
-    for (const teardown of [() => sessionStore?.cleanup(), () => appProcess?.stop()]) {
+    // Services go down after the app that depended on them; a failing service
+    // teardown command is a cleanup error of the run, not a crash.
+    for (const teardown of [
+      () => sessionStore?.cleanup(),
+      () => appProcess?.stop(),
+      () => services?.stop((cause) => recordFailure(cause, 'cleanup')),
+    ]) {
       try {
         await teardown();
       } catch (cause) {

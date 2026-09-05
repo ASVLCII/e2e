@@ -5,15 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { ConfigurationError } from '../internal/errors.ts';
 import { canonicalDigest, sha256Hex } from '../internal/ids.ts';
-import { isImplicitTestHost, normalizeBaseUrl, type NormalizedBaseUrl } from '../internal/urls.ts';
 import { isStepExecutor } from '../agent/executor.ts';
 import { boundedInt, positiveInt } from './validate.ts';
 import type {
   ArtifactsConfig,
   ArtifactStore,
-  AgentConfig,
   CacheMode,
-  CommandConfig,
   E2EConfig,
   ModelInstance,
   Platform,
@@ -28,8 +25,10 @@ import {
   type ResolvedAgentConfig,
   type ResolvedLimits,
 } from './agent.ts';
+import { digestApp, resolveApp, type ResolvedApp } from './app.ts';
 
 export type { ResolvedAgentConfig, ResolvedLimits } from './agent.ts';
+export type { ResolvedApp } from './app.ts';
 
 export interface ResolvedTarget {
   readonly name: string;
@@ -53,17 +52,7 @@ export interface ResolvedConfig {
   readonly projectRoot: string;
   readonly configPath: string | undefined;
   readonly ci: boolean;
-  readonly app: {
-    /** False when no app URL was configured and `base` is a synthetic loopback placeholder. */
-    readonly configured: boolean;
-    readonly base: NormalizedBaseUrl;
-    readonly readyUrl: string;
-    readonly allowedOrigins: readonly string[];
-    readonly environment: 'test' | 'staging' | 'production';
-    readonly command: CommandConfig | undefined;
-    /** Stable logical app identity; overrides the origin for cache/session keying. */
-    readonly identity: string | undefined;
-  };
+  readonly app: ResolvedApp;
   readonly targets: readonly ResolvedTarget[];
   readonly tests: readonly string[];
   readonly timeout: number;
@@ -141,15 +130,6 @@ const TOP_LEVEL_KEYS = new Set([
 
 const CACHE_KEYS = new Set(['mode', 'store', 'dir']);
 const CACHE_MODES = new Set(['off', 'read-only', 'read-write']);
-
-const APP_KEYS = new Set([
-  'url',
-  'command',
-  'readyUrl',
-  'allowedOrigins',
-  'environment',
-  'identity',
-]);
 
 /** True when CI mode is active per 05-config.md. */
 export function isCiMode(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -409,95 +389,6 @@ function isTraceCacheStore(value: unknown): value is TraceCacheStore {
   );
 }
 
-
-function resolveApp(raw: E2EConfig, env: NodeJS.ProcessEnv): ResolvedConfig['app'] {
-  if (raw.app !== undefined) {
-    for (const key of Object.keys(raw.app)) {
-      if (!APP_KEYS.has(key)) {
-        throw new ConfigurationError('INVALID_CONFIG', `unknown app config key "${key}"`);
-      }
-    }
-  }
-  const rawUrl = raw.app?.url ?? env['APP_URL'];
-  if (rawUrl === undefined || rawUrl === '') {
-    // Not every surface has an app URL to point at (a device, a desktop
-    // shell): a synthetic loopback base keeps navigation resolution and
-    // identity digests defined, and `app.open()` fails loud with
-    // APP_URL_REQUIRED the moment a test actually needs one. A configured
-    // app command without a URL is still a mistake worth failing early on.
-    const orphaned = Object.keys(raw.app ?? {}).filter((key) => key !== 'command' && key !== 'url');
-    if (orphaned.length > 0) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `app.${orphaned[0]} requires app.url: set app.url in e2e.config.ts or the APP_URL environment variable`,
-      );
-    }
-    if (raw.app?.command === undefined) {
-      return {
-        configured: false,
-        base: normalizeBaseUrl('http://127.0.0.1:1'),
-        readyUrl: 'http://127.0.0.1:1/',
-        allowedOrigins: [],
-        environment: 'test',
-        command: undefined,
-        identity: undefined,
-      };
-    }
-    throw new ConfigurationError(
-      'APP_URL_REQUIRED',
-      'an app URL is required alongside app.command: set app.url in e2e.config.ts or the APP_URL environment variable',
-    );
-  }
-  const base = normalizeBaseUrl(rawUrl);
-  const baseHost = new URL(base.href).hostname;
-
-  // The environment is a label for the report and the cache/session identity
-  // digest, not a gate: a loopback, `.localhost`, or `.test` host is `test`,
-  // any other host is `production` unless the config says otherwise.
-  const environment = raw.app?.environment ?? (isImplicitTestHost(baseHost) ? 'test' : 'production');
-  if (!['test', 'staging', 'production'].includes(environment)) {
-    throw new ConfigurationError('INVALID_CONFIG', `invalid app.environment "${environment}"`);
-  }
-
-  const allowedOrigins = raw.app?.allowedOrigins ?? [base.origin];
-  for (const origin of allowedOrigins) {
-    let parsed: URL;
-    try {
-      parsed = new URL(origin);
-    } catch {
-      throw new ConfigurationError('INVALID_CONFIG', `invalid allowed origin: ${origin}`);
-    }
-    if (parsed.origin !== origin) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `allowed origin must be a serialized origin, got ${origin} (expected ${parsed.origin})`,
-      );
-    }
-  }
-
-  const command = raw.app?.command;
-  if (command !== undefined) {
-    if (typeof command.executable !== 'string' || command.executable.length === 0) {
-      throw new ConfigurationError('INVALID_CONFIG', 'app.command.executable is required');
-    }
-  }
-
-  const identity = raw.app?.identity;
-  if (identity !== undefined && (typeof identity !== 'string' || identity.trim() === '')) {
-    throw new ConfigurationError('INVALID_CONFIG', 'app.identity must be a non-empty string');
-  }
-
-  return {
-    configured: true,
-    base,
-    readyUrl: raw.app?.readyUrl ?? base.href,
-    allowedOrigins,
-    environment,
-    command,
-    identity,
-  };
-}
-
 function resolveTargets(raw: E2EConfig): readonly ResolvedTarget[] {
   if (raw.targets === undefined) {
     throw new ConfigurationError(
@@ -625,20 +516,23 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
   // which is exactly what survives the function-stripping JSON clone below.
   // Every model slot is reduced to its identity: a live instance carries
   // provider settings (and possibly credentials) that must never be digested.
+  // `app` is digested with every command env reduced to names.
   const rawAgent = raw.agent;
-  const forClone: E2EConfig =
-    rawAgent === undefined || isStepExecutor(rawAgent)
-      ? raw
+  const forClone: Record<string, unknown> = {
+    ...raw,
+    ...(raw.app === undefined ? {} : { app: digestApp(raw.app) }),
+    ...(rawAgent === undefined || isStepExecutor(rawAgent)
+      ? {}
       : {
-          ...raw,
           agent: {
             ...rawAgent,
             ...(isModelInstance(rawAgent.model) ? { model: modelIdentity(rawAgent.model) } : {}),
             ...(isModelInstance(rawAgent.visionModel)
               ? { visionModel: modelIdentity(rawAgent.visionModel) }
               : {}),
-          } as AgentConfig,
-        };
+          },
+        }),
+  };
   const sanitized: Record<string, unknown> = {
     ...(structuredCloneJsonSafe(forClone) as Record<string, unknown>),
     projectId,
@@ -661,12 +555,6 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
             : {}),
         },
       ]),
-    );
-  }
-  if (raw.app?.command?.env !== undefined) {
-    const app = sanitized['app'] as { command: { env: unknown } };
-    app.command.env = Object.fromEntries(
-      Object.keys(raw.app.command.env).map((key) => [key, { envName: key }]),
     );
   }
   if (raw.targets !== undefined) {
