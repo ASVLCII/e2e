@@ -28,8 +28,9 @@ import { DebugTrace } from '../internal/debug.ts';
 import { timestamp, uuidv7 } from '../internal/ids.ts';
 import { buildReport, describeTarget, type Report1Document, type TargetProvenance } from '../report/build.ts';
 import { agentStepTable } from '../report/debug-steps.ts';
+import { renderJunitReport } from '../report/junit.ts';
 import { ListReporter } from '../report/list.ts';
-import { writeJsonReport } from '../report/write.ts';
+import { writeJsonReport, writeTextReport } from '../report/write.ts';
 import { AppProcess } from './app-process.ts';
 import { createRunEventEmitter, toEventResult, type RunEventSink, type RunExitCode } from './events.ts';
 import { inProcessSpawner } from './in-process.ts';
@@ -50,7 +51,7 @@ export interface RunOptions {
   headed?: boolean | undefined;
   retries?: number | undefined;
   workers?: number | undefined;
-  reporters?: readonly ('list' | 'json')[] | undefined;
+  reporters?: readonly ('list' | 'json' | 'junit')[] | undefined;
   artifactsDir?: string | undefined;
   passWithNoTests?: boolean | undefined;
   /** Runs with the trace cache off (`--no-cache`), overriding the config. */
@@ -86,6 +87,8 @@ export interface RunOutcome {
   status: 'passed' | 'failed' | 'error' | 'interrupted';
   report: Report1Document;
   reportPath: string | undefined;
+  /** Where the JUnit XML was written; undefined unless the `junit` reporter was selected. */
+  junitPath: string | undefined;
   /** Where the AI trace was written; undefined unless `aiTrace` was requested. */
   aiTracePath: string | undefined;
   results: readonly ResultRecord[];
@@ -140,10 +143,11 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   // different stories.
   const reporters = loaded.config?.reporters ?? options.reporters ?? ['list'];
   const emit = createRunEventEmitter([
-    options.quiet === true || reporters.includes('json') ? undefined : new ListReporter().handle,
+    options.quiet === true || !reporters.includes('list') ? undefined : new ListReporter().handle,
     options.onEvent,
   ]);
   const jsonReport = reporters.includes('json');
+  const junitReport = reporters.includes('junit');
 
   /** Records one run-level error once: into the report and onto the stream. */
   const recordRunError = (runError: RunError): void => {
@@ -190,10 +194,10 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
    * returned in-memory document becomes the only complete record. The file
    * is not retried — the destination just failed.
    */
-  const writeCanonicalReport = async (config: ResolvedConfig): Promise<string | undefined> => {
+  const writeCanonicalReport = async (config: ResolvedConfig, document: Report1Document): Promise<string | undefined> => {
     const target = path.join(path.dirname(resolveArtifactsRoot(config, options.artifactsDir)), 'report.json');
     try {
-      await writeJsonReport(target, buildRunReport(currentExitCode()));
+      await writeJsonReport(target, document);
       return target;
     } catch (cause) {
       recordFailure(
@@ -201,6 +205,31 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
           'infrastructure',
           'REPORT_WRITE_FAILED',
           `the canonical report could not be written: ${errorMessage(cause)}`,
+          { cause },
+        ),
+        'report',
+      );
+      return undefined;
+    }
+  };
+
+  /**
+   * Writes the JUnit rendering of one document next to the canonical report.
+   * Same terms: the path is returned only once the file exists, and a lost
+   * file is a recorded run error.
+   */
+  const writeJunitReport = async (config: ResolvedConfig, document: Report1Document): Promise<string | undefined> => {
+    if (!junitReport) return undefined;
+    const target = path.join(path.dirname(resolveArtifactsRoot(config, options.artifactsDir)), 'junit.xml');
+    try {
+      await writeTextReport(target, renderJunitReport(document));
+      return target;
+    } catch (cause) {
+      recordFailure(
+        new E2EError(
+          'infrastructure',
+          'REPORT_WRITE_FAILED',
+          `the JUnit report could not be written: ${errorMessage(cause)}`,
           { cause },
         ),
         'report',
@@ -242,7 +271,23 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
 
   const finish = async (): Promise<RunOutcome> => {
     const aiTracePath = loaded.config === undefined ? undefined : await writeAiTrace(loaded.config);
-    const reportPath = loaded.config === undefined ? undefined : await writeCanonicalReport(loaded.config);
+    let reportPath: string | undefined;
+    let junitPath: string | undefined;
+    if (loaded.config !== undefined) {
+      // The JUnit rendering goes first, from the document as it stands, and
+      // the canonical report is written once, last: a lost junit.xml is then
+      // recorded before report.json exists, so the failure lands in the file,
+      // the exit code, the outcome, and run-finished alike. When the rendering
+      // succeeds nothing was recorded in between, and the canonical report is
+      // that very document.
+      const document = buildRunReport(currentExitCode());
+      const recorded = runErrors.length;
+      junitPath = await writeJunitReport(loaded.config, document);
+      reportPath = await writeCanonicalReport(
+        loaded.config,
+        runErrors.length === recorded ? document : buildRunReport(currentExitCode()),
+      );
+    }
     const exitCode = currentExitCode();
     const status = statusOf(exitCode);
     const report = buildRunReport(exitCode);
@@ -252,6 +297,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       status,
       exitCode,
       ...(reportPath === undefined ? {} : { reportPath }),
+      ...(junitPath === undefined ? {} : { junitPath }),
       ...(aiTracePath === undefined ? {} : { aiTracePath }),
     });
     if (jsonReport) {
@@ -261,7 +307,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       process.stderr.write(debug.summary());
       process.stderr.write(agentStepTable(results, serialGroups));
     }
-    return { exitCode, status, report, reportPath, aiTracePath, results };
+    return { exitCode, status, report, reportPath, junitPath, aiTracePath, results };
   };
 
   if (loaded.config === undefined) {
