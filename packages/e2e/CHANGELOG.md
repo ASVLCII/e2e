@@ -1,5 +1,71 @@
 # @e2edev/e2e
 
+## 0.4.0
+
+### Minor Changes
+
+- [#136](https://github.com/tester-army/e2e/pull/136) [`686a2fa`](https://github.com/tester-army/e2e/commit/686a2fa95c37123eff3c936f2069f8500e012274) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Add `app.services`: ordered dependency processes (a database container, a cache, an auth emulator, a migration step) that start sequentially before `app.command`, each ready before the next via a `readyUrl` probe or `waitForExit: true`, and are torn down in reverse on every exit path, followed by each service's optional `teardown` command. A service with neither readiness contract is `INVALID_CONFIG`; a readiness failure is `APP_UNREACHABLE` naming the service; a failing teardown is a `cleanup`-phase run error. Service and teardown `env` values enter the config digest as names only, like `app.command.env`. `app.readyUrl` is now validated as an absolute http(s) URL at config time, the same rule a service `readyUrl` follows, and `app.command` startup errors name it `app.command` rather than `app command`.
+
+- [#125](https://github.com/tester-army/e2e/pull/125) [`20c5d4a`](https://github.com/tester-army/e2e/commit/20c5d4ad404e90df8f54831e063d26536fae0073) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The harness is a notary, not an author: it witnesses and bounds what a step
+  executor does and no longer decides what the executor's model reads.
+
+  The executor context gains `attempt` (test id, attempt id, retry index, an
+  end-of-attempt signal, and a per-attempt `memory` map the harness holds and
+  never persists or reports), `step.index`, and `priorSteps` — the completed
+  steps as structured, sanitized records beside the existing `ledger` string.
+  `observe({ tree, pixels })` opts into the redacted node tree and masked
+  viewport pixels; pixels are withheld with a reason after a secret fill, when
+  masking is unproven, or when the backend has none. A `StepExecutor` may
+  declare `cache: 'off'` so every one of its steps reaches `runStep` instead of
+  a cached replay.
+
+  The agent surface is layered like the AI SDK. `createAgent` is unchanged:
+  the golden path, five options. `createToolLoopExecutor` is where the model's
+  reading is shaped: `buildPrompt` may return a message history, and it gains
+  `onConclude(ctx, { messages, verdict })` plus `loopGuards` / `windDown`
+  policy. New primitives from `@e2edev/e2e/agent` compose with the chassis or a
+  raw `ToolLoopAgent` and load no `ai` themselves: `createGrammarTools`,
+  `createVerdictTool`, `trackModelCalls`, `conversationMemory`, plus the
+  exported `serializeLedger`, `compactSnapshotHistory`, and
+  `formatReplayedPrefix`. The chassis is rebuilt on those primitives. A model
+  that remembers every step of a test is the chassis, the grammar tools, and
+  `conversationMemory`.
+
+  Spec chapter 10 now states what the ledger must guarantee (deterministic,
+  bounded, never model-produced, never carrying secrets) instead of prescribing
+  the serialization algorithm, which becomes the reference runner's exported
+  default.
+
+- [#137](https://github.com/tester-army/e2e/pull/137) [`cec8cee`](https://github.com/tester-army/e2e/commit/cec8ceeac3d07ddbe0572cdee36ad341d68e0d7f) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Add a `junit` reporter. Selected with `reporters: ['junit']` or `--reporter junit`, it renders the run's `report-1` document as JUnit XML and atomically writes `.e2e/junit.xml` beside `report.json`, on every outcome where the report is written: one `<testsuite>` per test file, one `<testcase>` per test-target pair, `<failure>` for test-category errors, `<error>` for infrastructure and configuration errors, `<skipped>` with the reason, and a `run` suite carrying run-level errors such as `APP_UNREACHABLE`. It combines with `list` or `json`. `RunOutcome` and the `run-finished` event carry `junitPath`, the list reporter prints it, and `e2e init` gitignores the file.
+
+- [#132](https://github.com/tester-army/e2e/pull/132) [`bc87f15`](https://github.com/tester-army/e2e/commit/bc87f15b3b62258f8e9c059873e1f89a67ba27de) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Keep secret redaction and pixel taint with the live session across serial members. Route device model screenshots through guarded observations and reserve project-tool action budgets before dispatch, serializing mutations with grammar actions.
+
+  Add explicit fixture operation declarations, preserve legacy factories, mark contributed assertions as verification steps, and isolate asynchronous step attribution. Share cancellation helpers; deprecate optional tool annotations whose replay and secret semantics are not implemented.
+
+  Preserve fixture object identity and mutable state when recording declared operations, and retain artifacts and viewport metadata attached before a legacy synchronous failure.
+
+  Bound device located references and reuse snapshot location metadata. Both reference backends require e2e >=0.4.0 for the new fixture and lifecycle helpers.
+
+### Patch Changes
+
+- [#135](https://github.com/tester-army/e2e/pull/135) [`1d1e37e`](https://github.com/tester-army/e2e/commit/1d1e37e648e431199b4bdd08dc3315535856fbc3) Thanks [@KrzysztofMoch](https://github.com/KrzysztofMoch)! - `e2e init` now sets up the package, not only the files: it creates a private ESM `package.json` when none exists, adds the runner and the chosen packages to `devDependencies` while preserving existing versions and module type, and offers to install them with the project's package manager. The wizard picks a backend (none, Playwright, or agent-device, defaulting to iOS on macOS and Android elsewhere) and whether to enable AI testing; `--yes` enables AI with no backend and no installation.
+
+  Loading a `.ts` config or test outside an ESM package now fails with an actionable message instead of a loader error.
+
+- [#130](https://github.com/tester-army/e2e/pull/130) [`2b3342d`](https://github.com/tester-army/e2e/commit/2b3342df89368de73ca27d5fe419d85c1c3b1c94) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Share model usage accounting between executor steps and judgment calls. Keep missing, partial, or estimated usage marked as adapter-upper-bound and reject invalid token counters and costs.
+
+  Sanitize judgment event counts before recording them. Cap unrepresentable token sums, mark their accounting non-authoritative, and omit overflowing cost totals.
+
+- [#126](https://github.com/tester-army/e2e/pull/126) [`15ebb46`](https://github.com/tester-army/e2e/commit/15ebb465b883047b6afb0d126ab6c4a0cdaf9fb9) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A replayed step that navigates now waits for its recorded destination path
+  before the end state is judged. A step that moved to another pathname records
+  no anchors; the path is its whole postcondition, and the replayed tap that
+  starts the navigation returns before the new document commits. The replay read
+  the path once, right there, so every cross-page replay handed off as
+  `end-mismatch` and the executor paid for the step again. The path is polled
+  with the same settling backoff anchors use (100 to 3000 ms, 15 s cap, bounded
+  by the step budget), and a navigation step self-finalizes zero-turn like a
+  same-page one.
+
 ## 0.3.0
 
 ### Minor Changes

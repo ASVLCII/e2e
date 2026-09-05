@@ -1,5 +1,38 @@
 # @e2edev/playwright
 
+## 0.4.0
+
+### Minor Changes
+
+- [#133](https://github.com/tester-army/e2e/pull/133) [`d14a79c`](https://github.com/tester-army/e2e/commit/d14a79c0420e25a2db9244bff4e107af42395a04) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `surfaceOf(handle)` exposes the live `Page` and `BrowserContext` behind a
+  `playwright()` handle to agent-side code, the way `@e2edev/agent-device`
+  exposes its device surface. A step executor that replaces the toolset
+  wholesale can now drive the page e2e itself opened, instead of attaching a
+  second browser it cannot reach. Both accessors read the current attempt and
+  throw `INVALID_STATE` before it exists; the harness remains the notary for
+  what it witnesses, and a caller here acts out of band.
+
+### Patch Changes
+
+- [#131](https://github.com/tester-army/e2e/pull/131) [`04f4a43`](https://github.com/tester-army/e2e/commit/04f4a43574c65dbb6b1cdb406da569727f56368c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An exception thrown by the page inside `web.evaluate` is now a test failure,
+  `EVALUATE_FAILED`, carrying the page's own message, as the spec's evaluation
+  rules describe. It was reported as infrastructure (`BACKEND_FAILURE`, exit
+  code 3) with Playwright's call prefix in front of the message, so a script
+  that failed a check read like a broken browser. A page-side result envelope
+  distinguishes these exceptions from transport failures. Timeouts, page and
+  browser closure, crashes, protocol failures, and a document lost to navigation
+  keep their infrastructure classification.
+
+- [#129](https://github.com/tester-army/e2e/pull/129) [`c4b74ee`](https://github.com/tester-army/e2e/commit/c4b74ee4fdbbd00bc919a4b287250c5f0e2234f3) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Replace the keyed browser pool with a single shared connection per worker, preserving reconnect and in-flight launch cleanup.
+
+- [#132](https://github.com/tester-army/e2e/pull/132) [`bc87f15`](https://github.com/tester-army/e2e/commit/bc87f15b3b62258f8e9c059873e1f89a67ba27de) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Keep secret redaction and pixel taint with the live session across serial members. Route device model screenshots through guarded observations and reserve project-tool action budgets before dispatch, serializing mutations with grammar actions.
+
+  Add explicit fixture operation declarations, preserve legacy factories, mark contributed assertions as verification steps, and isolate asynchronous step attribution. Share cancellation helpers; deprecate optional tool annotations whose replay and secret semantics are not implemented.
+
+  Preserve fixture object identity and mutable state when recording declared operations, and retain artifacts and viewport metadata attached before a legacy synchronous failure.
+
+  Bound device located references and reuse snapshot location metadata. Both reference backends require e2e >=0.4.0 for the new fixture and lifecycle helpers.
+
 ## 0.3.0
 
 ### Minor Changes

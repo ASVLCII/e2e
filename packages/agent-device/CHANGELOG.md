@@ -1,5 +1,19 @@
 # @e2edev/agent-device
 
+## 0.2.1
+
+### Patch Changes
+
+- [#128](https://github.com/tester-army/e2e/pull/128) [`3c24e17`](https://github.com/tester-army/e2e/commit/3c24e1714bf1862f1e2d48c10e2c649c7ce433a0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Replace the handwritten PNG codec with pngjs while preserving opaque rectangle masking. Use the library for screenshot test fixtures and reject malformed images.
+
+- [#132](https://github.com/tester-army/e2e/pull/132) [`bc87f15`](https://github.com/tester-army/e2e/commit/bc87f15b3b62258f8e9c059873e1f89a67ba27de) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Keep secret redaction and pixel taint with the live session across serial members. Route device model screenshots through guarded observations and reserve project-tool action budgets before dispatch, serializing mutations with grammar actions.
+
+  Add explicit fixture operation declarations, preserve legacy factories, mark contributed assertions as verification steps, and isolate asynchronous step attribution. Share cancellation helpers; deprecate optional tool annotations whose replay and secret semantics are not implemented.
+
+  Preserve fixture object identity and mutable state when recording declared operations, and retain artifacts and viewport metadata attached before a legacy synchronous failure.
+
+  Bound device located references and reuse snapshot location metadata. Both reference backends require e2e >=0.4.0 for the new fixture and lifecycle helpers.
+
 ## 0.2.0
 
 ### Minor Changes
