@@ -1171,21 +1171,6 @@ export interface ExecutorAttempt {
   readonly memory: Map<string, unknown>;
 }
 
-/** One completed prior step as the harness recorded it: raw material for an executor's history. */
-export interface ExecutorPriorStep {
-  readonly index: number;
-  readonly kind: 'agent' | 'locator' | 'assertion' | 'screen' | 'app' | 'session' | 'resource';
-  /** Public API name, e.g. `agent.act`, `screen.click`, `app.open`. */
-  readonly api: string;
-  /** Sanitized step label: the instruction, assertion, or target phrase. */
-  readonly label: string;
-  readonly status: 'passed' | 'failed' | 'blocked' | 'timed-out' | 'cancelled';
-  /** The step's handoff — an agent verdict summary or judgment explanation — sanitized. */
-  readonly explanation?: string;
-  /** How the trace cache took part in an `agent.act` step; `self-finalized` ran without any executor. */
-  readonly cache?: 'self-finalized' | 'agent-concluded' | 'missed';
-}
-
 /** What an executor asks `observe()` to include beyond the text serialization. */
 export interface ExecutorObserveOptions {
   /** Include the redacted node tree as `tree`. */
@@ -1306,11 +1291,12 @@ export interface ExecutorBudgets {
    */
   recordModelCall(usage?: ExecutorModelCall): void;
   /**
-   * Records one executor tool call that did not go through `actions`. A
-   * mutating tool consumes an action-budget slot and may throw
-   * STEP_BUDGET_EXHAUSTED; every call is recorded as a step event.
+   * Runs one project tool under the step's accounting: a mutating tool
+   * reserves an action-budget slot before its body runs and may throw
+   * STEP_BUDGET_EXHAUSTED; mutations are serialized with grammar actions;
+   * every call is recorded as a step event.
    */
-  recordToolCall(call: { name: string; mutates: boolean; durationMs?: number }): void;
+  runTool<T>(call: { name: string; mutates: boolean }, body: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -1367,11 +1353,9 @@ export interface StepExecutorContext {
   readonly model: ModelInstance | undefined;
   /**
    * Completed prior steps of this attempt (and, in a serial group, of earlier
-   * members), oldest first. Structured, so the executor decides what history
-   * its model reads; `ledger` is the runner's default serialization of them.
+   * members) serialized for prompt context, oldest first, bounded by
+   * `limits.maxLedgerBytes`; `''` when none.
    */
-  readonly priorSteps: readonly ExecutorPriorStep[];
-  /** Completed prior steps serialized for prompt context; `''` when none. */
   readonly ledger: string;
   readonly agentContext: string | undefined;
   readonly budgets: ExecutorBudgets;
@@ -1413,22 +1397,7 @@ export interface StepExecutor {
 
 }
 
-/**
- * What a `blocked` verdict names as the obstacle. The first four have
- * external owners; `automation` means the executor ran out of room and says
- * nothing about the product.
- */
-export type BlockedCategory =
-  | 'credentials'
-  | 'environment'
-  | 'seed_data'
-  | 'test_setup'
-  | 'automation';
-
 /** The closed set of codes a `blocked` verdict may carry (chapter 16). */
 export const BLOCKABLE_CODES: ReadonlySet<AgentErrorCode>;
 /** Codes only the runtime assigns (budget, timeout, cancel); an executor may carry but never invent them. */
 export const RUNTIME_CODES: ReadonlySet<AgentErrorCode>;
-
-/** The blocked category a code names, or undefined when it is not blockable. */
-export function blockedCategoryOf(code: AgentErrorCode): BlockedCategory | undefined;

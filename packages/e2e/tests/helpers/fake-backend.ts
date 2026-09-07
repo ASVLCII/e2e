@@ -217,7 +217,7 @@ export function createFakeBackend(behavior: FakeBackendBehavior = {}): FakeBacke
     ...(behavior.fixtures === true
       ? {
           fixtures: {
-            gadget: (context) => context.expectable({
+            gadget: (context) => context.fixture('gadget', context.expectable({
               async poke(what: string) {
                 fixtureCalls.push(`poke:${what}`);
                 return `poked ${what}`;
@@ -227,7 +227,7 @@ export function createFakeBackend(behavior: FakeBackendBehavior = {}): FakeBacke
                 await new Promise((resolve) => setTimeout(resolve, options?.timeout ?? 50));
                 return 'done';
               },
-              async hang() {
+              async hang(_options?: { timeout?: number }) {
                 await new Promise(() => undefined);
               },
               async dropFile() {
@@ -250,12 +250,18 @@ export function createFakeBackend(behavior: FakeBackendBehavior = {}): FakeBacke
                   fixtureCalls.push(`turn:${name}`);
                 },
               },
-            }, () => ({
+            }, () => context.fixture('expect', {
               async toBePoked(times: number) {
                 const poked = fixtureCalls.filter((call) => call.startsWith('poke:')).length;
                 if (poked !== times) throw new Error(`poked ${poked} times, expected ${times}`);
               },
-            })),
+            }, { toBePoked: { kind: 'assertion' } })), {
+              poke: { kind: 'resource', label: (what) => what },
+              slow: { kind: 'resource', timeout: (options) => options?.timeout },
+              hang: { kind: 'resource', timeout: (options) => options?.timeout },
+              dropFile: { kind: 'resource' },
+              knobs: { turn: { kind: 'resource', label: (name) => name } },
+            }),
           },
         }
       : {}),

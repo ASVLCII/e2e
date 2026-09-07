@@ -278,8 +278,10 @@ class ActDispatch {
     // The `model` getter below runs with the context object as `this`.
     // oxlint-disable-next-line typescript/no-this-alias
     const dispatch = this;
-    const priorSteps = projectPriorSteps(this.runtime.priorSteps());
-    const ledger = serializeLedger(priorSteps, this.runtime.config.limits.maxLedgerBytes);
+    const ledger = serializeLedger(
+      projectPriorSteps(this.runtime.priorSteps()),
+      this.runtime.config.limits.maxLedgerBytes,
+    );
     this.metrics.ledgerBytes = ledger.bytes;
     const replayedPrefix = this.stepCache?.replayedPrefix;
     return {
@@ -302,7 +304,6 @@ class ActDispatch {
       get model() {
         return dispatch.resolveModel();
       },
-      priorSteps,
       ledger: ledger.text,
       agentContext: this.runtime.agentContext,
       budgets: {
@@ -311,7 +312,6 @@ class ActDispatch {
         actionsUsed: () => this.metrics.actionSteps,
         remainingMs: () => this.deadline.remaining(),
         recordModelCall: (usage) => this.recordModelCall(usage),
-        recordToolCall: (call) => this.recordToolCall(call),
         runTool: (call, body) => this.runTool(call, body),
       },
       observe: (options) => this.observe(options),
@@ -568,26 +568,6 @@ class ActDispatch {
         ),
       );
     }
-  }
-
-  /**
-   * Records one executor tool call that bypassed the grammar. Mutating tools
-   * consume an action-budget slot, so a project tool cannot spend past the
-   * ceiling the grammar enforces.
-   */
-  private recordToolCall(call: { name: string; mutates: boolean; durationMs?: number }): void {
-    if (this.closed) return;
-    this.checkpoint();
-    this.runtime.steps.recordEvent({
-      kind: 'backend',
-      startedAt: timestamp(),
-      durationMs: Math.max(0, Math.round(call.durationMs ?? 0)),
-      status: 'passed',
-      name: `tool:${call.name}`,
-    });
-    if (!call.mutates) return;
-    this.reserveAction();
-    this.stepCache?.recordGap(call.name);
   }
 
   /** Claims a mutation slot before any side effect, for both grammar and project tools. */

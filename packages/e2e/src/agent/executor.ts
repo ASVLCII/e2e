@@ -18,12 +18,9 @@
  */
 
 import type { ObservationPixels, SemanticNode } from '../backend/surface.ts';
-import type { StepCacheInfo, StepKind, StepRecord, VisionDegradation } from '../run/steps.ts';
+import type { VisionDegradation } from '../run/steps.ts';
 import type { AgentErrorCode, JsonValue, ModelInstance, Platform, ScrollDirection, Secret } from '../types.ts';
 import { AGENT_CODE_TABLE, isAgentError, type AgentError } from './error.ts';
-
-export type { BlockedCategory } from './error.ts';
-export { blockedCategoryOf } from './error.ts';
 
 /**
  * One step handed to an executor. `act` plans and executes a flow; `assert`
@@ -69,29 +66,6 @@ export interface ExecutorAttempt {
    * so several executors (or an executor and its tools) can share it.
    */
   readonly memory: Map<string, unknown>;
-}
-
-/**
- * One completed prior step, as the harness recorded it. Structured raw
- * material for whatever history an executor wants to build; `ledger` is the
- * harness's own serialization of the same records.
- */
-export interface ExecutorPriorStep {
-  readonly index: number;
-  readonly kind: StepKind;
-  /** Public API name, e.g. `agent.act`, `screen.click`, `app.open`. */
-  readonly api: string;
-  /** Sanitized step label: the instruction, assertion, or target phrase. */
-  readonly label: string;
-  readonly status: StepRecord['status'];
-  /** The step's handoff: an agent verdict summary or judgment explanation, sanitized. */
-  readonly explanation?: string;
-  /**
-   * How the trace cache took part in an `agent.act` step. `self-finalized`
-   * means the cache replayed it without any executor — an executor keeping
-   * its own history never saw that step run.
-   */
-  readonly cache?: StepCacheInfo['mode'];
 }
 
 /** What an executor asks `observe()` to include beyond the text serialization. */
@@ -210,15 +184,11 @@ export interface ExecutorBudgets {
    */
   recordModelCall(usage?: ExecutorModelCall): void;
   /**
-   * @deprecated Use runTool to reserve the budget before dispatch.
-   * Records one executor tool call that did not go through `actions` — a
-   * project tool from `defineTool`. A mutating tool consumes an action-budget
-   * slot and may throw `STEP_BUDGET_EXHAUSTED`; every call is recorded as a
-   * step event, so extensions run the same accounting pipeline as the
-   * grammar.
+   * Runs one project tool (a `defineTool` value) under the step's accounting:
+   * a mutating tool reserves an action-budget slot before its body runs and
+   * may throw `STEP_BUDGET_EXHAUSTED`; mutations are serialized with grammar
+   * actions; every call is recorded as a step event.
    */
-  recordToolCall(call: { name: string; mutates: boolean; durationMs?: number }): void;
-  /** Reserves a project tool's budget before execution and serializes mutations with grammar actions. */
   runTool<T>(call: { name: string; mutates: boolean }, body: () => Promise<T>): Promise<T>;
 }
 
@@ -293,11 +263,9 @@ export interface StepExecutorContext {
   readonly model: ModelInstance | undefined;
   /**
    * Completed prior steps of this attempt (and, in a serial group, of earlier
-   * members), oldest first. Structured, so an executor decides what history
-   * its model reads; `ledger` is the harness's default serialization of them.
+   * members) serialized for prompt context, oldest first, bounded by
+   * `limits.maxLedgerBytes`; `''` when none.
    */
-  readonly priorSteps: readonly ExecutorPriorStep[];
-  /** Completed prior steps serialized for prompt context; `''` when none. */
   readonly ledger: string;
   /** Trusted project/test agent context (config `agent.context` + test). */
   readonly agentContext: string | undefined;
