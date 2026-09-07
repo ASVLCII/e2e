@@ -64,6 +64,29 @@ export type PostStep =
   | { readonly kind: 'index'; readonly index: PositionalStep }
   | { readonly kind: 'filter'; readonly options: PwFilterOptions };
 
+/**
+ * Self-selector for the part of the semantic `hidden` state Playwright's own
+ * visibility filter does not read: `aria-hidden` on the element itself.
+ */
+const NOT_ARIA_HIDDEN = ':scope:not([aria-hidden="true"])';
+
+/**
+ * A `visible` query narrows its candidates inside the selector, before any
+ * enclosing scope, filter, or index runs: Playwright's visibility predicate
+ * (layout box, `display`, `visibility`) plus the `aria-hidden` check the
+ * semantic `hidden` state also makes. An indexed, filtered, or scoping visible
+ * query therefore never selects or retains a node that state calls hidden.
+ * The surface additionally holds a terminal query to the batch-read `hidden`
+ * state, so a direct query agrees with `toBeVisible()` even at the margin
+ * where the two predicates differ (a zero-size element with a layout rect is
+ * hidden to Playwright and shown to the semantic read).
+ */
+function visibleQueryToPw(scope: PwScope, query: SemanticQuery): PwLocator {
+  const located = queryToPw(scope, query);
+  if (query.visible !== true) return located;
+  return located.filter({ visible: true }).locator(NOT_ARIA_HIDDEN);
+}
+
 export interface ProjectedLocator {
   /**
    * The Playwright locator to resolve. For a display-value query this is the
@@ -80,6 +103,12 @@ export interface ProjectedLocator {
    * positions and filters natively onto the locator.
    */
   readonly steps: readonly PostStep[];
+  /**
+   * True when the terminal query keeps only nodes whose `hidden` state is
+   * false. The surface applies it to the batch read before the display-value
+   * predicate and any post step, so a position is taken among shown matches.
+   */
+  readonly visible: boolean;
 }
 
 const DISPLAY_VALUE_COMPOSITION_MESSAGE =
@@ -106,9 +135,10 @@ function project(scope: PwScope, expression: LocatorExpression): ProjectedLocato
       const inner =
         expression.scope === undefined ? scope : requireComposable(project(scope, expression.scope));
       return {
-        locator: queryToPw(inner, expression.query),
+        locator: visibleQueryToPw(inner, expression.query),
         displayValue: expression.query.kind === 'displayValue' ? expression.query.value : null,
         steps: [],
+        visible: expression.query.visible === true,
       };
     }
     case 'filter': {
@@ -121,7 +151,7 @@ function project(scope: PwScope, expression: LocatorExpression): ProjectedLocato
       if (source.steps.length > 0) {
         return { ...source, steps: [...source.steps, { kind: 'filter', options }] };
       }
-      return { locator: source.locator.filter(options), displayValue: source.displayValue, steps: [] };
+      return { locator: source.locator.filter(options), displayValue: source.displayValue, steps: [], visible: source.visible };
     }
     case 'index': {
       const source = project(scope, expression.source);
@@ -134,10 +164,10 @@ function project(scope: PwScope, expression: LocatorExpression): ProjectedLocato
           : expression.index === 'last'
             ? source.locator.last()
             : source.locator.nth(expression.index);
-      return { locator, displayValue: null, steps: [] };
+      return { locator, displayValue: null, steps: [], visible: false };
     }
     case 'selector':
-      return { locator: scope.locator(expression.selector), displayValue: null, steps: [] };
+      return { locator: scope.locator(expression.selector), displayValue: null, steps: [], visible: false };
     case 'frame':
       return project(scope.frameLocator(expression.selector), expression.source);
   }
