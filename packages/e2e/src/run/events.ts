@@ -45,7 +45,21 @@ export type RunEventFact =
       readonly ci: boolean;
       readonly targets: readonly string[];
     }
-  | { readonly type: 'plan'; readonly total: number }
+  | {
+      /**
+       * What the run will execute. `total` counts every test-target pair,
+       * including unselected ones; `files` breaks the reportable pairs (run
+       * or explicitly skipped) down per test file and target, so a reporter
+       * can tell when a file's results are complete without a side lookup.
+       */
+      readonly type: 'plan';
+      readonly total: number;
+      readonly files: readonly {
+        readonly file: string;
+        readonly target: string;
+        readonly tests: number;
+      }[];
+    }
   | {
       /**
        * One line of run-level progress outside any test: engine provisioning,
@@ -60,6 +74,14 @@ export type RunEventFact =
       readonly type: 'test-started';
       readonly testId: string;
       readonly title: string;
+      /** Project-root-relative test file, so reporters can group by file. */
+      readonly file: string;
+      /**
+       * The test's serial group, when it belongs to one. Members are announced
+       * one at a time as they begin; the previous member is done executing by
+       * then, though every member's result arrives once the group completes.
+       */
+      readonly serialId: string | undefined;
       readonly target: string;
     }
   | {
@@ -69,7 +91,15 @@ export type RunEventFact =
       readonly progress: StepProgress;
     }
   | { readonly type: 'test-finished'; readonly result: RunEventResult }
-  | { readonly type: 'serial-group'; readonly group: SerialGroupRecord }
+  | {
+      /**
+       * A finished serial group, emitted before its members' `test-finished`
+       * results. Member results carry `serialGroupId` and no attempts of their
+       * own: their steps, durations, and errors live in the group record.
+       */
+      readonly type: 'serial-group';
+      readonly group: SerialGroupRecord;
+    }
   | { readonly type: 'run-error'; readonly error: SerializedError }
   | {
       /**
