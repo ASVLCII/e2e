@@ -40,6 +40,7 @@ import { SessionStore } from './sessions.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setCredentialRegistry } from '../credentials.ts';
 import type { E2EConfig } from '../types.ts';
+import { declaredProcesses } from './declared-processes.ts';
 
 export interface RunOptions {
   cwd?: string | undefined;
@@ -117,8 +118,10 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   const results: ResultRecord[] = [];
   const serialGroups: SerialGroupRecord[] = [];
   const targetProvenance = new Map<string, TargetProvenance>();
-  let appProcess: ManagedProcess | undefined;
+  /** Dependency processes declared by the targets' backends, deduplicated, started before any app command. */
   let services: ServiceStack | undefined;
+  /** App processes started for this run, one per distinct declared command. */
+  const appProcesses: ManagedProcess[] = [];
   let sessionStore: SessionStore | undefined;
 
   // Hoisted: workers re-resolve the same config file and need these overrides,
@@ -329,19 +332,23 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
 
   const executeRun = async (): Promise<void> => {
     const interrupted = interruptController.signal;
-    // Dependencies first, in order; the app command only starts once every
-    // service is ready. Neither spawns anything once the run was interrupted.
-    if (config.app.services.length > 0) {
-      const stack = new ServiceStack(config.app.services, config.projectRoot);
+    // Each backend declares the app it drives: the dependency processes it
+    // needs and the command that starts it. Declarations are deduplicated
+    // across targets (two browsers on one dev server share one process), and
+    // every service is ready before the first app command starts. Nothing
+    // spawns once the run was interrupted.
+    const declared = declaredProcesses(config.targets);
+    if (declared.services.length > 0) {
+      const stack = new ServiceStack(declared.services, config.projectRoot);
       services = stack;
       await debug.time('app.services.start', () => stack.start(interrupted));
+      if (interrupted.aborted) return;
     }
-    if (config.app.command !== undefined) {
-      const app = new ManagedProcess('app.command', config.app.command, config.projectRoot, {
-        readyUrl: config.app.readyUrl,
-      });
-      appProcess = app;
-      await debug.time('app.start', () => app.start(interrupted));
+    for (const { label, command, readyUrl } of declared.commands) {
+      const app = new ManagedProcess(label, command, config.projectRoot, { readyUrl });
+      appProcesses.push(app);
+      await debug.time(`app.start(${label})`, () => app.start(interrupted));
+      if (interrupted.aborted) return;
     }
     // A run cancelled before any test could start collects nothing: the
     // interrupt alone decides the outcome.
@@ -510,11 +517,11 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     } catch (cause) {
       recordFailure(cause);
     }
-    // Services go down after the app that depended on them; a failing service
+    // Services go down after the apps that depended on them; a failing service
     // teardown command is a cleanup error of the run, not a crash.
     for (const teardown of [
       () => sessionStore?.cleanup(),
-      () => appProcess?.stop(),
+      ...appProcesses.map((app) => () => app.stop()),
       () => services?.stop((cause) => recordFailure(cause, 'cleanup')),
     ]) {
       try {
