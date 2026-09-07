@@ -1,5 +1,47 @@
 # @e2edev/playwright
 
+## 0.5.0
+
+### Minor Changes
+
+- [#154](https://github.com/tester-army/e2e/pull/154) [`1d352b3`](https://github.com/tester-army/e2e/commit/1d352b3ee98a02d239c95e4055b4bb5219d7edfc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The app under test is declared by the engine that drives it, not by the
+  config. The top-level `app` key (`url`, `command`, `readyUrl`, `services`,
+  `allowedOrigins`, `environment`, `identity`) is gone, and so is the runner's
+  `APP_URL` fallback: the browser engine takes the same fields as options,
+  `playwright({ url, command, services, ... })`, and the device engine derives
+  the identity from the app it pins (`agentDevice({ platform, app })`, or an
+  explicit `identity`). Two web targets on one app each name it; services and
+  commands declared identically by several targets start once.
+
+  For engine authors, the `app` manifest of `defineEngine` carries the
+  declaration (`EngineAppDeclaration`) beside its hooks, and the runner
+  resolves it per target: navigation policy, cache and session identity, the
+  report's target record (`baseOrigin` is now absent for a surface without a
+  URL), and the app process all read from there. A device target can finally
+  declare a stable identity without inventing a URL. `@e2edev/e2e/engine` also
+  exports `obj`, the one-call replacement for the conditional-spread
+  idiom when a declaration is built from optional inputs.
+
+  Migrate by moving the `app` block into the engine factory:
+
+  ```ts
+  // before
+  app: { url: 'http://localhost:3000' },
+  targets: [{ name: 'web', platform: 'web', engine: playwright() }],
+  // after
+  targets: [{ name: 'web', platform: 'web', engine: playwright({ url: 'http://localhost:3000' }) }],
+  ```
+
+- [#154](https://github.com/tester-army/e2e/pull/154) [`1d352b3`](https://github.com/tester-army/e2e/commit/1d352b3ee98a02d239c95e4055b4bb5219d7edfc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Rename the "backend" concept to "engine" everywhere. The authoring import is now `@e2edev/e2e/engine` (`defineEngine`, `EngineHandle`, `EngineError`, `EngineFixtureContext`, ...), a target names its engine as `engine: playwright()` in `e2e.config.ts`, the error code `BACKEND_FAILURE` is now `ENGINE_FAILURE`, and the `backend` provenance field in the report and session schemas is now `engine`. `@e2edev/e2e/backend`, `defineBackend`, `backend:` and `BACKEND_FAILURE` are gone; update the import path, the config key, and any code matching on the error code or reading provenance.
+
+### Patch Changes
+
+- [#145](https://github.com/tester-army/e2e/pull/145) [`24a5763`](https://github.com/tester-army/e2e/commit/24a5763e8bf234d481778d19f420f83335cc6e48) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `getByDisplayValue(...)` now supports `first()`, `last()`, `nth()`, and `filter({ hasText, has })` in the playwright engine, so a display-value locator can be narrowed, acted on, and asserted like every other query. Positions apply to the value-filtered matches, not to every form control on the page. Previously any refinement failed with `UNSUPPORTED_CAPABILITY: displayValue queries cannot be used as scopes or filters in this engine`. The two compositions Playwright's locator chain cannot express remain unsupported and now say so precisely: a display-value query as the scope of a child query, and as a `has` filter.
+
+- [#149](https://github.com/tester-army/e2e/pull/149) [`f810e23`](https://github.com/tester-army/e2e/commit/f810e2324b02b189cbbb6242a55da5d587285932) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Every `screen` query accepts `visible: true`, which drops nodes the platform reports as hidden before the exactly-one rule runs: `getByText('No memories yet', { visible: true })` resolves the copy a person sees even while a framework keeps a `display:none` twin in the document after a reload. Omitted or `false` keeps every match, so existing `LOCATOR_AMBIGUOUS` failures still fire. The predicate is the node's own `hidden` state, the one `toBeVisible()` reads, and it composes with scopes, `filter`, `first`, `last`, and `nth`. `getByTestId` gains the same optional `{ visible }` argument.
+
+  The engine contract's `SemanticQuery` carries the flag as `visible`; the Playwright and agent-device engines evaluate it from the hidden state they already report, and the harness holds a top-level query to the same predicate as a backstop.
+
 ## 0.4.0
 
 ### Minor Changes

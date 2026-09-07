@@ -1,5 +1,45 @@
 # @e2edev/agent-device
 
+## 0.3.0
+
+### Minor Changes
+
+- [#154](https://github.com/tester-army/e2e/pull/154) [`1d352b3`](https://github.com/tester-army/e2e/commit/1d352b3ee98a02d239c95e4055b4bb5219d7edfc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The app under test is declared by the engine that drives it, not by the
+  config. The top-level `app` key (`url`, `command`, `readyUrl`, `services`,
+  `allowedOrigins`, `environment`, `identity`) is gone, and so is the runner's
+  `APP_URL` fallback: the browser engine takes the same fields as options,
+  `playwright({ url, command, services, ... })`, and the device engine derives
+  the identity from the app it pins (`agentDevice({ platform, app })`, or an
+  explicit `identity`). Two web targets on one app each name it; services and
+  commands declared identically by several targets start once.
+
+  For engine authors, the `app` manifest of `defineEngine` carries the
+  declaration (`EngineAppDeclaration`) beside its hooks, and the runner
+  resolves it per target: navigation policy, cache and session identity, the
+  report's target record (`baseOrigin` is now absent for a surface without a
+  URL), and the app process all read from there. A device target can finally
+  declare a stable identity without inventing a URL. `@e2edev/e2e/engine` also
+  exports `obj`, the one-call replacement for the conditional-spread
+  idiom when a declaration is built from optional inputs.
+
+  Migrate by moving the `app` block into the engine factory:
+
+  ```ts
+  // before
+  app: { url: 'http://localhost:3000' },
+  targets: [{ name: 'web', platform: 'web', engine: playwright() }],
+  // after
+  targets: [{ name: 'web', platform: 'web', engine: playwright({ url: 'http://localhost:3000' }) }],
+  ```
+
+- [#154](https://github.com/tester-army/e2e/pull/154) [`1d352b3`](https://github.com/tester-army/e2e/commit/1d352b3ee98a02d239c95e4055b4bb5219d7edfc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Rename the "backend" concept to "engine" everywhere. The authoring import is now `@e2edev/e2e/engine` (`defineEngine`, `EngineHandle`, `EngineError`, `EngineFixtureContext`, ...), a target names its engine as `engine: playwright()` in `e2e.config.ts`, the error code `BACKEND_FAILURE` is now `ENGINE_FAILURE`, and the `backend` provenance field in the report and session schemas is now `engine`. `@e2edev/e2e/backend`, `defineBackend`, `backend:` and `BACKEND_FAILURE` are gone; update the import path, the config key, and any code matching on the error code or reading provenance.
+
+### Patch Changes
+
+- [#149](https://github.com/tester-army/e2e/pull/149) [`f810e23`](https://github.com/tester-army/e2e/commit/f810e2324b02b189cbbb6242a55da5d587285932) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Every `screen` query accepts `visible: true`, which drops nodes the platform reports as hidden before the exactly-one rule runs: `getByText('No memories yet', { visible: true })` resolves the copy a person sees even while a framework keeps a `display:none` twin in the document after a reload. Omitted or `false` keeps every match, so existing `LOCATOR_AMBIGUOUS` failures still fire. The predicate is the node's own `hidden` state, the one `toBeVisible()` reads, and it composes with scopes, `filter`, `first`, `last`, and `nth`. `getByTestId` gains the same optional `{ visible }` argument.
+
+  The engine contract's `SemanticQuery` carries the flag as `visible`; the Playwright and agent-device engines evaluate it from the hidden state they already report, and the harness holds a top-level query to the same predicate as a backstop.
+
 ## 0.2.1
 
 ### Patch Changes

@@ -1,5 +1,84 @@
 # @e2edev/e2e
 
+## 0.5.0
+
+### Minor Changes
+
+- [#154](https://github.com/tester-army/e2e/pull/154) [`1d352b3`](https://github.com/tester-army/e2e/commit/1d352b3ee98a02d239c95e4055b4bb5219d7edfc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The app under test is declared by the engine that drives it, not by the
+  config. The top-level `app` key (`url`, `command`, `readyUrl`, `services`,
+  `allowedOrigins`, `environment`, `identity`) is gone, and so is the runner's
+  `APP_URL` fallback: the browser engine takes the same fields as options,
+  `playwright({ url, command, services, ... })`, and the device engine derives
+  the identity from the app it pins (`agentDevice({ platform, app })`, or an
+  explicit `identity`). Two web targets on one app each name it; services and
+  commands declared identically by several targets start once.
+
+  For engine authors, the `app` manifest of `defineEngine` carries the
+  declaration (`EngineAppDeclaration`) beside its hooks, and the runner
+  resolves it per target: navigation policy, cache and session identity, the
+  report's target record (`baseOrigin` is now absent for a surface without a
+  URL), and the app process all read from there. A device target can finally
+  declare a stable identity without inventing a URL. `@e2edev/e2e/engine` also
+  exports `obj`, the one-call replacement for the conditional-spread
+  idiom when a declaration is built from optional inputs.
+
+  Migrate by moving the `app` block into the engine factory:
+
+  ```ts
+  // before
+  app: { url: 'http://localhost:3000' },
+  targets: [{ name: 'web', platform: 'web', engine: playwright() }],
+  // after
+  targets: [{ name: 'web', platform: 'web', engine: playwright({ url: 'http://localhost:3000' }) }],
+  ```
+
+- [#151](https://github.com/tester-army/e2e/pull/151) [`d4489c0`](https://github.com/tester-army/e2e/commit/d4489c06be7b9b5270c29361af9830003da947bb) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Removes public API that had no consumer, was deprecated, or duplicated another surface, so what remains is what the runner actually enforces.
+
+  - `ExecutorBudgets.recordToolCall` (deprecated): use `runTool`, which reserves the action budget before the tool body runs.
+  - `ToolAnnotations.replay` and `ToolAnnotations.secrets` (deprecated, never read): `defineTool` takes `{ mutates, platforms? }`.
+  - `StepExecutorContext.priorSteps` and `ExecutorPriorStep`: the ledger string is the executor's prior-step context.
+  - `createToolLoopExecutor` options `onConclude`, `loopGuards`, and `windDown` (and the `WindDownPolicy` / `LoopGuardThresholds` types): the chassis keeps its own loop guards and wind-down policy.
+  - The `@e2edev/e2e/agent` primitives `createGrammarTools`, `createVerdictTool`, `trackModelCalls`, `conversationMemory`, `VERDICT_RULES`, `serializeLedger`, `compactSnapshotHistory`, and `formatReplayedPrefix`: `createAgent` and `createToolLoopExecutor` are the two supported layers.
+  - `blockedCategoryOf` and `BlockedCategory` from the main entrypoint.
+  - The legacy fixture adapter: an engine fixture factory must return the surface it declared through `context.fixture`; a plain surface is rejected with `INVALID_CONFIG`.
+
+- [#154](https://github.com/tester-army/e2e/pull/154) [`1d352b3`](https://github.com/tester-army/e2e/commit/1d352b3ee98a02d239c95e4055b4bb5219d7edfc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Rename the "backend" concept to "engine" everywhere. The authoring import is now `@e2edev/e2e/engine` (`defineEngine`, `EngineHandle`, `EngineError`, `EngineFixtureContext`, ...), a target names its engine as `engine: playwright()` in `e2e.config.ts`, the error code `BACKEND_FAILURE` is now `ENGINE_FAILURE`, and the `backend` provenance field in the report and session schemas is now `engine`. `@e2edev/e2e/backend`, `defineBackend`, `backend:` and `BACKEND_FAILURE` are gone; update the import path, the config key, and any code matching on the error code or reading provenance.
+
+- [#156](https://github.com/tester-army/e2e/pull/156) [`0e5e1ef`](https://github.com/tester-army/e2e/commit/0e5e1ef1a245674a198e3708f1c06db4c290bd39) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The `list` reporter is laid out like vitest's default reporter. Results print
+  one block per test file and target - a colored target badge, the file, its
+  counts, and its duration - with every test listed when the file failed, had a
+  flaky pass, streamed its steps, or is the run's only file. Failures move to a
+  `Failed Tests` section at the end, each with its error, the failing line, and
+  a vitest-style code frame, followed by a padded summary (`Test Files`,
+  `Tests`, `AI`, `Start at`, `Duration`, `Report`). On a TTY a live window
+  shows the running files and tests with elapsed times, the current step and
+  its latest model or engine calls, and the running counters. Colors follow
+  picocolors' detection, so CI logs are colored too.
+
+  For hosts on the event stream, `plan` now carries `files` (reportable pairs
+  per test file and target) and `test-started` carries the test's `file` and
+  `serialId`. A serial group announces every member as it begins, not just the
+  first, and `serial-group` is emitted before its members' `test-finished`
+  results, so each member's duration, usage, and error can be attributed.
+
+### Patch Changes
+
+- [#141](https://github.com/tester-army/e2e/pull/141) [`e26e1d8`](https://github.com/tester-army/e2e/commit/e26e1d8fa9714930b9ea33f9a3bbadb7a1f89102) Thanks [@okwasniewski](https://github.com/okwasniewski)! - CI now demotes the trace cache to `read-only` only when the config left `mode` unset. An explicit `cache: 'read-write'` (or `{ mode: 'read-write' }`) is honored in CI as the project's own statement that it trusts the cache it restores, for example one carried between runs by the CI provider's cache service rather than committed to git. `--no-cache` still wins over the config, and a custom `cache.store` keeps stating its own trust through `writable`.
+
+- [#143](https://github.com/tester-army/e2e/pull/143) [`57a313d`](https://github.com/tester-army/e2e/commit/57a313d021ad3f800188e07ffffd3f3d2209d17d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An engine's `command`, every `services` entry, and every service `teardown` accept a `log` path. When set, the runner appends the process's stdout and stderr to that file (resolved from the project root, kept inside it through symlinks, parent directories created) instead of discarding them, so a dev server that dies on boot or a migration that fails can be read back without wrapping the command in a shell redirect. Output is still discarded when `log` is unset. The file is unredacted, so `e2e init` now also adds `.e2e/logs/` to `.gitignore`.
+
+- [#147](https://github.com/tester-army/e2e/pull/147) [`a3f9ad7`](https://github.com/tester-army/e2e/commit/a3f9ad7190f2ce5212bd98e2f52d1b7b8f1e27b0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An engine's `command` and its `readyUrl` services accept `reuseExisting: true`: when the readiness URL already answers before the spawn, the runner attaches to that process instead of starting its own, reports `<label>: reusing the process already serving <url>`, and leaves it running on teardown (a reused service also skips its `teardown`). Off by default. CI ignores the flag with a notice. Setting it on a `waitForExit` service or a `teardown` command is `INVALID_CONFIG`.
+
+  The runner now always probes `readyUrl` once before spawning, within `startupTimeout`. Without `reuseExisting` in effect, a URL that already answers fails the launch with the new `APP_ALREADY_RUNNING` (infrastructure, exit 3) instead of letting the old server pass as the new command's readiness, so tests no longer run against stale code by accident.
+
+- [#146](https://github.com/tester-army/e2e/pull/146) [`78f1e9b`](https://github.com/tester-army/e2e/commit/78f1e9b320ecea702f93df482eb07d85b73b4801) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e run [files...]` now accepts directories and globs, not only exact file paths. A directory selects every test file the config globs discover beneath it (`e2e run tests/agent`), a glob uses the config `tests` grammar (`e2e run 'tests/**/*.smoke.e2e.ts'`), and a file path still matches exactly. Positionals keep narrowing the config globs and must stay inside the project root. When nothing is left to run, the `NO_TESTS` message names each positional that matched no file, so a mistyped path is visible instead of failing silently.
+
+- [#144](https://github.com/tester-army/e2e/pull/144) [`44ee0a2`](https://github.com/tester-army/e2e/commit/44ee0a2786fa1027bcc12eb6afddcf177899fd45) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `app.services[]` entries accept an optional `name`. Errors from a service that fails to start, never becomes ready, or whose teardown fails now read `service "postgres" exited with code 1 instead of 0` rather than naming the service by its position and full command line, which was unreadable behind a shell wrapper. The name defaults to the executable's base name; an explicit name must be a non-empty string of at most 64 characters and unique across the named services, otherwise `INVALID_CONFIG`.
+
+- [#149](https://github.com/tester-army/e2e/pull/149) [`f810e23`](https://github.com/tester-army/e2e/commit/f810e2324b02b189cbbb6242a55da5d587285932) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Every `screen` query accepts `visible: true`, which drops nodes the platform reports as hidden before the exactly-one rule runs: `getByText('No memories yet', { visible: true })` resolves the copy a person sees even while a framework keeps a `display:none` twin in the document after a reload. Omitted or `false` keeps every match, so existing `LOCATOR_AMBIGUOUS` failures still fire. The predicate is the node's own `hidden` state, the one `toBeVisible()` reads, and it composes with scopes, `filter`, `first`, `last`, and `nth`. `getByTestId` gains the same optional `{ visible }` argument.
+
+  The engine contract's `SemanticQuery` carries the flag as `visible`; the Playwright and agent-device engines evaluate it from the hidden state they already report, and the harness holds a top-level query to the same predicate as a backstop.
+
 ## 0.4.0
 
 ### Minor Changes
