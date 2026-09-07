@@ -1,4 +1,4 @@
-/** Agent, model, and resource-limit resolution (spec 05-config.md, 14-security.md). */
+/** Agent, model, and resource-limit resolution. */
 
 import type { LanguageModel } from 'ai';
 import { isStepExecutor, type StepExecutor } from '../agent/executor.ts';
@@ -99,7 +99,7 @@ export const DEFAULT_OBSERVATION_BYTES = 1_048_576;
 
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Hard ceilings mirroring spec/schema/report-v1.schema.json `limits`. */
+/** Hard ceilings mirroring `schema/report-v1.schema.json` `limits`. */
 const LIMIT_BOUNDS = {
   maxAgentContextBytes: [1_024, 65_536, 16_384],
   maxLedgerBytes: [1_024, 65_536, 8_192],
@@ -121,7 +121,7 @@ export function resolveAgentConfig(
   limits: ResolvedBaseLimits,
 ): ResolvedAgentConfig {
   const value = raw.agent;
-  // Three accepted shapes (RFC0002): the agent itself, an options object, or
+  // Three accepted shapes: the agent itself, an options object, or
   // an options object carrying `executor` — a custom brain no longer forfeits
   // the model, budgets, or context.
   const bare = value !== undefined && isStepExecutor(value) ? value : undefined;
