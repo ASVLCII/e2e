@@ -49,47 +49,95 @@ function queryToPw(scope: PwScope, query: SemanticQuery): PwLocator {
   }
 }
 
-interface ProjectedLocator {
+/** One positional step applied after display-value filtering. */
+export type PositionalStep = 'first' | 'last' | number;
+
+type PwFilterOptions = NonNullable<Parameters<PwLocator['filter']>[0]>;
+
+/**
+ * One step a display-value projection applies after its candidates are
+ * value-filtered, in expression order: a position among the matches, or a
+ * per-element filter that came after a position and so could not compose onto
+ * the candidate locator.
+ */
+export type PostStep =
+  | { readonly kind: 'index'; readonly index: PositionalStep }
+  | { readonly kind: 'filter'; readonly options: PwFilterOptions };
+
+export interface ProjectedLocator {
+  /**
+   * The Playwright locator to resolve. For a display-value query this is the
+   * candidate set (every form control in scope), not the matches: Playwright
+   * has no selector for a control's current value, so the value predicate can
+   * only run after the candidates are read.
+   */
   readonly locator: PwLocator;
   /** Non-null when the terminal query filters by display value. */
   readonly displayValue: TextPattern | null;
+  /**
+   * Steps to apply to the value-filtered matches, innermost first. Always
+   * empty when `displayValue` is null, because the projection then composes
+   * positions and filters natively onto the locator.
+   */
+  readonly steps: readonly PostStep[];
 }
+
+const DISPLAY_VALUE_COMPOSITION_MESSAGE =
+  'displayValue queries cannot scope child queries or serve as a has-filter in this backend';
 
 /**
  * Projects a complete immutable expression onto a Playwright locator within
  * one scope. Frame cardinality is validated separately by the surface.
+ *
+ * A display-value query resolves to a candidate locator plus a value predicate
+ * the surface applies once the candidates are read. Per-element filters
+ * (`filter({ hasText, has })`) commute with that predicate, so they compose
+ * onto the candidate locator as for any other query. Positional selection does
+ * not commute (positions are relative to the value-filtered matches), so it is
+ * recorded as a step and applied after filtering; a filter that follows a
+ * position is recorded the same way and checked on the selected element. Two
+ * compositions need the predicate inside Playwright's own chain and stay
+ * unsupported: a display-value query as the scope of a child query, and as a
+ * `has` filter.
  */
 function project(scope: PwScope, expression: LocatorExpression): ProjectedLocator {
   switch (expression.kind) {
     case 'query': {
       const inner =
-        expression.scope === undefined ? scope : requireSingle(project(scope, expression.scope));
+        expression.scope === undefined ? scope : requireComposable(project(scope, expression.scope));
       return {
         locator: queryToPw(inner, expression.query),
         displayValue: expression.query.kind === 'displayValue' ? expression.query.value : null,
+        steps: [],
       };
     }
     case 'filter': {
-      const source = requireSingle(project(scope, expression.source));
-      const options: Parameters<PwLocator['filter']>[0] = {};
+      const source = project(scope, expression.source);
+      const options: PwFilterOptions = {};
       if (expression.hasText !== undefined) options.hasText = patternToPw(expression.hasText);
       if (expression.has !== undefined) {
-        options.has = requireSingle(project(scope, expression.has));
+        options.has = requireComposable(project(scope, expression.has));
       }
-      return { locator: source.filter(options), displayValue: null };
+      if (source.steps.length > 0) {
+        return { ...source, steps: [...source.steps, { kind: 'filter', options }] };
+      }
+      return { locator: source.locator.filter(options), displayValue: source.displayValue, steps: [] };
     }
     case 'index': {
-      const source = requireSingle(project(scope, expression.source));
+      const source = project(scope, expression.source);
+      if (source.displayValue !== null) {
+        return { ...source, steps: [...source.steps, { kind: 'index', index: expression.index }] };
+      }
       const locator =
         expression.index === 'first'
-          ? source.first()
+          ? source.locator.first()
           : expression.index === 'last'
-            ? source.last()
-            : source.nth(expression.index);
-      return { locator, displayValue: null };
+            ? source.locator.last()
+            : source.locator.nth(expression.index);
+      return { locator, displayValue: null, steps: [] };
     }
     case 'selector':
-      return { locator: scope.locator(expression.selector), displayValue: null };
+      return { locator: scope.locator(expression.selector), displayValue: null, steps: [] };
     case 'frame':
       return project(scope.frameLocator(expression.selector), expression.source);
   }
@@ -100,15 +148,48 @@ export function projectExpression(page: Page, expression: LocatorExpression): Pr
   return project(page, expression);
 }
 
-function requireSingle(projected: ProjectedLocator): PwLocator {
+/**
+ * Returns the locator of a projection that must participate in Playwright's
+ * own locator chain: a scope for child queries or a `has` target. A
+ * display-value projection cannot, because its value predicate lives outside
+ * that chain.
+ */
+function requireComposable(projected: ProjectedLocator): PwLocator {
   if (projected.displayValue !== null) {
-    throw new BackendError(
-      'UNSUPPORTED_CAPABILITY',
-      'displayValue queries cannot be used as scopes or filters in this backend',
-      { retryable: false },
-    );
+    throw new BackendError('UNSUPPORTED_CAPABILITY', DISPLAY_VALUE_COMPOSITION_MESSAGE, {
+      retryable: false,
+    });
   }
   return projected.locator;
+}
+
+/**
+ * Applies post steps, innermost first, to an ordered list of matches. `nth`
+ * past the end selects nothing, matching Playwright's `nth` on a locator with
+ * too few matches. A filter step keeps the matches `passesFilter` accepts;
+ * it runs only on the matches that survived the steps before it.
+ */
+export async function applyPostSteps<T>(
+  matches: readonly T[],
+  steps: readonly PostStep[],
+  passesFilter: (match: T, options: PwFilterOptions) => Promise<boolean>,
+): Promise<readonly T[]> {
+  let selected = matches;
+  for (const step of steps) {
+    if (step.kind === 'index') {
+      const { index } = step;
+      if (index === 'first') selected = selected.slice(0, 1);
+      else if (index === 'last') selected = selected.slice(-1);
+      else selected = index < selected.length ? [selected[index]!] : [];
+      continue;
+    }
+    const kept: T[] = [];
+    for (const match of selected) {
+      if (await passesFilter(match, step.options)) kept.push(match);
+    }
+    selected = kept;
+  }
+  return selected;
 }
 
 /** Returns every frame selector along an expression, outermost first. */
