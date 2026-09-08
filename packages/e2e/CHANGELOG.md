@@ -1,5 +1,26 @@
 # @e2edev/e2e
 
+## 0.6.1
+
+### Patch Changes
+
+- [#190](https://github.com/tester-army/e2e/pull/190) [`8981e53`](https://github.com/tester-army/e2e/commit/8981e53f304f8e90559306b6e92df6b8f46ef71c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The list reporter prints each file, test, and agent step exactly once. The
+  live window carries the in-progress tree - running tests with their finished
+  steps, the current step's model turns and tool calls in causal order, and an
+  animated `Thinking` indicator - at a fixed height so the summary stays put; the
+  file block prints once the file completes, with agent steps nested under their
+  test; on a TTY a file that ran agent steps lists its tests even when it passed,
+  so the scrollback keeps them. The `RUN` banner names the configured model. Model events record
+  `inputTokens` and `outputTokens` beside `count`, and `run-started` carries the
+  configured `model`, both additive. The window repaints every 80ms instead of
+  200ms so the indicator animates.
+
+- [#174](https://github.com/tester-army/e2e/pull/174) [`ef21493`](https://github.com/tester-army/e2e/commit/ef21493e0eb756dcf2e7f19dec2effae032ddedb) Thanks [@devin-ai-integration](https://github.com/apps/devin-ai-integration)! - `E2E_MODEL_ENDPOINT` sets the model endpoint from the environment. It takes the
+  same URL rules as `agent.model.endpoint` (HTTPS unless loopback), the config
+  value wins over it, and the AI Gateway stays the default, so a run against any
+  OpenAI-compatible endpoint needs only `E2E_MODEL`, `E2E_MODEL_ENDPOINT`, and
+  `E2E_MODEL_API_KEY`.
+
 ## 0.6.0
 
 ### Minor Changes
