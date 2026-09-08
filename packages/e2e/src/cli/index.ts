@@ -7,12 +7,11 @@ import { packageVersion } from '../internal/package-version.ts';
 import { classifyError, exitCodeForCategory } from '../internal/errors.ts';
 import { list, run, type ListedPair } from '../run/runner.ts';
 import { cache, type CacheCommand } from './cache.ts';
+import { DOCS_URL } from './docs-url.ts';
 import { guide } from './guide.ts';
 import { init } from './init.ts';
 import { SignalLadder } from './signals.ts';
 import { skillTopics } from './skill.ts';
-
-const DOCS_URL = 'https://e2e.docs.buildwithfern.com';
 
 /**
  * Help text always carries color; commander strips it when the stream it
