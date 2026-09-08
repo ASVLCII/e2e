@@ -1,18 +1,17 @@
 /**
- * Human-readable list reporter, styled after vitest's
- * default reporter: one block per test file and target, a `Failed Tests`
- * section with code frames, and a padded summary. On a TTY a live window
- * below the log shows the running files, their tests, and the counters.
+ * Human-readable list reporter, styled after vitest's default reporter: one
+ * block per test file and target with each test's agent steps nested, a
+ * `Failed Tests` section with code frames, and a padded summary. On a TTY a
+ * live window below the log shows the running tree (`RunningTree`) and the
+ * counters.
  */
 
 import path from 'node:path';
 import picocolors from 'picocolors';
-import { sanitizeText, truncateUtf8, type SerializedError } from '../internal/errors.ts';
+import type { SerializedError } from '../internal/errors.ts';
 import { packageVersion } from '../internal/package-version.ts';
-import { collapseText } from '../internal/text.ts';
 import type { RunEventFact, RunEventOf, RunEventResult } from '../run/events.ts';
 import type { AttemptRecord, ResultStatus, SerialGroupRecord } from '../run/records.ts';
-import type { StepEvent } from '../run/steps.ts';
 import { codeFrame, userFrame } from './code-frame.ts';
 import {
   addUsage,
@@ -21,10 +20,12 @@ import {
   ellipsize,
   emptyCounters,
   emptyUsage,
+  F_CHECK,
+  F_CROSS,
+  F_POINTER,
   fileOutcome,
   formatClock,
   formatTime,
-  formatTokens,
   padTitle,
   rule,
   stateString,
@@ -33,28 +34,24 @@ import {
   sumUsage,
   tally,
   terminalColumns,
-  terminalRows,
+  usageText,
   type AiUsage,
   type Colors,
   type Counters,
 } from './format.ts';
+import { isShownEvent, type FileGroup, type RunningTest, type TestLine } from './list-model.ts';
+import { stepLine } from './list-steps.ts';
 import { LiveWindow } from './live-window.ts';
+import { RunningTree } from './running-tree.ts';
 
-/** Step labels stay one glanceable line; the report holds the full text. */
-const MAX_STEP_LABEL_BYTES = 72;
-
-const F_POINTER = '❯';
-const F_CHECK = '✓';
-const F_CROSS = '×';
 const F_DOWN = '↓';
 const F_RIGHT = '→';
-const F_DOWN_RIGHT = '↳';
-const F_TREE_MIDDLE = '├──';
-const F_TREE_END = '└──';
-
 /** Indentation under a badge line, matching vitest's banner padding. */
 const BADGE_PADDING = '      ';
-
+/** Indentation of a test line under its file line. */
+const TEST_INDENT = '   ';
+/** Indentation of a finished agent step under its test line in a file block. */
+const STEP_INDENT = '     ';
 /**
  * Badge backgrounds, assigned to targets in declaration order. Bright variants
  * because GitHub Actions renders plain yellow as dark brown, which swallows the
@@ -62,13 +59,6 @@ const BADGE_PADDING = '      ';
  */
 const BADGE_COLORS = ['bgYellowBright', 'bgCyanBright', 'bgGreenBright', 'bgMagentaBright'] as const;
 
-/**
- * Rows the live window spends outside the running tests and the summary: its
- * blank lines, the `… more running` marker, and a margin above the prompt.
- */
-const WINDOW_CHROME_ROWS = 6;
-/** Rows one running test takes before its calls: the test line and its current step. */
-const WINDOW_ROWS_PER_TEST = 2;
 /** Indentation of the `→ first error line` under a failed test in a file block. */
 const ERROR_GLANCE_INDENT = 7;
 
@@ -83,32 +73,6 @@ export interface ListReporterOptions {
   live?: boolean;
   /** Emit ANSI colors; defaults to picocolors' detection (TTY, CI, FORCE_COLOR). */
   colors?: boolean;
-}
-
-/** One-line, quoted step label bounded for the live view. */
-function stepLabel(label: string): string {
-  const flat = collapseText(label);
-  const shown = truncateUtf8(flat, MAX_STEP_LABEL_BYTES);
-  return `"${shown}${shown === flat ? '' : '…'}"`;
-}
-
-/**
- * Live tail for one step event. Model and engine calls are the ones worth a
- * glance (`tool:` prefixes come from executor tool accounting); polls and
- * policy decisions stay quiet.
- */
-function eventTail(event: StepEvent): string | undefined {
-  if (event.kind === 'model') {
-    const tokens =
-      event.count !== undefined && event.count > 0 ? ` · ${formatTokens(event.count)} tokens` : '';
-    return `model turn ${formatTime(event.durationMs)}${tokens}`;
-  }
-  if (event.kind === 'engine') {
-    const name = sanitizeText(event.name ?? 'engine').replace(/^tool:/, '');
-    const failed = event.status === 'passed' ? '' : ` ${F_CROSS}`;
-    return `${truncateUtf8(name, 40)} ${formatTime(event.durationMs)}${failed}`;
-  }
-  return undefined;
 }
 
 /** The identity of one test-target pair across `test-started`, `step`, and `test-finished`. */
@@ -154,49 +118,6 @@ function serialMemberDetails(group: SerialGroupRecord, testId: string): ResultDe
   };
 }
 
-/** A pair that is executing right now, shown in the live window. */
-interface RunningTest {
-  readonly group: FileGroup;
-  /** The pair's serial group, when it belongs to one. */
-  readonly serialId: string | undefined;
-  readonly title: string;
-  readonly startedMs: number;
-  /** Current step, `api "label"`, while one is executing. */
-  step: string | undefined;
-  /** Model and engine calls of the current step, oldest first. */
-  events: string[];
-  /** Whether this pair's story streams permanently above the window. */
-  streaming: boolean;
-}
-
-/** One finished pair, held until its file's block prints. */
-interface TestLine {
-  readonly title: string;
-  /** Source order within the file; blocks list tests as declared, not as finished. */
-  readonly declarationIndex: number;
-  readonly status: ResultStatus;
-  readonly durationMs: number;
-  readonly usage: AiUsage;
-  readonly firstErrorLine: string | undefined;
-  readonly skipReason: string | undefined;
-}
-
-/**
- * Every pair of one test file on one target: vitest's "test module". Its
- * block prints once all planned results are in, so files never interleave.
- * Counts, durations, and usage derive from `lines`, so there is one source.
- */
-interface FileGroup {
-  readonly file: string;
-  readonly target: string;
-  /** Reportable pairs the plan announced; undefined until the plan arrives. */
-  planned: number | undefined;
-  readonly lines: TestLine[];
-  /** A pair of this file streamed its steps permanently, so list every test. */
-  streamed: boolean;
-  printed: boolean;
-}
-
 /** One failed pair, held for the `Failed Tests` section. */
 interface Failure {
   readonly group: FileGroup;
@@ -218,6 +139,7 @@ const DEFAULT_OUTPUT: ListReporterOutput = {
 export class ListReporter {
   private readonly pc: Colors;
   private readonly window: LiveWindow;
+  private readonly tree: RunningTree;
   private readonly separator: string;
   private projectRoot: string | undefined;
   /** Selected targets in declaration order; decides each badge's color. */
@@ -226,8 +148,10 @@ export class ListReporter {
   private startedAt = new Date();
   /** File groups keyed `${target}\u0000${file}`, in first-seen order. */
   private readonly groups = new Map<string, FileGroup>();
-  /** Pairs executing right now, keyed by `pairKey`, in start order. */
-  private readonly running = new Map<string, RunningTest>();
+  /** Pairs that started and whose result is still to come, keyed by `pairKey`, in start order. */
+  private readonly pairs = new Map<string, RunningTest>();
+  /** Whether a live window paints; without one, finished steps stream permanently. */
+  private readonly live: boolean;
   private readonly failures: Failure[] = [];
   /**
    * Serial groups whose members' results are still to come, by group id. The
@@ -245,8 +169,10 @@ export class ListReporter {
     options: ListReporterOptions = {},
   ) {
     const live = (options.live ?? process.stdout.isTTY === true) && output.raw !== undefined;
+    this.live = live;
     this.pc = picocolors.createColors(options.colors ?? (live || picocolors.isColorSupported));
     this.separator = this.pc.dim(' > ');
+    this.tree = new RunningTree(this.pc, (target) => this.badge(target));
     this.window = new LiveWindow(live ? output.raw?.bind(output) : undefined, () => this.renderWindow());
   }
 
@@ -316,7 +242,7 @@ export class ListReporter {
     const key = `${target}\u0000${file}`;
     let group = this.groups.get(key);
     if (group === undefined) {
-      group = { file, target, planned: undefined, lines: [], streamed: false, printed: false };
+      group = { file, target, planned: undefined, lines: [], printed: false };
       this.groups.set(key, group);
     }
     return group;
@@ -335,6 +261,9 @@ export class ListReporter {
     const details = [`run ${event.runId}`, `targets: ${event.targets.join(', ')}`];
     if (event.ci) details.push('CI');
     this.output.write(BADGE_PADDING + pc.dim(details.join(' · ')));
+    if (event.model !== undefined) {
+      this.output.write(BADGE_PADDING + pc.dim(`model ${bounded(event.model)}`));
+    }
     this.output.write('');
     this.window.start();
   }
@@ -360,83 +289,76 @@ export class ListReporter {
   /**
    * A worker began one test-target pair: show it in the live window. A serial
    * member replaces the previous member of its group, which has finished
-   * executing even though its result only arrives with the whole group.
+   * executing even though its result only arrives with the whole group. A
+   * serial group retries as a whole, so a member starts once per group
+   * attempt; its steps from earlier attempts stay with it, as an ordinary
+   * test's do.
    */
   private testStarted(event: RunEventOf<'test-started'>): void {
     if (event.serialId !== undefined) {
-      for (const [key, test] of this.running) {
-        if (test.serialId === event.serialId && test.group.target === event.target) {
-          this.running.delete(key);
-        }
+      for (const test of this.pairs.values()) {
+        if (test.serialId === event.serialId && test.group.target === event.target) test.executing = false;
       }
     }
-    this.running.set(pairKey(event.testId, event.target), {
+    const key = pairKey(event.testId, event.target);
+    this.pairs.set(key, {
       group: this.group(event.file, event.target),
       serialId: event.serialId,
       title: bounded(event.title),
       startedMs: Date.now(),
-      step: undefined,
-      events: [],
-      streaming: false,
+      executing: true,
+      current: undefined,
+      steps: this.pairs.get(key)?.steps ?? [],
     });
     this.window.redraw();
   }
 
   /**
-   * Streams step progress of a running pair. With a single test running, its
-   * agent steps print permanently and chronologically under a header naming
-   * the file and test - the scrollback of a long agentic run reads without
-   * `--debug`. Deterministic steps are fast and many, so they only ever show
-   * in the live window. With parallel tests the stream would interleave, so
-   * each pair instead shows its current step and latest calls transiently in
-   * the live window, and finished agent steps print with the test they
-   * belong to.
+   * Tracks step progress of a running pair. With a live window the pair's
+   * finished agent steps accumulate under its row there and print once, nested
+   * under its line, when the file block prints - so every name appears exactly
+   * once in the scrollback. Without a window (CI logs) nothing is transient, so
+   * each finished agent step prints at once, prefixed with its test. Deterministic
+   * steps are fast and many, so they only ever show in the live window.
    */
   private step(event: RunEventOf<'step'>): void {
-    const { pc } = this;
-    const running = this.running.get(pairKey(event.testId, event.target));
+    const running = this.pairs.get(pairKey(event.testId, event.target));
     if (running === undefined) return;
     const { progress } = event;
     switch (progress.phase) {
       case 'start': {
-        running.step = `${progress.api} ${stepLabel(progress.label)}`;
-        running.events = [];
-        if (progress.kind === 'agent' && this.running.size === 1 && !running.streaming) {
-          running.streaming = true;
-          const { group } = running;
-          group.streamed = true;
-          this.print(
-            ` ${pc.yellow(F_POINTER)} ${this.badge(group.target)} ${pc.dim(bounded(group.file))}${this.separator}${running.title}`,
-          );
-        }
+        const { api, label, kind } = progress;
+        running.current = { api, label, kind, events: [], turnStart: 0 };
         this.window.redraw();
         break;
       }
       case 'event': {
-        const tail = eventTail(progress.event);
-        if (running.step === undefined || tail === undefined) break;
-        running.events.push(tail);
+        const { current } = running;
+        if (current === undefined || !isShownEvent(progress.event)) break;
+        if (progress.event.kind === 'model') {
+          current.events.splice(current.turnStart, 0, progress.event);
+          current.turnStart = current.events.length;
+        } else {
+          current.events.push(progress.event);
+        }
         this.window.redraw();
         break;
       }
       case 'end': {
-        running.step = undefined;
-        running.events = [];
+        running.current = undefined;
         if (progress.kind !== 'agent') {
           this.window.redraw();
           break;
         }
-        const glyph = progress.status === 'passed' ? pc.green(F_CHECK) : pc.red(F_CROSS);
-        const calls =
-          progress.modelCalls > 0
-            ? ` · ${progress.modelCalls} model call${progress.modelCalls === 1 ? '' : 's'}`
-            : '';
-        const outcome = progress.status === 'passed' ? '' : ` ${progress.status}`;
-        const context = running.streaming ? '' : `${pc.dim(running.title)}${this.separator}`;
-        this.print(
-          `   ${glyph} ${context}${pc.dim(progress.api)} ${stepLabel(progress.label)} ` +
-            pc.dim(`${formatTime(progress.durationMs)}${calls}${outcome}`),
-        );
+        const { api, label, status, durationMs, modelCalls } = progress;
+        const step = { api, label, status, durationMs, modelCalls };
+        if (this.live) {
+          running.steps.push(step);
+          this.window.redraw();
+        } else {
+          const context = `${this.pc.dim(running.title)}${this.separator}`;
+          this.print(`${TEST_INDENT}${stepLine(this.pc, step, { context })}`);
+        }
         break;
       }
     }
@@ -465,12 +387,14 @@ export class ListReporter {
     // Unselected pairs are report-only: they never print and the plan never
     // counted them.
     if (!result.selected) return;
-    this.running.delete(pairKey(result.test.id, result.target.name));
+    const key = pairKey(result.test.id, result.target.name);
+    const steps = this.pairs.get(key)?.steps ?? [];
+    this.pairs.delete(key);
     const group = this.group(result.test.file, result.target.name);
     const { durationMs, usage, error } = this.detailsOf(result);
     addUsage(this.runUsage, usage);
     const title = bounded(result.test.titlePath.join(' > '));
-    group.lines.push({
+    const line: TestLine = {
       title,
       declarationIndex: result.test.declarationIndex,
       status: result.status,
@@ -478,7 +402,9 @@ export class ListReporter {
       usage,
       firstErrorLine: error === undefined ? undefined : bounded(error.message).split('\n')[0],
       skipReason: result.skip === undefined ? undefined : bounded(result.skip.reason),
-    });
+      steps,
+    };
+    group.lines.push(line);
     if (statusBucket(result.status) === 'failed') {
       this.failures.push({ group, title, status: result.status, error });
     }
@@ -506,8 +432,11 @@ export class ListReporter {
 
   /**
    * Prints one file's block: the file line with its counts, then - when the
-   * file failed, had a flaky pass, streamed its steps, or is the run's only
-   * file - one line per test, as vitest lists tests for a failed module.
+   * file failed, had a flaky pass, or is the run's only file - one line per
+   * test with its finished agent steps nested, as vitest lists tests for a
+   * failed module. With a live window the block is also the only permanent
+   * record of a file's agent steps, so a file that has any lists its tests
+   * too; without one the steps already printed as they finished.
    */
   private printGroup(group: FileGroup): void {
     if (group.printed) return;
@@ -542,12 +471,13 @@ export class ListReporter {
     const verbose =
       counts.failed > 0 ||
       counts.flaky > 0 ||
-      group.streamed ||
-      this.groups.size === 1;
+      this.groups.size === 1 ||
+      (this.live && group.lines.some((line) => line.steps.length > 0));
     if (!verbose) return;
     const ordered = group.lines.toSorted((a, b) => a.declarationIndex - b.declarationIndex);
     for (const line of ordered) {
       for (const rendered of this.testLine(line)) this.print(rendered);
+      for (const step of line.steps) this.print(`${STEP_INDENT}${stepLine(pc, step)}`);
     }
   }
 
@@ -595,7 +525,7 @@ export class ListReporter {
       padTitle(pc, 'Test Files') + (files.total === 0 ? pc.dim('no test files') : stateString(pc, files)),
       padTitle(pc, 'Tests') + (tests.total === 0 ? pc.dim('no tests executed') : stateString(pc, tests)),
     ];
-    const ai = aiSegment(this.runUsage);
+    const ai = usageText(this.runUsage);
     if (ai !== undefined) rows.push(padTitle(pc, 'AI') + `${ai} · ${this.runUsage.calls} model calls`);
     if (this.errors.length > 0) {
       const count = this.errors.length;
@@ -606,65 +536,10 @@ export class ListReporter {
     return rows;
   }
 
-  /**
-   * The live window: running files and tests, then the summary. The block
-   * must fit the screen, because repainting more rows than the terminal has
-   * breaks the cursor-up erase: rows left after the summary go to the running
-   * tests, each test's calls share what remains once every test has its own
-   * line, and tests that still do not fit fold into one `more running` marker.
-   */
+  /** The live window: the running tree, then the summary. */
   private renderWindow(): string[] {
-    const { pc } = this;
-    const now = Date.now();
-    const active = new Map<FileGroup, RunningTest[]>();
-    for (const test of this.running.values()) {
-      const tests = active.get(test.group);
-      if (tests === undefined) active.set(test.group, [test]);
-      else tests.push(test);
-    }
-    const summary = this.summaryRows();
-    let budget = terminalRows() - summary.length - WINDOW_CHROME_ROWS;
-    const spare = budget - active.size - this.running.size * WINDOW_ROWS_PER_TEST;
-    const maxEvents = Math.max(0, Math.floor(spare / Math.max(1, this.running.size)));
-    const lines = [''];
-    let hidden = 0;
-    for (const [group, tests] of active) {
-      if (budget < 2) {
-        hidden += tests.length;
-        continue;
-      }
-      const progress = pc.dim(` ${group.lines.length}/${group.planned ?? '?'}`);
-      lines.push(
-        `${pc.bold(pc.yellow(` ${F_POINTER} `))}${this.badge(group.target)} ${bounded(group.file)}${progress}`,
-      );
-      budget -= 1;
-      tests.forEach((test, index) => {
-        if (budget < 1) {
-          hidden += 1;
-          return;
-        }
-        const glyph = index === tests.length - 1 ? F_TREE_END : F_TREE_MIDDLE;
-        const elapsed = pc.bold(pc.yellow(formatTime(Math.max(0, now - test.startedMs))));
-        lines.push(`${pc.bold(pc.yellow(`   ${glyph} `))}${test.title} ${elapsed}`);
-        budget -= 1;
-        if (test.step === undefined) return;
-        const detail = [`       ${pc.dim(`${F_DOWN_RIGHT} ${test.step}`)}`];
-        const overflow = test.events.length - maxEvents;
-        if (overflow > 0) {
-          detail.push(`         ${pc.dim(`… ${overflow} earlier call${overflow === 1 ? '' : 's'}`)}`);
-        }
-        for (const tail of overflow > 0 ? test.events.slice(overflow) : test.events) {
-          detail.push(`         ${pc.dim(tail)}`);
-        }
-        const shown = detail.slice(0, budget);
-        lines.push(...shown);
-        budget -= shown.length;
-      });
-    }
-    if (hidden > 0) lines.push(pc.dim(`   … ${hidden} more running`));
-    if (active.size > 0) lines.push('');
-    lines.push(...summary, '');
-    return lines;
+    const running = [...this.pairs.values()].filter((test) => test.executing);
+    return this.tree.render(running, this.summaryRows(), Date.now());
   }
 
   /** vitest's `Failed Tests` section: a banner, then each failure with its code frame. */

@@ -13,6 +13,11 @@ import type { StepRecord } from '../run/steps.ts';
 /** A picocolors instance; the reporter decides whether it emits color. */
 export type Colors = ReturnType<typeof picocolors.createColors>;
 
+/** Glyphs shared by the list reporter's permanent lines and its live tree. */
+export const F_POINTER = '❯';
+export const F_CHECK = '✓';
+export const F_CROSS = '×';
+
 /** Every untrusted field is capped here before it reaches the terminal. */
 const MAX_FIELD_BYTES = 8192;
 const LONG_DASH = '⎯';
@@ -78,7 +83,7 @@ export function padTitle(pc: Colors, title: string): string {
  */
 export function rule(text: string, align: 'center' | 'right'): { before: string; after: string } {
   const columns = terminalColumns();
-  const width = stripVTControlCharacters(text).length;
+  const width = visibleWidth(text);
   const after = align === 'center' ? Math.max(0, Math.ceil((columns - width) / 2)) : 1;
   const before = Math.max(0, columns - width - after);
   return { before: LONG_DASH.repeat(before), after: LONG_DASH.repeat(after) };
@@ -171,9 +176,20 @@ export function sumUsage(items: readonly { readonly usage: AiUsage }[]): AiUsage
   return total;
 }
 
-/** One dim `ai …` segment, or undefined when no model was used. */
-export function aiSegment(usage: AiUsage): string | undefined {
+/** Tokens and cost, `12.4k tokens · $0.01`, or undefined when no model was used. */
+export function usageText(usage: AiUsage): string | undefined {
   if (usage.calls === 0) return undefined;
   const cost = usage.costUsd === undefined ? '' : ` · ${formatCost(usage.costUsd)}`;
-  return `ai ${formatTokens(usage.tokens)} tokens${cost}`;
+  return `${formatTokens(usage.tokens)} tokens${cost}`;
+}
+
+/** `usageText` labeled `ai …` for lines where nothing else names it. */
+export function aiSegment(usage: AiUsage): string | undefined {
+  const text = usageText(usage);
+  return text === undefined ? undefined : `ai ${text}`;
+}
+
+/** Printed width of a line, ANSI sequences excluded. */
+export function visibleWidth(text: string): number {
+  return [...stripVTControlCharacters(text)].length;
 }
