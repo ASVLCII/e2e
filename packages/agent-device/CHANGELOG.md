@@ -1,5 +1,17 @@
 # @e2edev/agent-device
 
+## 0.3.2
+
+### Patch Changes
+
+- [#206](https://github.com/tester-army/e2e/pull/206) [`ffb3403`](https://github.com/tester-army/e2e/commit/ffb34039c319434823f586a7582cdb037220da4f) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Remove temporary raw screenshots after device capture finishes, including
+  captures that outlive a timeout or cancellation. Each capture owns a separate
+  temporary directory, and the next attempt waits for its cleanup.
+
+- [#194](https://github.com/tester-army/e2e/pull/194) [`d9ecd33`](https://github.com/tester-army/e2e/commit/d9ecd338d8f7c34f79395c874c2f975fe55094eb) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Both engines now require `@e2edev/e2e` 0.5.0 or newer. They import
+  `@e2edev/e2e/engine`, which 0.5.0 introduced (0.4.x shipped `/backend`), so
+  the old `>=0.4.0` range allowed an install whose every import failed.
+
 ## 0.3.1
 
 ### Patch Changes

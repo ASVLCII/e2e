@@ -1,5 +1,15 @@
 # @e2edev/playwright
 
+## 0.6.1
+
+### Patch Changes
+
+- [#194](https://github.com/tester-army/e2e/pull/194) [`d9ecd33`](https://github.com/tester-army/e2e/commit/d9ecd338d8f7c34f79395c874c2f975fe55094eb) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Both engines now require `@e2edev/e2e` 0.5.0 or newer. They import
+  `@e2edev/e2e/engine`, which 0.5.0 introduced (0.4.x shipped `/backend`), so
+  the old `>=0.4.0` range allowed an install whose every import failed.
+
+- [#205](https://github.com/tester-army/e2e/pull/205) [`76aaeb1`](https://github.com/tester-army/e2e/commit/76aaeb16b642c12d8a6f4dfb3d899a579b814e44) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Release observation metadata after each capture so repeated agent observations do not retain earlier node arrays in the browser.
+
 ## 0.6.0
 
 ### Minor Changes

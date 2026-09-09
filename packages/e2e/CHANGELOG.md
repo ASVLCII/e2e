@@ -1,5 +1,117 @@
 # @e2edev/e2e
 
+## 0.7.0
+
+### Minor Changes
+
+- [#192](https://github.com/tester-army/e2e/pull/192) [`593e179`](https://github.com/tester-army/e2e/commit/593e1799a88e73e02bd6ca9c85932bc9b705c377) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `agent.act` no longer advertises options the runtime rejects. The `schema`
+  overload (`AgentSchemaOptions`, `AgentResultWithData`) and the `vision`
+  option are gone from the `Agent.act` type. Both threw `UNSUPPORTED_CAPABILITY`
+  on every call, so no passing test changes; a call that passed either now fails
+  to compile instead of at run time. Structured output is
+  `agent.extract({ schema })`, and `vision` stays an option of `assert`,
+  `waitFor`, and `extract`.
+
+- [#211](https://github.com/tester-army/e2e/pull/211) [`1a74593`](https://github.com/tester-army/e2e/commit/1a745937ca41b61d7fed29c4506eafb5151855d8) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The CLI sends anonymous usage telemetry: one `e2e_cli_session` event per
+  command (the command, its flags, the e2e, Node, and OS versions, the machine
+  class, the CI vendor, the coding agent) and one `e2e_run_completed` event per
+  run built from the report's own numbers (status, counts, durations, engine
+  names, cache replay counts, model provider, token totals, error codes). Test
+  names, file paths, URLs, instructions, messages, and credentials are never
+  sent. Opt out with `e2e telemetry disable`, `E2E_TELEMETRY_DISABLED=1`, or
+  `DO_NOT_TRACK=1`; `E2E_TELEMETRY_DEBUG=1` prints every event instead of
+  sending it. Hosts embedding `@e2edev/e2e/run` send nothing.
+
+- [#193](https://github.com/tester-army/e2e/pull/193) [`ee84c58`](https://github.com/tester-army/e2e/commit/ee84c582982628a23c3b9fb003d46d60d50ac076) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `isAgentError` is exported from `@e2edev/e2e`, next to `AgentError`. Test
+  files load in their own module realm, so `instanceof AgentError` can be false
+  for an error the runner threw; `isAgentError` checks a cross-realm marker and
+  narrows to `AgentError`, so a test can branch on `error.code` without
+  importing `@e2edev/e2e/agent`.
+
+- [#170](https://github.com/tester-army/e2e/pull/170) [`22d3474`](https://github.com/tester-army/e2e/commit/22d347425d3c8ef4268690626c00aead9dd40e43) Thanks [@devin-ai-integration](https://github.com/apps/devin-ai-integration)! - One model, checked once. The model passed to `createAgent({ model })` now
+  serves the judgment calls (`assert`, `waitFor`, `extract`) as well as `act`,
+  and outranks `E2E_MODEL`; an `agent.model` that names a different model is
+  `INVALID_CONFIG`. The runner builds and validates the model adapter once per
+  run, when the first test acquires the `agent` fixture. A missing model or
+  credential is one run-level `MODEL_UNAVAILABLE` (exit 2) that stops the run,
+  instead of one blocked step per test. Deterministic suites and custom
+  executors without a model are unaffected.
+
+- [#198](https://github.com/tester-army/e2e/pull/198) [`32b3724`](https://github.com/tester-army/e2e/commit/32b3724545785c7f451c7333fa0f078fcc55f8bc) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `RunOutcome.status` and the `run-finished` event carry the same status as
+  `report.run.status`, `blocked` included. A run whose every non-passing
+  result was blocked (credentials, environment, or the agent's own budget) used
+  to report `failed` to the host and `blocked` in `report.json`; the
+  `RunStatus` type on `@e2edev/e2e/run` names the union.
+
+### Patch Changes
+
+- [#195](https://github.com/tester-army/e2e/pull/195) [`ce0b1a4`](https://github.com/tester-army/e2e/commit/ce0b1a437a65e9d58b1c6e4341de791ef8d5eac0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `ArtifactRecord.redaction` on `@e2edev/e2e/run` mirrors the report-1 schema:
+  `'complete' | 'not-required' | 'incomplete'`. The type used to admit `'none'`,
+  a value the schema rejects and the runner never wrote, and lacked the two the
+  schema allows.
+
+- [#210](https://github.com/tester-army/e2e/pull/210) [`bca2060`](https://github.com/tester-army/e2e/commit/bca2060b5b34f3d8f304ada21d5ef6685952377c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Two replay misses that were not the app's fault are gone. A target whose
+  recorded fields matched several controls on the recording screen (one
+  unlabeled "Set up" button per card, one "Add step" per gap) used to replay as
+  `target-ambiguous` every time; the recorder now notes the target's `position`
+  among those twins and a replay honors it when, and only when, the live screen
+  shows exactly as many. End anchors no longer pick text that cannot read the
+  same twice, such as a minted key prefix, a countdown, a date, or a clock
+  time, while a stable anchor exists, so a step whose screen also shows such
+  values stops handing off as `end-mismatch` on every run. A step that ends on
+  another page now records that page's first stable anchors as well, and its end
+  path is matched up to the ids the app mints per record, so a flow that creates
+  a project and lands on it replays although the next project has a new id;
+  before, such a step handed off as `end-mismatch` on every run and the agent's
+  repair clicks evicted the recording each time.
+
+- [#196](https://github.com/tester-army/e2e/pull/196) [`0898695`](https://github.com/tester-army/e2e/commit/08986951d94dc51d81e588878bad9799e860618a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init --help` describes `--yes` as it has behaved since init defaulted to
+  Playwright: "Playwright, AI on, no installation". The old string still said
+  "no engine".
+
+- [#203](https://github.com/tester-army/e2e/pull/203) [`98f69b1`](https://github.com/tester-army/e2e/commit/98f69b1a78ab17d8d7890c2efebf458304a1ba77) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The CLI help, the `e2e init` hints, and the agent skill link to the new documentation site at https://e2e-docs.vercel.app; the Fern-hosted site is retired.
+
+- [#200](https://github.com/tester-army/e2e/pull/200) [`b30303e`](https://github.com/tester-army/e2e/commit/b30303eccb0a8ea33b44de0ac372eb7ec4c0d3c4) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An interrupted run's summary names the interrupt. A Ctrl-C while the services
+  or the app were still starting lands before test discovery, and the list
+  reporter used to end such a run with `Test Files  no test files` and
+  `Tests  no tests executed`, as if the globs had matched nothing. Those rows now
+  read `none started (interrupted)` and `none executed (interrupted)`; a run cut
+  after its plan arrived keeps its counters, which already show the shortfall
+  against the planned total.
+
+- [#208](https://github.com/tester-army/e2e/pull/208) [`3373b2e`](https://github.com/tester-army/e2e/commit/3373b2e2223f29f7b2992e71e4a08279c646eb08) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Replace inline base64 media in AI trace prompts and response messages with
+  decoded byte counts, including structured tool content. This reduces trace
+  size when image or file results recur in conversation history. URLs, text,
+  and arbitrary tool result JSON are preserved; encoded strings outside SDK
+  media message parts are not omitted.
+
+- [#207](https://github.com/tester-army/e2e/pull/207) [`b6d259e`](https://github.com/tester-army/e2e/commit/b6d259e48ab90ef609f637fda352064ba8e56635) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Start app commands and services only for targets selected with `--target` or `run({ targetIds })`. Reject unknown target IDs before starting processes.
+
+- [#201](https://github.com/tester-army/e2e/pull/201) [`b274f86`](https://github.com/tester-army/e2e/commit/b274f86fcb44a565d955dcdb919db714c9c03299) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The run narrates its setup and keeps it off the wrong clock. Everything
+  before the first test is now a `setup` step on the event stream: `collect`,
+  each target's engine `prepare`, and every service and app command, `started`
+  then `finished` with its length (and `reused` when an already running process
+  was attached). The runner validates the process declarations first, then
+  collects, then provisions each engine, emits `plan`, and only then starts the
+  services and app, so `NO_TESTS` is reported before any dev server boots and a
+  missing browser is fetched before the app starts.
+
+  The list reporter shows the step in flight with a ticking clock
+  (`❯ preparing playwright engine for target "web" 12.30s`,
+  `❯ starting service "postgres" 4.10s`), prints each finished process once
+  (`✓ service "postgres" ready 41.20s`) and a provisioning step when it narrated
+  (`✓ playwright engine for target "web" prepared 13.20s`), and an interrupt
+  that lands during setup names the step it cut short (`interrupted while
+starting service "postgres": tearing down`). `Start at` and `Duration`, and
+  the report's `run.startedAt`,
+  count from `plan`: a first-run browser download is not on the clock, while
+  service and app startup is, split out as `(startup 41.20s)`. A run whose only
+  test took 3s no longer reports 17s because Chromium was fetched first.
+
+- [#204](https://github.com/tester-army/e2e/pull/204) [`9332274`](https://github.com/tester-army/e2e/commit/93322748f4988f7785908b144674dfe3689d56a7) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Skip the trace cache's final observation when an agent step recorded no actions.
+  Such steps produce no replayable trace, so they no longer wait for an unused
+  end-state capture and settling cycle.
+
 ## 0.6.1
 
 ### Patch Changes
