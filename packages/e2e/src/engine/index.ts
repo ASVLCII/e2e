@@ -10,9 +10,11 @@
  * model-facing vocabulary is an agent-side `defineTool`; a target with no
  * engine at all is valid and simply runs everything opaque.
  *
- * Core knows this contract and never an engine's internals: no platform noun
- * appears here. A document engine, a simulator engine, and a desktop engine
- * fill in the same members with different bodies.
+ * Core knows this contract and never an engine's internals. The one platform
+ * noun here is `platform`, the label an engine declares it drives and its
+ * target inherits; no member's shape depends on it. A document engine, a
+ * simulator engine, and a desktop engine fill in the same members with
+ * different bodies.
  *
  * `defineEngine` is the loud manifest: capability detection happens here,
  * synchronously, at config load - a malformed engine fails the run instead
@@ -40,6 +42,7 @@ import type {
   Expectable,
   Locator,
   Momentum,
+  Platform,
   Screen,
   ScrollDirection,
   ServiceConfig,
@@ -415,6 +418,12 @@ export interface Engine {
    * changed required semantics do.
    */
   readonly spiVersion: EngineSpiVersion;
+  /**
+   * Platform this engine drives (`web`, `ios`, `android`, or a label of the
+   * engine's own). A target inherits it; a target that names a platform of
+   * its own must agree with it.
+   */
+  readonly platform?: Platform;
   /** capability: observation. */
   observe?(context: OperationContext, options?: EngineObserveOptions): Promise<EngineSnapshot>;
   /**
@@ -511,6 +520,7 @@ const KNOWN_KEYS = [
   'name',
   'version',
   'spiVersion',
+  'platform',
   'observe',
   'locate',
   'perform',
@@ -641,6 +651,9 @@ export function defineEngine(spec: Engine): EngineHandle {
       `declares spiVersion ${String(spec.spiVersion)}; this runner supports ${ENGINE_SPI_VERSION}`,
     );
   }
+  if (spec.platform !== undefined && (typeof spec.platform !== 'string' || spec.platform.trim() === '')) {
+    throw invalid(name, 'platform must be a non-empty string when declared');
+  }
   // A literal's unknown key is a misspelling or a misplaced tool; a class
   // instance's own fields are its state, so only literals are checked.
   if (Object.getPrototypeOf(spec) === Object.prototype) {
@@ -675,7 +688,12 @@ export function defineEngine(spec: Engine): EngineHandle {
     throw invalid(name, 'declares swipe without observe');
   }
 
-  const handle: Record<string, unknown> = { name, version: spec.version, spiVersion: spec.spiVersion };
+  const handle: Record<string, unknown> = {
+    name,
+    version: spec.version,
+    spiVersion: spec.spiVersion,
+    ...(spec.platform === undefined ? {} : { platform: spec.platform }),
+  };
   for (const member of FUNCTION_MEMBERS) {
     const fn = spec[member];
     if (fn !== undefined) handle[member] = fn.bind(spec);
