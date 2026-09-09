@@ -11,7 +11,7 @@ import picocolors from 'picocolors';
 import type { SerializedError } from '../internal/errors.ts';
 import { packageVersion } from '../internal/package-version.ts';
 import type { RunEventFact, RunEventOf, RunEventResult, SetupStep } from '../run/events.ts';
-import type { AttemptRecord, ResultStatus, SerialGroupRecord } from '../run/records.ts';
+import type { ArtifactRecord, AttemptRecord, ResultStatus, SerialGroupRecord } from '../run/records.ts';
 import { codeFrame, userFrame } from './code-frame.ts';
 import {
   addUsage,
@@ -85,6 +85,8 @@ interface ResultDetails {
   readonly durationMs: number;
   readonly usage: AiUsage;
   readonly error: SerializedError | undefined;
+  /** Report-relative paths of the recordings the attempts kept, in attempt order. */
+  readonly videos: readonly string[];
 }
 
 /** Details of an ordinary result: summed over its attempts, the error from the last. */
@@ -93,7 +95,19 @@ function attemptDetails(attempts: readonly AttemptRecord[]): ResultDetails {
     durationMs: attempts.reduce((total, attempt) => total + attempt.durationMs, 0),
     usage: stepsUsage(attempts.map((attempt) => attempt.steps)),
     error: attempts[attempts.length - 1]?.error,
+    videos: videoPaths(attempts),
   };
+}
+
+/** Report-relative paths of the video artifacts these attempts kept, in order. */
+function videoPaths(attempts: readonly { readonly artifacts: readonly ArtifactRecord[] }[]): string[] {
+  const paths: string[] = [];
+  for (const attempt of attempts) {
+    for (const artifact of attempt.artifacts) {
+      if (artifact.kind === 'video' && artifact.path !== undefined) paths.push(artifact.path);
+    }
+  }
+  return paths;
 }
 
 /**
@@ -115,6 +129,8 @@ function serialMemberDetails(group: SerialGroupRecord, testId: string): ResultDe
     durationMs: runs.reduce((total, run) => total + (run.member?.durationMs ?? 0), 0),
     usage: stepsUsage(runs.map((run) => run.member?.steps ?? [])),
     error: own?.error ?? (neverRan ? last?.attempt.error : undefined),
+    // The group's recording covers every member, so a failed member points at it.
+    videos: videoPaths(group.attempts),
   };
 }
 
@@ -124,6 +140,8 @@ interface Failure {
   readonly title: string;
   readonly status: ResultStatus;
   readonly error: SerializedError | undefined;
+  /** Report-relative paths of the recordings the failed attempts kept, if any. */
+  readonly videos: readonly string[];
 }
 
 const DEFAULT_OUTPUT: ListReporterOutput = {
@@ -142,6 +160,7 @@ export class ListReporter {
   private readonly tree: RunningTree;
   private readonly separator: string;
   private projectRoot: string | undefined;
+  private artifactsRoot: string | undefined;
   /** Selected targets in declaration order; decides each badge's color. */
   private targets: readonly string[] = [];
   /** When the run was launched (`run-started`): what a run that never reached `plan` reports. */
@@ -282,6 +301,7 @@ export class ListReporter {
   private runStarted(event: RunEventOf<'run-started'>): void {
     const { pc } = this;
     this.projectRoot = event.projectRoot;
+    this.artifactsRoot = event.artifactsRoot;
     this.targets = event.targets;
     this.launchedAt = new Date();
     const version = packageVersion(import.meta.url, '../../package.json', '0.0.0');
@@ -469,7 +489,7 @@ export class ListReporter {
     const steps = this.pairs.get(key)?.steps ?? [];
     this.pairs.delete(key);
     const group = this.group(result.test.file, result.target.name);
-    const { durationMs, usage, error } = this.detailsOf(result);
+    const { durationMs, usage, error, videos } = this.detailsOf(result);
     addUsage(this.runUsage, usage);
     const title = bounded(result.test.titlePath.join(' > '));
     const line: TestLine = {
@@ -484,7 +504,7 @@ export class ListReporter {
     };
     group.lines.push(line);
     if (statusBucket(result.status) === 'failed') {
-      this.failures.push({ group, title, status: result.status, error });
+      this.failures.push({ group, title, status: result.status, error, videos });
     }
     if (group.planned !== undefined && group.lines.length >= group.planned) this.printGroup(group);
     this.window.redraw();
@@ -643,7 +663,7 @@ export class ListReporter {
     this.print('');
     this.print(this.errorBanner(`Failed Tests ${this.failures.length}`));
     this.print('');
-    this.failures.forEach(({ group, title, status, error }, index) => {
+    this.failures.forEach(({ group, title, status, error, videos }, index) => {
       this.print(
         `${pc.bold(pc.bgRed(' FAIL '))} ${this.badge(group.target)} ${bounded(group.file)}${this.separator}${title}`,
       );
@@ -655,6 +675,7 @@ export class ListReporter {
         for (const line of rest) this.print(pc.red(line));
         this.printFailureLocation(error.stack);
       }
+      this.printVideos(videos);
       const marker = `[${index + 1}/${this.failures.length}]`;
       const { before, after } = rule(marker, 'right');
       this.print('');
@@ -669,6 +690,15 @@ export class ListReporter {
     const label = pc.bold(pc.bgRed(` ${message} `));
     const { before, after } = rule(label, 'center');
     return `${pc.red(before)}${label}${pc.red(after)}`;
+  }
+
+  /** Where to watch a failed attempt: one line per recording it kept. */
+  private printVideos(videos: readonly string[]): void {
+    const { pc } = this;
+    for (const video of videos) {
+      const target = this.artifactsRoot === undefined ? video : path.join(this.artifactsRoot, video);
+      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${this.displayPath(target)}`));
+    }
   }
 
   /** Names the user's failing line and renders a code frame around it. */
