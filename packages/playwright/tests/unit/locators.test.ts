@@ -19,6 +19,8 @@ function fakeLocator(chain: readonly string[]): PwLocator {
     chain,
     locator: (selector: string) => fakeLocator([...chain, `locator(${selector})`]),
     getByRole: (role: string) => fakeLocator([...chain, `role(${role})`]),
+    getByLabel: (text: string | RegExp, options?: { exact?: boolean }) =>
+      fakeLocator([...chain, `label(${String(text)}${options?.exact ? ',exact' : ''})`]),
     filter: (options: { hasText?: string | RegExp; has?: PwLocator }) =>
       fakeLocator([
         ...chain,
@@ -52,6 +54,32 @@ const textbox: LocatorExpression = {
 };
 
 describe('projectExpression', () => {
+  it('projects an exact label query onto labelable candidates with a label predicate, and composes loosely', () => {
+    const label: LocatorExpression = {
+      kind: 'query',
+      query: { kind: 'label', value: { kind: 'string', value: 'Display name', exact: true } },
+    };
+    const projected = projectExpression(page, label);
+    expect(projected.name).toEqual({ kind: 'string', value: 'Display name', exact: true });
+    expect(chainOf(projected.locator)).toEqual([
+      'locator(button, input:not([type="hidden"]), textarea, select, meter, output, progress, [aria-label], [aria-labelledby])',
+    ]);
+    expect(projected.composable === null ? null : chainOf(projected.composable)).toEqual(['label(Display name)']);
+    // A position waits for the predicate and also narrows the composable locator.
+    const firstLabel: LocatorExpression = { kind: 'index', source: label, index: 'first' };
+    const first = projectExpression(page, firstLabel);
+    expect(first.steps).toEqual([{ kind: 'index', index: 'first' }]);
+    expect(first.composable === null ? null : chainOf(first.composable)).toEqual(['label(Display name)', 'first']);
+    const scoped = projectExpression(page, { ...textbox, scope: firstLabel } as LocatorExpression);
+    expect(chainOf(scoped.locator)).toEqual(['label(Display name)', 'first', 'role(textbox)']);
+    // A substring label query keeps Playwright's own matching.
+    const loose = projectExpression(page, {
+      kind: 'query',
+      query: { kind: 'label', value: { kind: 'string', value: 'Display', exact: false } },
+    });
+    expect(loose.name).toBeNull();
+  });
+
   it('composes positions natively for every query but displayValue', () => {
     const projected = projectExpression(page, { kind: 'index', source: textbox, index: 1 });
     expect(chainOf(projected.locator)).toEqual(['role(textbox)', 'nth(1)']);

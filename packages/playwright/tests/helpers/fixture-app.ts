@@ -91,6 +91,21 @@ const TWINS = `<!doctype html>
   <button>Save</button>
 </section>
 <p aria-hidden="true">Decorative twin</p>
+<label for="required-name">Display name<span aria-hidden="true">*</span></label>
+<input id="required-name">
+<label for="infix-name">Team <span aria-hidden="true">&bull;</span> name</label>
+<input id="infix-name">
+<label for="mixed-name">Mixed<span style="display:none">secret</span><span aria-hidden="true">*</span></label>
+<input id="mixed-name">
+<label for="overridden">Visible label</label>
+<input id="overridden" aria-label="Override">
+<label for="two-labels">First label</label>
+<label for="two-labels">Second label</label>
+<input id="two-labels">
+<label for="labeled-button">Run the check</label>
+<button id="labeled-button">Go</button>
+<label for="score">Score</label>
+<meter id="score" value="0.5"></meter>
 <p>Decorative twin</p>
 <div data-testid="memory-panel" aria-hidden="true"><span>Open</span></div>
 <div data-testid="memory-panel"><span>Open</span></div>

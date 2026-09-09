@@ -20,6 +20,14 @@ export const SECURE_FIELD_SELECTOR = 'input[type="password" i]';
 export interface RawNodeData {
   role: string | null;
   name: string | null;
+  /**
+   * Every label a person or a tool may call this control by: its `aria-label`,
+   * each `aria-labelledby` target, and each associated `<label>`, read as an
+   * accessible name (aria-hidden dropped). Null for a node with none. An exact
+   * label query matches any one of them, as Playwright's `getByLabel` does,
+   * rather than the combined or overridden `name`.
+   */
+  labels: string[] | null;
   text: string | null;
   value: string | null;
   inputPurpose: 'username' | 'password' | 'one-time-code' | 'generic-secret' | 'none';
@@ -248,9 +256,67 @@ const readSemanticsFunction = <Mode extends SemanticMode>(
     }
   });
 
+  /** Rendered text as a person sees it: innerText, aria-hidden glyphs included. */
   const textOf = (el: Element): string => {
     if (el instanceof HTMLElement) return el.innerText;
     return el.textContent ?? '';
+  };
+
+  /**
+   * Text for an accessible name: what innerText shows minus every aria-hidden
+   * subtree, which the name computation drops and a screen reader never speaks
+   * (a required-field marker, a decorative glyph). Walks the tree itself so a
+   * display:none or visibility:hidden descendant stays out, as innerText keeps
+   * it out, while aria-hidden text between visible fragments is skipped too.
+   */
+  const nameTextOf = (el: Element): string => {
+    const parts: string[] = [];
+    const walk = (node: Node): void => {
+      if (node.nodeType === 3) {
+        parts.push(node.nodeValue ?? '');
+        return;
+      }
+      if (!(node instanceof Element)) return;
+      if (node.getAttribute('aria-hidden') === 'true') return;
+      // A control's own content is its value, not label text: innerText renders none of it.
+      if (NAME_OPAQUE_TAGS.has(node.tagName)) return;
+      if (node instanceof HTMLElement) {
+        const style = styleOf(node);
+        if (style !== undefined && (style.display === 'none' || style.visibility === 'hidden')) return;
+        if (node.tagName === 'BR') parts.push(' ');
+      }
+      for (const child of Array.from(node.childNodes)) walk(child);
+    };
+    walk(el);
+    return parts.join('').replace(/\s+/g, ' ').trim();
+  };
+
+  const NAME_OPAQUE_TAGS: ReadonlySet<string> = new Set(['TEXTAREA', 'SELECT', 'INPUT', 'SCRIPT', 'STYLE']);
+
+  /** The `<label>` elements associated with a labelable element (button, input, meter, output, progress, select, textarea). */
+  const associatedLabels = (el: Element): readonly HTMLLabelElement[] => {
+    const labels = (el as Element & { labels?: NodeListOf<HTMLLabelElement> | null }).labels;
+    return labels === undefined || labels === null ? [] : Array.from(labels);
+  };
+
+  /** The label sources an exact label query may match; see `RawNodeData.labels`. */
+  const labelsOf = (el: Element): string[] | null => {
+    const labels: string[] = [];
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel !== null && ariaLabel.trim() !== '') labels.push(ariaLabel.trim());
+    const labelledBy = el.getAttribute('aria-labelledby');
+    if (labelledBy !== null) {
+      for (const id of labelledBy.split(/\s+/)) {
+        const target = el.ownerDocument.getElementById(id);
+        const text = target === null ? '' : nameTextOf(target);
+        if (text !== '') labels.push(text);
+      }
+    }
+    for (const label of associatedLabels(el)) {
+      const text = nameTextOf(label);
+      if (text !== '') labels.push(text);
+    }
+    return labels.length === 0 ? null : labels;
   };
 
   /** Text owned directly by an element, excluding descendant elements. */
@@ -271,24 +337,18 @@ const readSemanticsFunction = <Mode extends SemanticMode>(
         .split(/\s+/)
         .map((id) => {
           const target = el.ownerDocument.getElementById(id);
-          return target === null ? '' : textOf(target);
+          return target === null ? '' : nameTextOf(target);
         })
         .filter((part) => part.trim() !== '');
       if (parts.length > 0) return parts.join(' ').trim();
     }
-    if (
-      el instanceof HTMLInputElement ||
-      el instanceof HTMLTextAreaElement ||
-      el instanceof HTMLSelectElement
-    ) {
-      const labels = (el as HTMLInputElement).labels;
-      if (labels !== null && labels.length > 0) {
-        const joined = Array.from(labels)
-          .map((label) => textOf(label))
-          .join(' ')
-          .trim();
-        if (joined !== '') return joined;
-      }
+    const labels = associatedLabels(el);
+    if (labels.length > 0) {
+      const joined = labels
+        .map((label) => nameTextOf(label))
+        .join(' ')
+        .trim();
+      if (joined !== '') return joined;
     }
     if (el instanceof HTMLImageElement) {
       const alt = el.getAttribute('alt');
@@ -306,8 +366,8 @@ const readSemanticsFunction = <Mode extends SemanticMode>(
       role === 'status' ||
       role === 'alert'
     ) {
-      const text = textOf(el).trim();
-      if (text !== '') return text.replace(/\s+/g, ' ');
+      const text = nameTextOf(el);
+      if (text !== '') return text;
     }
     if (el instanceof HTMLInputElement && (el.type === 'button' || el.type === 'submit')) {
       if (el.value.trim() !== '') return el.value.trim();
@@ -545,6 +605,8 @@ const readSemanticsFunction = <Mode extends SemanticMode>(
 
     let name = accessibleName(el);
     if (projection.nameLimit !== null && name !== null) name = name.slice(0, projection.nameLimit);
+    // A secure field withholds its value, never its labels: a password field is still found by its label.
+    const labels = labelsOf(el);
     const isDocumentRoot = projection.documentRoot && tag === 'html';
     if (isDocumentRoot) name = el.ownerDocument.title;
 
@@ -553,6 +615,7 @@ const readSemanticsFunction = <Mode extends SemanticMode>(
     return {
       role: isDocumentRoot ? 'document' : roleOf(el, tag),
       name,
+      labels,
       text,
       value: secure ? null : value,
       inputPurpose,

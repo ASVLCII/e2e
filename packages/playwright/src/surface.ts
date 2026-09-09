@@ -577,15 +577,25 @@ export class PlaywrightSurface {
           secureFieldSelector: SECURE_FIELD_SELECTOR,
           mode: { kind: 'node' as const },
         });
-        const { displayValue, steps } = projected;
+        const { displayValue, name, steps } = projected;
         const candidates = raws
           .map((raw, index) => ({ raw, index }))
           .filter(({ raw }) => !(projected.visible && raw.states.hidden));
+        // An exact label query matches any of the control's labels as the engine's reader names
+        // them, so text a label marks aria-hidden (a required-field marker) never hides a field,
+        // and an aria-label override or a second label does not either.
+        const predicate =
+          displayValue !== null
+            ? (raw: (typeof raws)[number]) => matchesText(raw.value ?? '', displayValue)
+            : name !== null
+              ? (raw: (typeof raws)[number]) =>
+                  raw.labels !== null && raw.labels.some((label) => matchesText(label, name))
+              : null;
         const matches =
-          displayValue === null
+          predicate === null
             ? candidates
             : await applyPostSteps(
-                candidates.filter(({ raw }) => matchesText(raw.value ?? '', displayValue)),
+                candidates.filter(({ raw }) => predicate(raw)),
                 steps,
                 // A filter after a position runs on that one element alone.
                 async ({ index }, options) =>
