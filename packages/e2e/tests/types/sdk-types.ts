@@ -35,13 +35,17 @@ void screen.getByLabel('Plan').selectOption({ value: 'pro', index: 1 });
 // @ts-expect-error role queries never match hidden nodes; visible is the one visibility knob
 screen.getByRole('button', { hidden: true });
 
-const plainResult = await agent.act('open billing');
+const actResult = await agent.act('open billing', { params: { plan: 'pro' }, timeout: 10_000 });
+actResult.summary satisfies string;
+actResult.modelCalls satisfies number;
 // @ts-expect-error act returns no data; extract does
-plainResult.data;
+actResult.data;
+// @ts-expect-error params travel inside the options bag
+await agent.act('open billing', { plan: 'pro' }, {});
 // @ts-expect-error act takes no schema; structured output is extract({ schema })
-await agent.act('read total', undefined, { schema: z.object({ total: z.number() }) });
+await agent.act('read total', { schema: z.object({ total: z.number() }) });
 // @ts-expect-error act takes no vision option; assert, waitFor, and extract do
-await agent.act('open billing', undefined, { vision: true });
+await agent.act('open billing', { vision: true });
 
 test.describe('synchronous', () => {});
 // @ts-expect-error describe registration must be synchronous
