@@ -789,3 +789,18 @@ export const readManySemanticsFunction = new Function(
   'options',
   `return elements.map((element) => (${readSemanticsFunction.toString()})(element, options));`,
 ) as (elements: Element[], options: NodeReadOptions) => RawNodeData[];
+
+/**
+ * The batch reader for `page.evaluate`, which takes one argument: the element
+ * handles the caller already holds, so what is read and what is later acted
+ * on are the same elements by construction rather than by a second lookup.
+ */
+/**
+ * Reads every handle in one round trip. Evaluated on the first handle so the read runs in the
+ * frame the handles belong to; `page.evaluate` would reject handles taken inside an iframe.
+ */
+export const readHandlesSemanticsFunction = new Function(
+  '_first',
+  'arg',
+  `return arg.elements.map((element) => (${readSemanticsFunction.toString()})(element, arg.options));`,
+) as (first: Element, arg: { elements: Element[]; options: NodeReadOptions }) => RawNodeData[];
