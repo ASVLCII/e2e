@@ -318,10 +318,7 @@ export class StepTraceSession {
       replayedActions: outcome.executed,
       totalActions: outcome.total,
     };
-    return {
-      status: 'passed',
-      summary: `replayed ${outcome.executed} recorded action(s) zero-turn from the trace cache; recorded verdict: ${trace.summary}`,
-    };
+    return { status: 'passed', summary: replaySummary(outcome.executed, trace.summary) };
   }
 
   private handOff(outcome: ReplayOutcome, stopReason: HandOffReason): void {
@@ -417,4 +414,25 @@ async function probeScreen(host: StepCacheHost): Promise<ObservedNodes | undefin
     if (isRuntimeHardStop(cause)) throw cause;
     return undefined;
   }
+}
+
+const REPLAY_NOTICE_START = 'replayed ';
+const RECORDED_VERDICT_SEPARATOR = '; recorded verdict: ';
+
+/** The verdict summary of a step the cache replayed whole: the notice, then the recorded verdict. */
+function replaySummary(executed: number, recorded: string): string {
+  return `${REPLAY_NOTICE_START}${String(executed)} recorded action(s) zero-turn from the trace cache${RECORDED_VERDICT_SEPARATOR}${recorded}`;
+}
+
+/**
+ * The recorded verdict alone, for the ledger later steps read: how the step
+ * was served is the report's business, not context a model should reason
+ * about, and the notice would spend handoff bytes on every replayed step.
+ * Built from the two constants `replaySummary` writes with, so the two cannot
+ * drift apart; a summary not written by it is returned as is.
+ */
+export function recordedVerdictOf(summary: string): string {
+  if (!summary.startsWith(REPLAY_NOTICE_START)) return summary;
+  const at = summary.indexOf(RECORDED_VERDICT_SEPARATOR);
+  return at === -1 ? summary : summary.slice(at + RECORDED_VERDICT_SEPARATOR.length);
 }

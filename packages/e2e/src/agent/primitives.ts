@@ -12,8 +12,9 @@
 import type { StepResult, Tool, ToolSet } from 'ai';
 import { z } from 'zod';
 import type { AgentErrorCode } from '../types.ts';
-import { BLOCKABLE_CODES, type StepExecutorContext, type StepVerdict } from './executor.ts';
+import { isRuntimeHardStop, BLOCKABLE_CODES, type StepExecutorContext, type StepVerdict } from './executor.ts';
 import { readCost } from './model/sdk.ts';
+import { ScreenPresenter } from './screen-update.ts';
 
 /** Codes the model may pick when concluding; runtime codes are runtime-assigned. */
 const MODEL_ERROR_CODES = [
@@ -31,13 +32,35 @@ const MODEL_ERROR_CODES = [
   'POLICY_DENIED',
 ] as const satisfies readonly AgentErrorCode[];
 
+/**
+ * Ceiling on a verdict summary. Generous on purpose: the summary is a
+ * handoff, and a long one is bounded again by the ledger, whereas a schema
+ * that rejects it costs a repair turn — a page-narrating model paid one on a
+ * third of its steps at a 500-character cap. The description asks for less.
+ */
+const MAX_VERDICT_SUMMARY_CHARS = 2_000;
+
+/** Screens one scroll call may move; a windowed list of thousands of rows still needs a better verb. */
+const MAX_SCROLL_TIMES = 5;
+
+/**
+ * Keys whose whole effect is where the focus or the caret sits, which the
+ * tree does not record. An unchanged screen after one of these is the normal
+ * outcome, not a control that did nothing.
+ */
+const FOCUS_ONLY_KEYS = /^(?:(?:Shift|Control|Alt|Meta)\+)*(?:Tab|Arrow(?:Left|Right|Up|Down)|Home|End|PageUp|PageDown)$/i;
+
+function movesFocusOnly(key: string): boolean {
+  return FOCUS_ONLY_KEYS.test(key.trim());
+}
+
 /** The model-pickable codes a blocked verdict accepts; derived, never restated. */
 const MODEL_BLOCKABLE_CODES = MODEL_ERROR_CODES.filter((code) => BLOCKABLE_CODES.has(code));
 
 /** The verdict rules the built-in agent appends to its instructions. */
 export const VERDICT_RULES = `Verdict rules:
 - When the step's goal is achieved, or you are certain it cannot be, call complete_step exactly once.
-- Verify outcomes with your tools before concluding; never guess success.
+- Conclude from the newest screen and changes already in this conversation; never guess success. Observe again before concluding only when the newest result shows work still in progress (a spinner, "Saving…", a pending state).
 - "passed" means the application behaved as the step required. "failed" means it did not. "blocked" means credentials, the environment, or test setup prevented a product verdict — blocked says nothing about the product and requires an errorCode.`;
 
 /**
@@ -77,8 +100,10 @@ export function createVerdictTool(): VerdictTool {
       summary: z
         .string()
         .min(1)
-        .max(500)
-        .describe('What you did and what you saw, in plain language'),
+        .max(MAX_VERDICT_SUMMARY_CHARS)
+        .describe(
+          'One to three sentences for the next step: what you did, what the screen shows now, and any value it will need (a name or id you created, a message you saw). No page narration; under 400 characters.',
+        ),
       errorCode: z.enum(MODEL_ERROR_CODES).optional(),
     }),
     execute: async (input) => {
@@ -119,60 +144,101 @@ export interface GrammarToolOptions {
    * instead turns it into text and ends the loop.
    */
   readonly guard?: (body: () => Promise<string>) => Promise<string>;
+  /**
+   * Renders screens for the model and remembers what it has seen, so every
+   * result after the first reports the changes rather than the whole tree.
+   * Shared with the opening prompt by `createAgent`; a fresh one per step
+   * otherwise.
+   */
+  readonly screen?: ScreenPresenter;
 }
 
 /**
  * AI SDK tools over the harness action grammar, limited to the verbs the
  * target's engine declared. A verb the surface cannot honor is not offered
  * at all, so the model never learns vocabulary it can only be rejected on.
- * Every mutating tool returns the updated screen.
+ *
+ * Every action returns what it changed on screen. Tool bodies run one at a
+ * time in call order, action and its look at the result together, so a turn
+ * that batches several actions gets one coherent result per action rather
+ * than every result describing the state after the last one.
  */
 export function createGrammarTools(
   context: StepExecutorContext,
   options: GrammarToolOptions = {},
 ): ToolSet {
   const guard = options.guard ?? ((body) => body());
+  const screen = options.screen ?? new ScreenPresenter();
   const { verbs } = context.target;
 
-  /** Re-observes after a mutating action so the model always sees the result. */
-  const acted = async (description: string): Promise<string> => {
-    const observation = await context.observe();
-    return `${description}\n\nUpdated screen (revision ${observation.revision}):\n${observation.text}`;
+  // The chain is always already settled-to-undefined, so a failed body
+  // reaches its own caller and never poisons the queue (same idiom as the
+  // dispatch's own serialization).
+  let chain: Promise<unknown> = Promise.resolve();
+  const inOrder = <T>(body: () => Promise<T>): Promise<T> => {
+    const run = chain.then(body);
+    chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   };
 
-  const target = z.string().min(1).describe('Node id from the newest observation, e.g. "n42"');
+  /**
+   * Performs one action and reads its result. A failed action still returns
+   * the screen, so the model can act on a stale-id or not-found failure at
+   * once instead of spending a turn to observe; runtime hard stops propagate
+   * to the guard, which ends the loop. The guard runs inside the queue, so a
+   * batched call that queued behind a hard stop or a verdict is skipped when
+   * its turn comes rather than acted on because it was queued in time.
+   */
+  const acting = (
+    description: string,
+    action: () => Promise<void>,
+    expectChange = true,
+  ): Promise<string> =>
+    inOrder(() =>
+      guard(async () => {
+        try {
+          await action();
+        } catch (cause) {
+          if (isRuntimeHardStop(cause)) throw cause;
+          const message = cause instanceof Error ? cause.message : String(cause);
+          const observation = await context.observe();
+          return screen.update(observation, { lead: `${description} failed: ${message}` });
+        }
+        const observation = await context.observe();
+        return screen.update(observation, { lead: description, expectChange });
+      }),
+    );
+
+  const target = z
+    .string()
+    .min(1)
+    .describe('Node id from any screen in this conversation that is still present, e.g. "n42"');
 
   const tools: ToolSet = {
     observe: schemaTool({
-      description: 'Capture a fresh observation of the current screen without acting.',
+      description:
+        'Look at the screen again and get what changed since the screen you last received. Action results already include their changes, so call this only after waiting for something in progress, never right after an action.',
       inputSchema: z.object({}),
-      execute: () =>
-        guard(async () => {
-          const observation = await context.observe();
-          return `Current screen (revision ${observation.revision}):\n${observation.text}`;
-        }),
+      execute: () => inOrder(() => guard(async () => screen.update(await context.observe()))),
     }),
   };
   if (verbs.has('tap')) {
     tools['tap'] = schemaTool({
-      description: 'Tap or click one node.',
+      description:
+        'Tap or click one node. The result waits for the effect (a navigation, a route change, a submit) and reports what changed.',
       inputSchema: z.object({ target }),
-      execute: ({ target: id }) =>
-        guard(async () => {
-          await context.actions.tap({ id });
-          return acted(`Tapped #${id}.`);
-        }),
+      execute: ({ target: id }) => acting(`Tapped #${id}.`, () => context.actions.tap({ id })),
     });
   }
   if (verbs.has('type')) {
     tools['type'] = schemaTool({
-      description: 'Type a plain-text value into one input node. Replaces the current value.',
+      description: 'Type a plain-text value into one input node, replacing its current value. Several fields can be typed in one turn.',
       inputSchema: z.object({ target, value: z.string() }),
       execute: ({ target: id, value }) =>
-        guard(async () => {
-          await context.actions.type({ id }, value);
-          return acted(`Typed into #${id}.`);
-        }),
+        acting(`Typed into #${id}.`, () => context.actions.type({ id }, value)),
     });
   }
   if (verbs.has('press')) {
@@ -180,10 +246,7 @@ export function createGrammarTools(
       description: 'Send one key (e.g. "Enter", "Escape", "Tab") to one node.',
       inputSchema: z.object({ target, key: z.string().min(1).max(64) }),
       execute: ({ target: id, key }) =>
-        guard(async () => {
-          await context.actions.press({ id }, key);
-          return acted(`Pressed ${key} on #${id}.`);
-        }),
+        acting(`Pressed ${key} on #${id}.`, () => context.actions.press({ id }, key), !movesFocusOnly(key)),
     });
   }
   if (verbs.has('select')) {
@@ -191,44 +254,49 @@ export function createGrammarTools(
       description: 'Pick one option from a select-like control by its visible label.',
       inputSchema: z.object({ target, value: z.string().min(1) }),
       execute: ({ target: id, value }) =>
-        guard(async () => {
-          await context.actions.select({ id }, value);
-          return acted(`Selected "${value}" in #${id}.`);
-        }),
+        acting(`Selected "${value}" in #${id}.`, () => context.actions.select({ id }, value)),
     });
   }
   if (verbs.has('scroll')) {
     const direction = z.enum(['up', 'down', 'left', 'right']);
+    const times = z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_SCROLL_TIMES)
+      .optional()
+      .describe(`How many screens to scroll in this one call, 1 to ${String(MAX_SCROLL_TIMES)}; default 1. Use more to move far down a long list or feed.`);
+    // Each repeat is one recorded action against the budget, paced like a
+    // separate call, so a lazy list gets to render between screens.
+    const scrolling = async (way: 'up' | 'down' | 'left' | 'right', id: string | undefined, count: number) => {
+      for (let repeat = 0; repeat < count; repeat += 1) {
+        await context.actions.scroll(way, id === undefined ? undefined : { id });
+        if (repeat < count - 1) await context.observe();
+      }
+    };
+    const scrolled = (way: string, count: number) =>
+      count === 1 ? `Scrolled ${way}.` : `Scrolled ${way} ${String(count)} screens.`;
     // Node-targeted scrolling rides `perform`; without it only the viewport scrolls.
     tools['scroll'] = verbs.has('tap')
       ? schemaTool({
-          description: 'Scroll the viewport, or one scrollable node when target is given.',
-          inputSchema: z.object({ direction, target: target.optional() }),
-          execute: ({ direction: way, target: id }) =>
-            guard(async () => {
-              await context.actions.scroll(way, id === undefined ? undefined : { id });
-              return acted(`Scrolled ${way}.`);
-            }),
+          description:
+            'Scroll the viewport, or one scrollable node when target is given. The result reports the rows that came into or left the tree.',
+          inputSchema: z.object({ direction, target: target.optional(), times }),
+          execute: ({ direction: way, target: id, times: count }) =>
+            acting(scrolled(way, count ?? 1), () => scrolling(way, id, count ?? 1), false),
         })
       : schemaTool({
-          description: 'Scroll the viewport.',
-          inputSchema: z.object({ direction }),
-          execute: ({ direction: way }) =>
-            guard(async () => {
-              await context.actions.scroll(way);
-              return acted(`Scrolled ${way}.`);
-            }),
+          description: 'Scroll the viewport. The result reports the rows that came into or left the tree.',
+          inputSchema: z.object({ direction, times }),
+          execute: ({ direction: way, times: count }) =>
+            acting(scrolled(way, count ?? 1), () => scrolling(way, undefined, count ?? 1), false),
         });
   }
   if (verbs.has('navigate')) {
     tools['navigate'] = schemaTool({
       description: 'Navigate to a URL or app-relative path within the allowed origins.',
       inputSchema: z.object({ url: z.string().min(1) }),
-      execute: ({ url }) =>
-        guard(async () => {
-          await context.actions.navigate(url);
-          return acted(`Navigated to ${url}.`);
-        }),
+      execute: ({ url }) => acting(`Navigated to ${url}.`, () => context.actions.navigate(url)),
     });
   }
   // Offered only when the step declared secrets and the surface can fill: an
@@ -236,15 +304,16 @@ export function createGrammarTools(
   if (verbs.has('typeSecret') && context.step.secrets.length > 0) {
     tools['type_secret'] = schemaTool({
       description:
-        'Fill one declared secret credential into a secure input field; the plaintext never passes through you. Available: ' +
+        'Fill one declared secret credential into a secure input field; the plaintext never passes through you and never shows on screen. Available: ' +
         context.step.secrets.map((secret) => `"${secret.name}" (${secret.purpose})`).join(', ') +
         '.',
       inputSchema: z.object({ target, name: z.string().min(1) }),
       execute: ({ target: id, name }) =>
-        guard(async () => {
-          await context.actions.typeSecret({ id }, name);
-          return acted(`Filled secret "${name}" into #${id}.`);
-        }),
+        acting(
+          `Filled secret "${name}" into #${id}; secure values never show on screen.`,
+          () => context.actions.typeSecret({ id }, name),
+          false,
+        ),
     });
   }
   return tools;

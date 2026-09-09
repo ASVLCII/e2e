@@ -210,12 +210,14 @@ function formatNode(
 /**
  * What the screen looks like, independent of which observation looked at it.
  *
- * Two things are dropped. Node ids, because they are minted per observation, so
- * two looks at a screen that has not moved would never render identically. And
- * the focus state, because focus moves on its own — the platform settling it
- * after load, a script claiming it, a widget stealing it — without the screen
- * having changed in any way a judgment could answer differently about. Leaving
- * it in meant a genuinely static screen could still spend a second model call.
+ * Three things are dropped. Node ids, because an engine may mint them per
+ * observation, so two looks at a screen that has not moved would never render
+ * identically. The focus state, because focus moves on its own — the platform
+ * settling it after load, a script claiming it, a widget stealing it — without
+ * the screen having changed in any way a judgment could answer differently
+ * about. And clock-like values, because a ticking clock or countdown would
+ * make every screen look changed: it would end the wait for an action's
+ * effect on the first tick and keep a settle from ever seeing two looks agree.
  *
  * Lives next to `formatNode` so the line grammar keeps one owner.
  */
@@ -225,17 +227,52 @@ export function observationShape(observation: AgentObservation): string {
     .replaceAll(/ \[([^\]]*)\]/g, (_match, states: string) => {
       const stable = states.split(' ').filter((state) => state !== 'focused');
       return stable.length === 0 ? '' : ` [${stable.join(' ')}]`;
-    });
+    })
+    .replaceAll(CLOCK_PATTERN, '<time>');
 }
+
+/** `12:05`, `0:59`, `23:59:59`: a value that changes on its own once a second or minute. */
+const CLOCK_PATTERN = /\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
 
 /** Poll interval and ceiling for shape-stability settling. */
 const SETTLE_POLL_MS = 75;
 const SETTLE_TIMEOUT_MS = 1_000;
 
+/**
+ * How long a settle waits for the screen to move away from the shape an
+ * action was resolved against before accepting that the action changed
+ * nothing visible. A tap on a link starts a navigation that commits hundreds
+ * of milliseconds later; a client-side route change swaps the document body
+ * after a fetch; a submit renders its result after a round trip. Read too
+ * early, the observation is the old page, stable and wrong, and a model
+ * "repairs" what already worked. Bounded so a dead control costs one wait,
+ * not the step.
+ */
+const CHANGE_WAIT_MS = 2_000;
+
 /** What a settle loop needs from its step: the remaining clock and cancellation. */
 interface SettleClock {
   remainingMs(): number;
   readonly signal: AbortSignal;
+}
+
+/** Tunables of one settle; production callers take the defaults. */
+export interface SettleOptions<T> {
+  /**
+   * The shape the screen had when the preceding action was resolved. The
+   * settle first waits, bounded, for the shape to differ from it, so an
+   * action's result is read after its effect rather than before.
+   */
+  readonly changedFrom?: string | undefined;
+  /**
+   * Whether a capture is a screen in transition rather than a screen: an
+   * empty document between two pages, say. Such a capture never satisfies
+   * the change wait and never counts as stable while the change wait lasts.
+   */
+  readonly transitional?: ((value: T) => boolean) | undefined;
+  readonly changeWaitMs?: number | undefined;
+  readonly stableWaitMs?: number | undefined;
+  readonly pollMs?: number | undefined;
 }
 
 /**
@@ -247,17 +284,41 @@ interface SettleClock {
  * (act.ts) settles through this loop, and replay's pre-action looks and the
  * cache session's probes reach it through that same observe, so the pacing
  * can never drift between them.
+ *
+ * With `changedFrom`, the loop has two phases: first it waits for the shape
+ * to leave the pre-action one (a navigation committing, a route swapping the
+ * body, a submit rendering), then it waits for the new shape to hold still.
+ * A screen that never leaves the pre-action shape is returned as it is once
+ * the change wait runs out: the caller reports it unchanged rather than
+ * guessing.
  */
 export async function settleObservation<T>(
   capture: () => Promise<T>,
   shapeOf: (value: T) => string,
   clock: SettleClock,
+  options: SettleOptions<T> = {},
 ): Promise<T> {
+  const pollMs = options.pollMs ?? SETTLE_POLL_MS;
+  const stableWaitMs = options.stableWaitMs ?? SETTLE_TIMEOUT_MS;
+  const changeWaitMs = options.changeWaitMs ?? CHANGE_WAIT_MS;
+  const transitional = options.transitional ?? (() => false);
   let value = await capture();
   let shape = shapeOf(value);
-  const deadlineMs = Date.now() + SETTLE_TIMEOUT_MS;
-  while (Date.now() < deadlineMs && clock.remainingMs() > SETTLE_POLL_MS) {
-    await sleep(SETTLE_POLL_MS, clock.signal);
+  if (options.changedFrom !== undefined) {
+    const changeDeadlineMs = Date.now() + changeWaitMs;
+    while (
+      (shape === options.changedFrom || transitional(value)) &&
+      Date.now() < changeDeadlineMs &&
+      clock.remainingMs() > pollMs
+    ) {
+      await sleep(pollMs, clock.signal);
+      value = await capture();
+      shape = shapeOf(value);
+    }
+  }
+  const deadlineMs = Date.now() + stableWaitMs;
+  while (Date.now() < deadlineMs && clock.remainingMs() > pollMs) {
+    await sleep(pollMs, clock.signal);
     value = await capture();
     const next = shapeOf(value);
     const stable = next === shape;
@@ -265,6 +326,15 @@ export async function settleObservation<T>(
     if (stable) break;
   }
   return value;
+}
+
+/**
+ * Whether an observation shows a screen in transition: nothing but the
+ * document itself, as a page reads between the old body being torn down and
+ * the new one arriving. Acting or judging on it would be acting on nothing.
+ */
+export function isTransitionalObservation(observation: AgentObservation): boolean {
+  return observation.nodes.size <= 1;
 }
 
 function indexNodes(
