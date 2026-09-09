@@ -300,12 +300,14 @@ export default {
 
 ## targets
 
-Target names are required, unique, and limited to ASCII letters, digits, `_`,
-`-`, and `.`. An empty `targets` array is an error.
+A target's `name` defaults to its `platform`, so one target per platform needs
+none; two targets on the same platform name themselves. Names are unique and
+limited to ASCII letters, digits, `_`, `-`, and `.`. An empty `targets` array
+is an error.
 
 ```ts
 export interface Target {
-  name: string;
+  name?: string; // defaults to platform
   platform: Platform;
   engine?: EngineHandle; // defineEngine(...) from '@e2edev/e2e/engine'
 }
@@ -323,7 +325,7 @@ instead of replacing them.
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `name` | `string` | - | Stable ID used by `--target`, reports, sessions, and artifact paths |
+| `name` | `string` | `platform` | Stable ID used by `--target`, reports, sessions, and artifact paths; unique across targets |
 | `platform` | `Platform` | - | Any label; `platforms: [...]` on a test filters against it |
 | `engine` | `EngineHandle` | none | `playwright({ url?, command?, browser?, viewport?, connect? })` from `@e2edev/playwright` for a browser (`connect` attaches to a remote browser over CDP); `agentDevice({ platform, app?, appPath? })` from `@e2edev/agent-device` for an [iOS or Android device](/reference/device); any [`defineEngine`](/writing-an-engine) handle otherwise |
 
