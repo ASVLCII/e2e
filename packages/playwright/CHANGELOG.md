@@ -1,5 +1,44 @@
 # @e2edev/playwright
 
+## 0.7.0
+
+### Minor Changes
+
+- [#226](https://github.com/tester-army/e2e/pull/226) [`adbc92c`](https://github.com/tester-army/e2e/commit/adbc92c928c6d1d28e65773ccbe58876f4de14a4) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Both engines declare their platform on the handle: `web` for playwright, the
+  `platform` option for agent-device. A target that names them no longer has to
+  repeat it. Both engines now require `@e2edev/e2e` 0.8 or newer (peer range
+  `>=0.8.0 <1`): an older runner rejects `platform` as an unknown engine key,
+  and could still send `states.hidden` in a role query, which these engines no
+  longer read.
+
+- [#233](https://github.com/tester-army/e2e/pull/233) [`a659f5f`](https://github.com/tester-army/e2e/commit/a659f5f5fcfc0fa97b5b460fa595d8bbf558cd0a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Video recording. With `artifacts: ['video']` or `--video`, the engine screencasts the attempt's page to `video/video.webm` at the attempt's viewport size, one segment per page: a restart or a state reset opens a new page and continues in `video/video-part<n>.webm`.
+
+- [#225](https://github.com/tester-army/e2e/pull/225) [`47be7f8`](https://github.com/tester-army/e2e/commit/47be7f867da427cfa05f999c9af32ed5fd6eb6ba) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `SelectOption` on the engine contract gains a `{ value }` variant. Playwright
+  selects by the option's `value` attribute; the device engine's `selectOption`
+  stays `UNSUPPORTED_CAPABILITY` for every variant.
+
+### Patch Changes
+
+- [#234](https://github.com/tester-army/e2e/pull/234) [`7d4ca98`](https://github.com/tester-army/e2e/commit/7d4ca981917114ad5f5955805fea7b235d6e932b) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A control's name and its labels no longer include text marked `aria-hidden`.
+  A required field whose label ends in a hidden asterisk was named
+  `"Display name*"`, so `getByLabel('Display name')` and `getByRole('textbox',
+{ name: 'Display name' })` found nothing while every screen reader said
+  "Display name". Names follow the accessible name computation: aria-hidden
+  subtrees are dropped, CSS-hidden ones stay out as before, and hidden text
+  between visible fragments is skipped too. Screen text is untouched:
+  `getByText('Display name*')` still finds the label, and a node's `text` still
+  reads as a person sees it. An exact label query is now decided by the engine
+  over every labelable element in scope (button, input, meter, output, progress,
+  select, textarea, and anything with `aria-label` or `aria-labelledby`),
+  matching any of the element's labels (an `aria-label`, an `aria-labelledby`
+  target, or an associated `<label>`) the way Playwright's `getByLabel` does; as
+  a scope or `has` filter it composes through Playwright's substring label match.
+
+- [#223](https://github.com/tester-army/e2e/pull/223) [`68620ef`](https://github.com/tester-army/e2e/commit/68620ef7459739f89f7846decd54af1c8e5105e9) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Role queries no longer read a `hidden` state from the query: the engine
+  contract dropped it. Playwright's role locator keeps its default of matching
+  only nodes exposed to assistive technology; the device engine skips hidden
+  nodes in role queries as it did by default.
+
 ## 0.6.1
 
 ### Patch Changes

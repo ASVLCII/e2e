@@ -1,5 +1,42 @@
 # @e2edev/agent-device
 
+## 0.4.0
+
+### Minor Changes
+
+- [#233](https://github.com/tester-army/e2e/pull/233) [`a659f5f`](https://github.com/tester-army/e2e/commit/a659f5f5fcfc0fa97b5b460fa595d8bbf558cd0a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Video recording. With `artifacts: ['video']` or `--video`, the engine records the device screen through agent-device's recorder into `video/video.mp4` under the attempt's artifact directory, taps shown.
+
+- [#232](https://github.com/tester-army/e2e/pull/232) [`25e1897`](https://github.com/tester-army/e2e/commit/25e1897fbbae245814b6622faf04fb29e8d59f9d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `device` accepts a list. The engine declares one worker per device (one for a single or unnamed device), so a `workers` above the pool size no longer over-subscribes it; worker slot `n` drives the `n`th entry. Every session name now carries the worker slot, `<session>-<n>` (`e2e-<target>-<n>` by default), for a single device too: a run that named its session `qa` now drives `qa-0`. Devices boot in `prepare`, one slot after another and outside `launchTimeout`, each opening the pinned `app` once so its automation runner is up before the first attempt. An empty pool is a configuration error.
+
+- [#226](https://github.com/tester-army/e2e/pull/226) [`adbc92c`](https://github.com/tester-army/e2e/commit/adbc92c928c6d1d28e65773ccbe58876f4de14a4) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Both engines declare their platform on the handle: `web` for playwright, the
+  `platform` option for agent-device. A target that names them no longer has to
+  repeat it. Both engines now require `@e2edev/e2e` 0.8 or newer (peer range
+  `>=0.8.0 <1`): an older runner rejects `platform` as an unknown engine key,
+  and could still send `states.hidden` in a role query, which these engines no
+  longer read.
+
+### Patch Changes
+
+- [#232](https://github.com/tester-army/e2e/pull/232) [`25e1897`](https://github.com/tester-army/e2e/commit/25e1897fbbae245814b6622faf04fb29e8d59f9d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Requires `@e2edev/e2e` 0.8.0 or newer, the release that hands `init` its worker slot and `prepare` its slot count; an older core would fail every device pool at init.
+
+- [#218](https://github.com/tester-army/e2e/pull/218) [`2e50798`](https://github.com/tester-army/e2e/commit/2e50798b3cbd4b813274a53889458eced830747d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Every optional `agentDevice()` option (`app`, `appPath`, `device`, `identity`,
+  `environment`, `session`, `snapshot`) also accepts `undefined`, so a config
+  passes `device: process.env.E2E_DEVICE` straight through instead of spreading
+  it in conditionally. The runtime already treated a missing and an `undefined`
+  value alike; only the types rejected the latter under
+  `exactOptionalPropertyTypes`.
+
+- [#227](https://github.com/tester-army/e2e/pull/227) [`7143477`](https://github.com/tester-army/e2e/commit/7143477435bf5bb59bba778932cc7ad0002ce494) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `getByText` on a device target now resolves to the innermost matching node, as in a browser. iOS reports a React Native `Text` as a host view plus a `StaticText` child with the same label, and container views inherit their children's labels, so every text query on such screens failed with `LOCATOR_AMBIGUOUS`. Ancestors whose match is echoed by a matching descendant are dropped; unrelated duplicates still fail.
+
+- [#225](https://github.com/tester-army/e2e/pull/225) [`47be7f8`](https://github.com/tester-army/e2e/commit/47be7f867da427cfa05f999c9af32ed5fd6eb6ba) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `SelectOption` on the engine contract gains a `{ value }` variant. Playwright
+  selects by the option's `value` attribute; the device engine's `selectOption`
+  stays `UNSUPPORTED_CAPABILITY` for every variant.
+
+- [#223](https://github.com/tester-army/e2e/pull/223) [`68620ef`](https://github.com/tester-army/e2e/commit/68620ef7459739f89f7846decd54af1c8e5105e9) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Role queries no longer read a `hidden` state from the query: the engine
+  contract dropped it. Playwright's role locator keeps its default of matching
+  only nodes exposed to assistive technology; the device engine skips hidden
+  nodes in role queries as it did by default.
+
 ## 0.3.2
 
 ### Patch Changes

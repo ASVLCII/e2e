@@ -1,5 +1,137 @@
 # @e2edev/e2e
 
+## 0.8.0
+
+### Minor Changes
+
+- [#231](https://github.com/tester-army/e2e/pull/231) [`b9f032b`](https://github.com/tester-army/e2e/commit/b9f032bc30b42a71abac9310239e3dd4a58a01be) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The act loop re-finds a target that went stale and scrolls further in one call.
+
+  - A tap, type, press, or select whose node the engine reports stale is retried on the node the same descriptor matches in a fresh capture, up to twice, before the failure reaches the model. A list that remounts its rows between the observation and the action no longer costs a turn per attempt.
+  - The built-in agent's `scroll` tool takes `times` (1 to 5) and scrolls three quarters of the box per swipe instead of half; every swipe is one recorded action, and the observation after a scroll waits briefly for a windowed or lazy list to render its next rows.
+  - Several actions issued in one turn keep addressing the screen the turn saw: an id the newest observation no longer carries, because a look in between renumbered the tree (an engine that mints ids per observation) or the element remounted, is re-found by its descriptor in the newest screen when exactly one node matches.
+  - A mutating project tool arms the same brief wait as a scroll, so a page that reacts to it is read after the reaction; a secret fill's origin authorization is bounded like the fill itself; pressing a key that only moves focus or the caret (Tab, arrows, Home, End, Page keys) is not reported as a control that did nothing.
+  - Three failed actions in a row earn the model a notice to change approach; five force the conclusion, the way repeated identical calls already do.
+
+- [#231](https://github.com/tester-army/e2e/pull/231) [`b9f032b`](https://github.com/tester-army/e2e/commit/b9f032bc30b42a71abac9310239e3dd4a58a01be) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The built-in agent reads action results after their effect and sends screen changes instead of whole screens.
+
+  - After a tap, type, press, select, or navigate, the next observation waits, bounded to two seconds, for the screen to leave the shape the action was resolved against. A tap on a link reports the page it opened rather than the page it left; an action that changed nothing says so instead of returning a stale screen. Cached replays settle through the same wait.
+  - Every action result and every `observe` after the opening screen reports only the lines that changed, keyed by the stable node ids and prefixed `added`, `changed` (with what the line read before), or `removed`. A node that only moved to another depth is not reported, and a screen cut at the observation byte limit reports no removals, since the nodes past the limit were left out rather than gone. A screen that changed mostly goes out whole again, and the full screen it replaced is elided, so the transcript prefix stays stable for prompt caching.
+  - Clock-like text (`12:05`, `0:59:59`) is ignored when comparing screen shapes, so a ticking timer neither ends the wait for an action's effect nor keeps a screen from settling.
+  - Several actions may be issued in one turn; they run in order and each reports its own changes. A failed action returns the failure with the current screen, so a stale id costs no extra turn.
+  - `complete_step` accepts summaries up to 2000 characters instead of rejecting them past 500, and asks for a short handoff for the next step.
+  - The prior-step ledger shows a replayed step's recorded verdict without the cache replay notice.
+  - A targeted grammar action (tap, type, press, select, scroll, secret fill) is bounded by the smaller of `actionTimeout` and 15 seconds, so a tap blocked by an overlay reports what is in the way within seconds instead of sitting in the engine's actionability retry for the whole `actionTimeout`. Navigation keeps the full budget.
+  - Engine errors thrown by an engine loaded from a config file are recognized structurally: a retryable stale-node race during an observation is re-read instead of failing the action, and step events record the engine code (`NODE_STALE`, `NOT_ACTIONABLE`) instead of `EngineError`.
+
+- [#219](https://github.com/tester-army/e2e/pull/219) [`17cde5a`](https://github.com/tester-army/e2e/commit/17cde5a1284f94d84ed8024a22b0fde1a5b23f88) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `agent.act` takes one options bag and resolves with what the step did.
+  `params` moves inside the options: `act('x', undefined, { timeout })` becomes
+  `act('x', { timeout })`, and `act('x', { email })` becomes
+  `act('x', { params: { email } })`. The result is an `ActResult`, with the
+  executor's `summary`, the `modelCalls` and `actions` the step spent, and
+  `cache`, how the trace cache took part, instead of `{ ok: true }`.
+  `ActOptions` and `ActResult` replace `AgentOptions` and `AgentResult`. A
+  call in the old shape fails with `INVALID_ARGUMENT` naming the move, from a
+  JavaScript test as from a typed one, instead of running with its parameters
+  silently ignored.
+
+- [#219](https://github.com/tester-army/e2e/pull/219) [`17cde5a`](https://github.com/tester-army/e2e/commit/17cde5a1284f94d84ed8024a22b0fde1a5b23f88) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A step in a retry attempt reports how the cache took part instead of
+  nothing: `step.cache` (and `ActResult.cache`) reads `missed` with the new
+  reason `retry`, since a retry records a trace but never replays one. Before,
+  such a step was indistinguishable from one that ran with caching off. The
+  report schema's `reason` enum gains the value.
+
+- [#222](https://github.com/tester-army/e2e/pull/222) [`45f8a75`](https://github.com/tester-army/e2e/commit/45f8a756eb4f6b51f2521ace864a5287afbe7dc6) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `app.deepLink(url)` is gone. It was `app.open(url)` under another name: the
+  same navigation, the same base-URL resolution, the same origin policy, and no
+  way to open a custom-scheme link, since a scheme outside the allowed origins
+  fails the policy check. `app.open()` takes the absolute URLs `deepLink` took.
+
+- [#224](https://github.com/tester-army/e2e/pull/224) [`96ae147`](https://github.com/tester-army/e2e/commit/96ae14755b2663d29d7f61107ff9271ab0a70dca) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The `E2E_DEBUG` environment variable is gone, and with it the live stderr
+  stream of agent phases and observations it switched on. The two diagnostics
+  that stay are the ones the report and the CLI own: `e2e run --debug` for phase
+  timings, transcripts, and the agent step table, and `e2e run --ai-trace` for
+  every model call.
+
+- [#236](https://github.com/tester-army/e2e/pull/236) [`571883e`](https://github.com/tester-army/e2e/commit/571883e61fcf64907ab39dd5a59009935837288c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The `@e2edev/e2e/run` subpath is gone: `run()`, `RunOptions`, `RunOutcome`,
+  and the event and record types it re-exported. The `e2e` CLI is the one way
+  to drive the runner. A program that needs a run's outcome runs the CLI and
+  reads `.e2e/report.json` (report-1), the canonical record of a run. The
+  config seams stay where they were, in `e2e.config.ts`: `artifacts.store`,
+  `cache.store`, `agent.executor`, and credential providers.
+
+- [#226](https://github.com/tester-army/e2e/pull/226) [`adbc92c`](https://github.com/tester-army/e2e/commit/adbc92c928c6d1d28e65773ccbe58876f4de14a4) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An engine declares the platform it drives, and a target inherits it.
+  `Target.platform` is optional: with the name already defaulting to the
+  platform, `{ engine: playwright({ url }) }` is a complete target, and so is
+  `{ engine: agentDevice({ platform: 'ios', app }) }`. A target without an engine
+  still names its platform. A target that names one while its engine declares
+  another is `INVALID_CONFIG` instead of a label the tool packs silently disagree
+  with. `Engine.platform` joins the engine contract as an optional member, and
+  `e2e init` scaffolds targets without the redundant label.
+
+- [#220](https://github.com/tester-army/e2e/pull/220) [`9cbba48`](https://github.com/tester-army/e2e/commit/9cbba48c62b319bba91b281f3451f9018513b675) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The judgment calls take named option types, and duration options drop the
+  `Ms` suffix. `assert` takes `AssertOptions`; `waitFor` takes
+  `WaitForOptions`, with `interval` where it had `intervalMs`; `extract` takes
+  `ExtractOptions` and loses `maxModelCalls`, since its budget is fixed at two
+  calls (one extraction plus one repair round) and the knob only ever accepted 1
+  or 2. `longPress` takes `LongPressOptions`, with `duration` where it had
+  `durationMs`. Every duration is still in milliseconds, like `timeout`. An
+  option a call does not take, the old `intervalMs`, `durationMs`, and
+  extract's `maxModelCalls` included, fails with `INVALID_ARGUMENT` instead
+  of running on the default, from a JavaScript test as from a typed one; a
+  renamed option is told its new name.
+
+- [#237](https://github.com/tester-army/e2e/pull/237) [`cca3463`](https://github.com/tester-army/e2e/commit/cca34637f37b6a7af51d956a16257f7647ee9ed0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The list reporter's live window reads `Replaying` instead of `Thinking`
+  while the trace cache has an `agent.act` step, from the moment a cached
+  trace is found until the step ends or a replay that could not finish it
+  hands the step to the model, when the row reads `Thinking` again.
+  `StepProgress` gains the `replay` phase that carries this to any reporter:
+  `{ phase: 'replay', api, active }`.
+
+- [#233](https://github.com/tester-army/e2e/pull/233) [`a659f5f`](https://github.com/tester-army/e2e/commit/a659f5f5fcfc0fa97b5b460fa595d8bbf558cd0a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Opt-in run recording. `artifacts` accepts the `video` kind and `e2e run --video` adds it for one run; a recording lands under each attempt's artifact directory, is recorded in `report.json` as an artifact of kind `video` with `startedAt` (when the recording started, so step timestamps place onto it), and the failure recap names the file under each failed test. `artifacts.video.retain: 'on-failure'` keeps only the recordings of attempts that did not pass. Video never enters the config digest, so recording a run cannot invalidate its cached traces. Engines record through the new `startVideo`/`stopVideo` pair of `EngineArtifacts`; `run-started` events carry `artifactsRoot`; `StoredArtifact` carries `startedAt` for video. In report-1 an `incomplete` artifact may now carry `path`, `size`, and `sha256`: a video is recorded that way, since a recording masks nothing, and is kept as it is.
+
+- [#225](https://github.com/tester-army/e2e/pull/225) [`47be7f8`](https://github.com/tester-army/e2e/commit/47be7f867da427cfa05f999c9af32ed5fd6eb6ba) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `selectOption` accepts `{ value }`, the option's `value` attribute, beside the
+  label (a bare string or `{ label }`) and `{ index }`. Tests that know what the
+  form submits no longer have to know what the option says.
+
+- [#218](https://github.com/tester-army/e2e/pull/218) [`2e50798`](https://github.com/tester-army/e2e/commit/2e50798b3cbd4b813274a53889458eced830747d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A target's `name` is optional and defaults to its `platform`:
+  `targets: [{ platform: 'ios', engine }]` is the target `ios`. Names stay
+  unique, so two targets on one platform still name themselves; leaving both
+  unnamed is `INVALID_CONFIG` with a hint saying so. Errors raised before a
+  target's name is known (an unknown key, a missing platform) point at the entry
+  as `targets[<index>]`.
+
+- [#223](https://github.com/tester-army/e2e/pull/223) [`68620ef`](https://github.com/tester-army/e2e/commit/68620ef7459739f89f7846decd54af1c8e5105e9) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `visible` is the one visibility option on `screen` queries. `RoleOptions.hidden`
+  is gone: a role query never matches a node hidden from the accessibility tree,
+  on every engine, the way a browser's role selector never does, and the one
+  knob that widened it is no longer there to confuse with `visible`, which
+  narrows every other query kind to nodes on screen. `SemanticQuery.states` on
+  the engine contract loses its `hidden` key.
+
+- [#232](https://github.com/tester-army/e2e/pull/232) [`25e1897`](https://github.com/tester-army/e2e/commit/25e1897fbbae245814b6622faf04fb29e8d59f9d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Worker slots and engine capacity. `EngineInitInfo.workerSlot` is the 0-based slot of the worker among its target's workers, the lowest one free when it was spawned, so an engine with several devices hands each slot its own. An engine declares `workers`, the most it serves per target at once; the scheduler never starts more for that target, whatever `config.workers` allows, so a device target shares a run with browser targets without being over-subscribed. `EnginePrepareInfo.slots` tells `prepare` how many worker slots the run will use.
+
+### Patch Changes
+
+- [#217](https://github.com/tester-army/e2e/pull/217) [`b526ea8`](https://github.com/tester-army/e2e/commit/b526ea82c1db2ab250f3db06412690bc7ff15a1b) Thanks [@devin-ai-integration](https://github.com/apps/devin-ai-integration)! - `act` observations are now clamped the way judgment observations already
+  were: the tree an act turn sends is bounded by the per-call token ceiling
+  minus what the rest of the request costs, so a dense screen truncates
+  visibly instead of failing the adapter's pre-flight. The default
+  `agent.maxObservationBytes` drops from 1048576 to 262144; set it explicitly
+  to keep the old ceiling. The act loop also retries transport failures five
+  times and bounds the whole loop by the step's remaining time, like the
+  judgment calls, and `STEP_NO_CONCLUSION` reports how many turns the model
+  used rather than the configured maximum.
+
+- [#216](https://github.com/tester-army/e2e/pull/216) [`a372730`](https://github.com/tester-army/e2e/commit/a37273019732a2c9373d699bb5cafd35da4d2078) Thanks [@devin-ai-integration](https://github.com/apps/devin-ai-integration)! - `model` step events carry the moment the request went out as `startedAt`,
+  not the moment the executor reported the turn. `ExecutorModelCall` gains an
+  optional `startedAt`; the built-in tool loop fills it. The list reporter
+  shows a step's events in stream order instead of moving each turn ahead of
+  the tool calls it made.
+
+- [#235](https://github.com/tester-army/e2e/pull/235) [`e7f0da5`](https://github.com/tester-army/e2e/commit/e7f0da56b022a3988361f6affb4a97409466df17) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The list reporter's `AI` summary row names the configured models after the
+  call count, `provider/id` plus `vision provider/id` when `agent.visionModel`
+  is set, so a long run's final summary carries them without scrolling back to
+  the header. The `run-started` event gains an optional `visionModel` field, and
+  the header names it too.
+
 ## 0.7.0
 
 ### Minor Changes
