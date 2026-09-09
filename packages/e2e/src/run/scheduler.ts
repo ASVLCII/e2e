@@ -8,8 +8,7 @@
  * execution.
  */
 
-import type { Collection } from '../collect/collect.ts';
-import type { Selection, TestTargetPair } from '../collect/select.ts';
+import type { TestTargetPair } from '../collect/select.ts';
 import type { ResolvedTarget } from '../config/resolve.ts';
 import type { AiTraceSnapshot } from '../internal/ai-trace.ts';
 import type { DebugSnapshot } from '../internal/debug.ts';
@@ -19,12 +18,12 @@ import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
 import type { StepProgress } from './steps.ts';
 import type { SpawnUnitRunner, UnitRunner } from './unit-runner.ts';
 import {
-  buildWorkPlans,
   INTERRUPTED_BEFORE_START,
   nonRunResult,
   pairResult,
   setupFailedSkip,
   unstartedResult,
+  type TargetWorkPlan,
   type WorkUnit,
 } from './units.ts';
 import {
@@ -51,9 +50,8 @@ export interface SchedulerEvents {
 }
 
 export interface RunUnitsOptions {
-  readonly selection: Selection;
-  readonly collection: Collection;
-  readonly projectRoot: string;
+  /** Per-target work, built once by the runner; see `buildWorkPlans`. */
+  readonly plans: readonly TargetWorkPlan[];
   /** Maximum workers alive at once across all targets. */
   readonly workers: number;
   /** Budget for a worker to finish an in-flight unit after an interrupt. */
@@ -77,7 +75,7 @@ const MAX_INIT_FAILURES = 2;
 /** How long a retiring or draining worker gets before it is force-killed. */
 const SHUTDOWN_GRACE_MS = 10_000;
 
-/** Runs every selected unit and streams records. */
+/** Runs every planned unit and streams records. */
 export async function runUnits(options: RunUnitsOptions): Promise<void> {
   await new Scheduler(options).run();
 }
@@ -113,11 +111,12 @@ class SchedulerWorker {
 
   constructor(
     readonly targetName: string,
+    readonly workerSlot: number,
     spawn: SpawnUnitRunner,
     onMessage: (worker: SchedulerWorker, message: WorkerToMain) => void,
     onExit: (worker: SchedulerWorker, detail: string) => void,
   ) {
-    this.runner = spawn(targetName, {
+    this.runner = spawn(targetName, workerSlot, {
       onMessage: (message) => onMessage(this, message),
       onExit: (detail) => {
         this.clearKillTimer();
@@ -188,12 +187,7 @@ class Scheduler {
   constructor(private readonly options: RunUnitsOptions) {}
 
   async run(): Promise<void> {
-    const plans = buildWorkPlans(
-      this.options.selection,
-      this.options.collection,
-      this.options.projectRoot,
-    );
-    for (const plan of plans) {
+    for (const plan of this.options.plans) {
       this.targets.set(plan.target.name, {
         target: plan.target,
         setupQueue: [...plan.setupUnits],
@@ -288,7 +282,7 @@ class Scheduler {
       if (state === undefined) return;
       const unit = this.takeUnit(state);
       if (unit === undefined) continue;
-      const worker = this.acquireWorker(state.target.name);
+      const worker = this.acquireWorker(state);
       if (worker === undefined) {
         // No capacity right now; put the unit back at the head of its queue.
         this.returnUnit(state, unit);
@@ -303,7 +297,7 @@ class Scheduler {
   private nextTarget(): TargetState | undefined {
     for (const state of this.targets.values()) {
       if (this.peekUnit(state) === undefined) continue;
-      if (this.canPlaceWork(state.target.name)) return state;
+      if (this.canPlaceWork(state)) return state;
     }
     return undefined;
   }
@@ -370,25 +364,46 @@ class Scheduler {
 
   // --- workers ---
 
-  /** Whether a worker for `targetName` can be obtained without exceeding the cap. */
-  private canPlaceWork(targetName: string): boolean {
-    if (this.findAvailable(targetName) !== undefined) return true;
+  /** Whether a worker for the target can be obtained without exceeding the run cap or the target's capacity. */
+  private canPlaceWork(state: TargetState): boolean {
+    if (this.findAvailable(state.target.name) !== undefined) return true;
+    if (!this.hasCapacity(state)) return false;
     if (this.workers.length < this.options.workers) return true;
-    return this.findRetirableForeignWorker(targetName) !== undefined;
+    return this.findRetirableForeignWorker(state.target.name) !== undefined;
   }
 
   /**
-   * A worker for this target, spawning one if the cap allows. Retired workers
-   * keep counting against the cap until they are gone, so a discarded worker
-   * never doubles the number of live surfaces. At capacity this discards an
-   * idle worker bound to another target and returns nothing; its exit wakes
-   * the loop and dispatch retries with the freed slot.
+   * Whether the target may start another worker: fewer of its workers exist
+   * than its engine serves at once, the run cap when it declares no bound.
+   * Derived from the live worker list, like setup gating: a retired worker
+   * counts until its exit is observed, because its surface is in use until
+   * it is gone.
    */
-  private acquireWorker(targetName: string): SchedulerWorker | undefined {
-    const available = this.findAvailable(targetName);
+  private hasCapacity(state: TargetState): boolean {
+    const capacity = state.target.engine?.workers ?? this.options.workers;
+    return this.workersOf(state.target.name).length < capacity;
+  }
+
+  /** Every worker of one target that has not exited yet, retired ones included. */
+  private workersOf(targetName: string): SchedulerWorker[] {
+    return this.workers.filter((worker) => worker.targetName === targetName);
+  }
+
+  /**
+   * A worker for this target, spawning one if the run cap and the target's
+   * capacity allow. Retired workers keep counting against both until they are
+   * gone, so a discarded worker never doubles the number of live surfaces. A
+   * target at its own capacity gets nothing and retires nobody: only one of
+   * its own workers finishing or exiting can make room. At the run cap this
+   * discards an idle worker bound to another target and returns nothing; its
+   * exit wakes the loop and dispatch retries with the freed slot.
+   */
+  private acquireWorker(state: TargetState): SchedulerWorker | undefined {
+    const available = this.findAvailable(state.target.name);
     if (available !== undefined) return available;
-    if (this.workers.length < this.options.workers) return this.spawn(targetName);
-    const foreign = this.findRetirableForeignWorker(targetName);
+    if (!this.hasCapacity(state)) return undefined;
+    if (this.workers.length < this.options.workers) return this.spawn(state);
+    const foreign = this.findRetirableForeignWorker(state.target.name);
     if (foreign !== undefined) this.retire(foreign);
     return undefined;
   }
@@ -408,9 +423,14 @@ class Scheduler {
     );
   }
 
-  private spawn(targetName: string): SchedulerWorker {
+  /** Starts a worker on the lowest slot none of the target's workers holds, so a replacement takes over the slot of the one that exited. */
+  private spawn(state: TargetState): SchedulerWorker {
+    const taken = new Set(this.workersOf(state.target.name).map((worker) => worker.workerSlot));
+    let workerSlot = 0;
+    while (taken.has(workerSlot)) workerSlot += 1;
     const worker = new SchedulerWorker(
-      targetName,
+      state.target.name,
+      workerSlot,
       this.options.spawn,
       (target, message) => this.onMessage(target, message),
       (target, detail) => this.onExit(target, detail),

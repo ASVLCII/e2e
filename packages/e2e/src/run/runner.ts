@@ -36,6 +36,7 @@ import { createRunEventEmitter, toEventResult, type RunEventSink, type RunExitCo
 import { inProcessSpawner } from './in-process.ts';
 import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
 import { runUnits } from './scheduler.ts';
+import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setCredentialRegistry } from '../credentials.ts';
@@ -484,6 +485,15 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       targetProvenance.set(target.name, validateEngine(target, config));
     }
 
+    // The work units, built once: the same plans tell each engine's `prepare`
+    // how many worker slots to provision and the scheduler what to dispatch.
+    const plans = buildWorkPlans(selection, collection, config.projectRoot);
+    // Workers re-load the config module themselves, so a file-backed config
+    // runs across processes. A supplied `rawConfig` cannot cross a process
+    // boundary (it may hold live engine handles), so it runs in-process
+    // against one worker.
+    const runWorkers = config.configPath === undefined ? 1 : config.workers;
+
     // Provisioning: an engine that must fetch something onto this machine (a
     // first-run browser download) does it here, once per target, before the
     // app starts and before the run's clock starts. Only an interrupt cuts it
@@ -492,11 +502,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // of a worker's stderr fighting the live status block.
     try {
       await debug.time('engine.prepare', () =>
-        prepareEngines(
-          selection.perTarget.map(({ target }) => target),
-          { runId, env, signal: interrupted },
-          emit,
-        ),
+        prepareEngines(plans, runWorkers, { runId, env, signal: interrupted }, emit),
       );
     } catch (cause) {
       if (!interrupted.aborted) recordFailure(cause, 'launch');
@@ -548,55 +554,45 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     const store = SessionStore.create(runId, sessionsRoot);
     sessionStore = store;
 
-    // Workers re-load the config module themselves, so a file-backed config
-    // runs across processes. A supplied `rawConfig` cannot cross a process
-    // boundary (it may hold live engine handles), so it runs in-process
-    // against one worker. Either way the scheduler is the only engine.
+    // Both transports are reached through `SpawnUnitRunner`: the scheduler is
+    // the only engine either way.
     if (aiTrace !== undefined && config.configPath === undefined) {
       // In-process execution shares this process with the runner, so the
       // recorder lives here and is drained straight into the collector.
       aiTraceRecorder = new AiTraceRecorder();
       await registerAiTraceRecorder(aiTraceRecorder, loadAiSdk);
     }
-    const transport =
+    const spawn =
       config.configPath === undefined
-        ? {
-            workers: 1,
-            spawn: inProcessSpawner({
-              config,
-              selection,
-              runId,
-              artifactsRoot,
-              sessionStore: store,
-              headed: options.headed ?? false,
-              debug,
-            }),
-          }
-        : {
-            workers: config.workers,
-            spawn: childProcessSpawner({
-              configPath: config.configPath,
-              projectRoot: config.projectRoot,
-              configDigest: config.configDigest,
-              cli,
-              runId,
-              artifactsRoot,
-              headed: options.headed ?? false,
-              sessionsRoot,
-              sessionKeyBase64: store.exportKeyForWorker(),
-              debug: debug.enabled,
-              aiTrace: aiTrace !== undefined,
-              env,
-            }),
-          };
+        ? inProcessSpawner({
+            config,
+            selection,
+            runId,
+            artifactsRoot,
+            sessionStore: store,
+            headed: options.headed ?? false,
+            debug,
+          })
+        : childProcessSpawner({
+            configPath: config.configPath,
+            projectRoot: config.projectRoot,
+            configDigest: config.configDigest,
+            cli,
+            runId,
+            artifactsRoot,
+            headed: options.headed ?? false,
+            sessionsRoot,
+            sessionKeyBase64: store.exportKeyForWorker(),
+            debug: debug.enabled,
+            aiTrace: aiTrace !== undefined,
+            env,
+          });
 
     await debug.time('scheduler', () =>
       runUnits({
-        selection,
-        collection,
-        projectRoot: config.projectRoot,
-        workers: transport.workers,
-        spawn: transport.spawn,
+        plans,
+        workers: runWorkers,
+        spawn,
         interruptGraceMs: config.timeout + config.cleanupTimeout,
         interruptSignal: interrupted,
         forceSignal: forceController.signal,
@@ -683,11 +679,13 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
  * read better than two interleaved.
  */
 async function prepareEngines(
-  targets: readonly ResolvedTarget[],
+  plans: readonly TargetWorkPlan[],
+  runWorkers: number,
   scope: { runId: string; env: NodeJS.ProcessEnv; signal: AbortSignal },
   emit: (fact: RunEventFact) => void,
 ): Promise<void> {
-  for (const target of targets) {
+  for (const plan of plans) {
+    const { target } = plan;
     const engine = target.engine;
     if (engine?.prepare === undefined) continue;
     if (scope.signal.aborted) return;
@@ -700,6 +698,7 @@ async function prepareEngines(
       await engine.prepare({
         runId: scope.runId,
         targetName: target.name,
+        slots: plannedSlots(plan, runWorkers),
         env: scope.env,
         signal: scope.signal,
         log: (line) => emit({ type: 'notice', target: target.name, message: line }),

@@ -10,7 +10,8 @@ import { createRequire } from 'node:module';
 import { createAgentDeviceClient } from 'agent-device';
 import { defineEngine, obj, type EngineAppDeclaration, type EngineHandle } from '@e2edev/e2e/engine';
 import { createDeviceFixture } from './device.ts';
-import { AgentDeviceSurface, type AgentDeviceOptions, type ClientFactory } from './surface.ts';
+import type { AgentDeviceOptions, ClientFactory } from './options.ts';
+import { AgentDeviceSurface } from './surface.ts';
 
 const surfaces = new WeakMap<EngineHandle, AgentDeviceSurface>();
 
@@ -21,6 +22,8 @@ export function buildEngine(surface: AgentDeviceSurface): EngineHandle {
     version: ownVersion(),
     spiVersion: 1,
     platform: surface.options.platform,
+    workers: surface.pool.size,
+    prepare: (info) => surface.pool.prepare(info),
     init: (info) => surface.init(info),
     startAttempt: (context) => surface.startAttempt(context),
     endAttempt: (context) => surface.endAttempt(context),

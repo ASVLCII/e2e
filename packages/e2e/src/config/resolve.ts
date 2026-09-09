@@ -717,6 +717,7 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
             ...(engine.version === undefined ? {} : { version: engine.version }),
             spiVersion: engine.spiVersion,
             ...(engine.platform === undefined ? {} : { platform: engine.platform }),
+            ...(engine.workers === undefined ? {} : { workers: engine.workers }),
             capabilities: [...engine.capabilities].toSorted(),
             app: digestAppDeclaration(engine.app ?? {}),
           },
