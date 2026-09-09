@@ -10,13 +10,15 @@ import { didYouMean } from '../internal/suggest.ts';
 import { isStepExecutor } from '../agent/executor.ts';
 import { boundedInt, positiveInt } from './validate.ts';
 import type {
-  ArtifactsConfig,
   ArtifactStore,
+  ArtifactsConfig,
+  BuiltinReporter,
   CacheMode,
   ConfiguredArtifactKind,
   E2EConfig,
   ModelInstance,
   Platform,
+  Reporter,
   SecretProvider,
   Target,
   TraceCacheStore,
@@ -84,7 +86,10 @@ export interface ResolvedConfig {
   readonly artifactStore: ArtifactStore | undefined;
   /** Which attempts keep their video: every one, or only those that did not pass. */
   readonly videoRetain: 'all' | 'on-failure';
-  readonly reporters: readonly ('list' | 'json' | 'junit')[];
+  /** The built-in renderers in force: `--reporter` when given, else the config's ids. */
+  readonly reporters: readonly BuiltinReporter[];
+  /** The reporter objects the config names; `--reporter` never removes one. */
+  readonly customReporters: readonly Reporter[];
   readonly testIdAttribute: string;
   readonly agent: ResolvedAgentConfig;
   readonly cache: ResolvedCacheConfig;
@@ -114,7 +119,7 @@ export interface ResolvedCacheConfig {
 export interface CliOverrides {
   retries?: number;
   workers?: number;
-  reporters?: readonly ('list' | 'json' | 'junit')[];
+  reporters?: readonly BuiltinReporter[];
   /** Trace cache mode override; `--no-cache` maps to `'off'`. */
   cache?: CacheMode;
   /** `--video`: adds the `video` artifact kind to whatever the config asks for. */
@@ -242,24 +247,7 @@ export function resolveConfig(
     (ci ? 1 : Math.max(1, Math.floor(os.availableParallelism() / 2)));
 
   const { artifacts, artifactStore, videoRetain } = resolveArtifactsConfig(raw, cli);
-  const reporters = cli.reporters ?? raw.reporters ?? (['list'] as const);
-  if (!Array.isArray(reporters)) {
-    throw new ConfigurationError('INVALID_CONFIG', 'reporters must be an array of reporter ids');
-  }
-  for (const reporter of reporters) {
-    if (!['list', 'json', 'junit'].includes(reporter)) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `unknown reporter "${reporter}"; reporters are list, json, and junit${didYouMean(reporter, ['list', 'json', 'junit'])}`,
-      );
-    }
-  }
-  if (reporters.includes('json') && reporters.includes('list')) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      'the json renderer cannot be combined with list',
-    );
-  }
+  const { reporters, customReporters } = resolveReporters(raw, cli);
 
   const testIdAttribute = raw.screen?.testIdAttribute ?? 'data-testid';
   const projectId = resolveProjectId(raw.projectId, options.projectRoot);
@@ -290,6 +278,7 @@ export function resolveConfig(
     artifactStore,
     videoRetain,
     reporters,
+    customReporters,
     testIdAttribute,
     agent,
     cache,
@@ -470,6 +459,61 @@ function resolveVideoRetain(value: unknown): 'all' | 'on-failure' {
 /** The `{ kinds, store }` form, as opposed to the bare kinds array. */
 function isArtifactsObject(value: unknown): value is ArtifactsConfig {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const BUILTIN_REPORTERS: readonly BuiltinReporter[] = ['list', 'json', 'junit'];
+
+/**
+ * Splits `reporters` into the built-in ids and the reporter objects.
+ * `--reporter` replaces the ids only: an object has no id to name on the
+ * command line, so a CI flag choosing `list,junit` never drops the upload a
+ * config asked for.
+ */
+function resolveReporters(
+  raw: E2EConfig,
+  cli: CliOverrides,
+): { reporters: readonly BuiltinReporter[]; customReporters: readonly Reporter[] } {
+  const configured = raw.reporters ?? ['list'];
+  if (!Array.isArray(configured)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      'reporters must be an array of reporter ids and reporter objects',
+    );
+  }
+  const ids: BuiltinReporter[] = [];
+  const customReporters: Reporter[] = [];
+  for (const reporter of configured as readonly unknown[]) {
+    if (typeof reporter === 'string') {
+      if (!(BUILTIN_REPORTERS as readonly string[]).includes(reporter)) {
+        throw new ConfigurationError(
+          'INVALID_CONFIG',
+          `unknown reporter "${reporter}"; reporters are list, json, and junit${didYouMean(reporter, BUILTIN_REPORTERS)}`,
+        );
+      }
+      ids.push(reporter as BuiltinReporter);
+    } else if (isReporter(reporter)) {
+      customReporters.push(reporter);
+    } else {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        'a reporter is a built-in id (list, json, junit) or an object with a name and an onEvent or onRunFinished method',
+      );
+    }
+  }
+  const reporters = cli.reporters ?? ids;
+  if (reporters.includes('json') && reporters.includes('list')) {
+    throw new ConfigurationError('INVALID_CONFIG', 'the json renderer cannot be combined with list');
+  }
+  return { reporters, customReporters };
+}
+
+/** Structural reporter check: a non-empty name and at least one handler, each a function when present. */
+function isReporter(value: unknown): value is Reporter {
+  if (typeof value !== 'object' || value === null) return false;
+  const { name, onEvent, onRunFinished } = value as { name?: unknown; onEvent?: unknown; onRunFinished?: unknown };
+  if (typeof name !== 'string' || name.length === 0) return false;
+  const optionalFunction = (handler: unknown): boolean => handler === undefined || typeof handler === 'function';
+  return optionalFunction(onEvent) && optionalFunction(onRunFinished) && (onEvent ?? onRunFinished) !== undefined;
 }
 
 function isArtifactStore(value: unknown): value is ArtifactStore {
@@ -654,14 +698,35 @@ function modelIdentity(model: ModelInstance): Record<string, string> {
   };
 }
 
+/** The artifact kinds as the digest sees them: no store, no video. */
+function digestedArtifactKinds(artifacts: NonNullable<E2EConfig['artifacts']>): ConfiguredArtifactKind[] {
+  const kinds = isArtifactsObject(artifacts) ? artifacts.kinds : artifacts;
+  return (kinds ?? [...DEFAULT_ARTIFACT_KINDS]).filter((kind) => kind !== 'video');
+}
+
 function computeConfigDigest(raw: E2EConfig, projectId: string): string {
   // `agent` may be the executor itself; its digest identity is name/version,
   // which is exactly what survives the function-stripping JSON clone below.
   // Every model slot is reduced to its identity: a live instance carries
   // provider settings (and possibly credentials) that must never be digested.
+  // Live values are reduced before the clone, not after: a store or a
+  // reporter may hold a client whose object graph JSON cannot serialize.
+  //
+  // An artifact store is a live value: only the kinds are configuration, so
+  // the array and object forms digest identically and a host store never
+  // enters the digest. Nor does video: recording a run must never invalidate
+  // the traces it would otherwise replay, so the digest reads the same kinds
+  // with or without it and ignores the `video` options block. A reporter
+  // object changes nothing about what a run records, so it never enters the
+  // digest either; the built-in ids digest as they always have, so adding a
+  // reporter to a config leaves its cache valid.
   const rawAgent = raw.agent;
   const forClone: Record<string, unknown> = {
     ...raw,
+    ...(raw.artifacts === undefined ? {} : { artifacts: digestedArtifactKinds(raw.artifacts) }),
+    ...(Array.isArray(raw.reporters)
+      ? { reporters: raw.reporters.filter((reporter) => typeof reporter === 'string') }
+      : {}),
     ...(rawAgent === undefined || isStepExecutor(rawAgent)
       ? {}
       : {
@@ -678,15 +743,6 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
     ...(structuredCloneJsonSafe(forClone) as Record<string, unknown>),
     projectId,
   };
-  // An artifact store is a live value: only the kinds are configuration, so
-  // the array and object forms digest identically and a host store never
-  // enters the digest. Nor does video: recording a run must never invalidate
-  // the traces it would otherwise replay, so the digest reads the same kinds
-  // with or without it and ignores the `video` options block.
-  if (raw.artifacts !== undefined) {
-    const kinds = isArtifactsObject(raw.artifacts) ? raw.artifacts.kinds : raw.artifacts;
-    sanitized['artifacts'] = (kinds ?? [...DEFAULT_ARTIFACT_KINDS]).filter((kind) => kind !== 'video');
-  }
   if (raw.credentials !== undefined) {
     sanitized['credentials'] = Object.fromEntries(
       Object.entries(raw.credentials).map(([name, credential]) => [

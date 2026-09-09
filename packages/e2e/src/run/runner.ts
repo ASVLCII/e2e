@@ -28,9 +28,10 @@ import { DebugTrace } from '../internal/debug.ts';
 import { timestamp, uuidv7 } from '../internal/ids.ts';
 import { buildReport, describeTarget, type Report1Document, type TargetProvenance } from '../report/build.ts';
 import { agentStepTable } from '../report/debug-steps.ts';
-import { renderJunitReport } from '../report/junit.ts';
+import { jsonReporter } from '../report/json.ts';
+import { junitReporter } from '../report/junit.ts';
 import { ListReporter } from '../report/list.ts';
-import { writeJsonReport, writeTextReport } from '../report/write.ts';
+import { writeJsonReport } from '../report/write.ts';
 import { ManagedProcess, ServiceStack } from './managed-process.ts';
 import { createRunEventEmitter, toEventResult, type RunEventSink, type RunExitCode, type RunStatus, type RunEventFact, type SetupStep } from './events.ts';
 import { inProcessSpawner } from './in-process.ts';
@@ -40,7 +41,8 @@ import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setCredentialRegistry } from '../credentials.ts';
-import type { E2EConfig } from '../types.ts';
+import { withAbort } from '../internal/time.ts';
+import type { BuiltinReporter, E2EConfig, FinishedRun, Reporter, ReporterSummary } from '../types.ts';
 import type { ResolvedModel } from '../config/agent.ts';
 import { declaredProcesses } from './declared-processes.ts';
 
@@ -54,7 +56,7 @@ export interface RunOptions {
   headed?: boolean | undefined;
   retries?: number | undefined;
   workers?: number | undefined;
-  reporters?: readonly ('list' | 'json' | 'junit')[] | undefined;
+  reporters?: readonly BuiltinReporter[] | undefined;
   artifactsDir?: string | undefined;
   passWithNoTests?: boolean | undefined;
   /** Runs with the trace cache off (`--no-cache`), overriding the config. */
@@ -91,7 +93,12 @@ export interface RunOptions {
   forceSignal?: AbortSignal | undefined;
   /** A second sink on the run's event spine, beside the list reporter. */
   onEvent?: RunEventSink | undefined;
+  /** Budget for each reporter's `onRunFinished`, in ms. Only the test harness sets it; there is no flag. */
+  reporterTimeout?: number | undefined;
 }
+
+/** How long a reporter's `onRunFinished` may take before the run stops waiting for it. */
+const REPORTER_TIMEOUT_MS = 60_000;
 
 /** The selection flags of `run`, without anything that would start a process. */
 export type ListOptions = Pick<
@@ -150,8 +157,6 @@ export interface RunOutcome {
   status: RunStatus;
   report: Report1Document;
   reportPath: string | undefined;
-  /** Where the JUnit XML was written; undefined unless the `junit` reporter was selected. */
-  junitPath: string | undefined;
   /** Where the AI trace was written; undefined unless `aiTrace` was requested. */
   aiTracePath: string | undefined;
   results: readonly ResultRecord[];
@@ -211,15 +216,24 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     (cause: unknown) => ({ config: undefined, error: classifyError(cause) }),
   );
 
-  // The event stream is the run's single spine: the list reporter is one sink
-  // on it, beside any other, so every consumer sees the same story.
-  const reporters = loaded.config?.reporters ?? options.reporters ?? ['list'];
+  // Every reporter, built-in or configured, is one `Reporter` on one spine:
+  // the ids name the shipped ones, and a config failure still leaves the ids
+  // the CLI asked for, so the failure renders through them.
+  const reporterIds = loaded.config?.reporters ?? options.reporters ?? ['list'];
+  const listReporter =
+    options.quiet === true || !reporterIds.includes('list') ? undefined : new ListReporter();
+  const activeReporters: readonly Reporter[] = [
+    ...(listReporter === undefined ? [] : [listReporter]),
+    ...(reporterIds.includes('json') ? [jsonReporter] : []),
+    ...(reporterIds.includes('junit') ? [junitReporter] : []),
+    ...(loaded.config?.customReporters ?? []),
+  ];
   const emit = createRunEventEmitter([
-    options.quiet === true || !reporters.includes('list') ? undefined : new ListReporter().handle,
+    ...activeReporters.map((reporter) =>
+      reporter.onEvent === undefined ? undefined : reporter.onEvent.bind(reporter),
+    ),
     options.onEvent,
   ]);
-  const jsonReport = reporters.includes('json');
-  const junitReport = reporters.includes('junit');
 
   /** Records one run-level error once: into the report and onto the stream. */
   const recordRunError = (runError: RunError): void => {
@@ -301,30 +315,6 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     }
   };
 
-  /**
-   * Writes the JUnit rendering of one document next to the canonical report.
-   * Same terms: the path is returned only once the file exists, and a lost
-   * file is a recorded run error.
-   */
-  const writeJunitReport = async (config: ResolvedConfig, document: Report1Document): Promise<string | undefined> => {
-    if (!junitReport) return undefined;
-    const target = path.join(path.dirname(resolveArtifactsRoot(config, options.artifactsDir)), 'junit.xml');
-    try {
-      await writeTextReport(target, renderJunitReport(document));
-      return target;
-    } catch (cause) {
-      recordFailure(
-        new E2EError(
-          'infrastructure',
-          'REPORT_WRITE_FAILED',
-          `the JUnit report could not be written: ${errorMessage(cause)}`,
-          { cause },
-        ),
-        'report',
-      );
-      return undefined;
-    }
-  };
 
   /**
    * Writes the AI trace next to the report, on the same terms: the path is
@@ -359,25 +349,15 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
 
   const finish = async (): Promise<RunOutcome> => {
     const aiTracePath = loaded.config === undefined ? undefined : await writeAiTrace(loaded.config);
-    let reportPath: string | undefined;
-    let junitPath: string | undefined;
-    if (loaded.config !== undefined) {
-      // The JUnit rendering goes first, from the document as it stands, and
-      // the canonical report is written once, last: a lost junit.xml is then
-      // recorded before report.json exists, so the failure lands in the file,
-      // the exit code, the outcome, and run-finished alike. When the rendering
-      // succeeds nothing was recorded in between, and the canonical report is
-      // that very document.
-      const document = buildRunReport(currentExitCode());
-      const recorded = runErrors.length;
-      junitPath = await writeJunitReport(loaded.config, document);
-      reportPath = await writeCanonicalReport(
-        loaded.config,
-        runErrors.length === recorded ? document : buildRunReport(currentExitCode()),
-      );
-    }
+    // One document: what is written is what the reporters and the outcome
+    // see, so a reporter uploading `report` ships the file byte for byte.
+    // Only a failed write, itself a run error, forces a rebuild that records it.
+    const document = buildRunReport(currentExitCode());
+    const recorded = runErrors.length;
+    const reportPath =
+      loaded.config === undefined ? undefined : await writeCanonicalReport(loaded.config, document);
     const exitCode = currentExitCode();
-    const report = buildRunReport(exitCode);
+    const report = runErrors.length === recorded ? document : buildRunReport(exitCode);
     // Read back from the report rather than recomputed: the report derives
     // `blocked` from the results, and the outcome and the event must agree
     // with the file a host reads afterwards.
@@ -388,17 +368,35 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       status,
       exitCode,
       ...(reportPath === undefined ? {} : { reportPath }),
-      ...(junitPath === undefined ? {} : { junitPath }),
       ...(aiTracePath === undefined ? {} : { aiTracePath }),
     });
-    if (jsonReport) {
-      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    }
     if (debug.enabled) {
       process.stderr.write(debug.summary());
       process.stderr.write(agentStepTable(results, serialGroups));
     }
-    return { exitCode, status, report, reportPath, junitPath, aiTracePath, results };
+    // `onRunFinished` runs last, after everything the terminal shows, so
+    // nothing reading it waits on a slow reporter; the rows they resolve with
+    // print under the summary. A config that never loaded still has the
+    // built-in reporters, resolved against the working directory.
+    const rows = await runReporters(
+      activeReporters,
+      {
+        report,
+        status,
+        exitCode,
+        projectRoot: loaded.config?.projectRoot ?? cwd,
+        reportPath,
+        artifactsRoot:
+          loaded.config === undefined
+            ? path.resolve(cwd, options.artifactsDir ?? path.join('.e2e', 'artifacts'))
+            : resolveArtifactsRoot(loaded.config, options.artifactsDir),
+        aiTracePath,
+      },
+      options.reporterTimeout ?? REPORTER_TIMEOUT_MS,
+      forceController.signal,
+    );
+    listReporter?.rows(rows);
+    return { exitCode, status, report, reportPath, aiTracePath, results };
   };
 
   if (loaded.config === undefined) {
@@ -812,6 +810,73 @@ function resultExitCodes(results: readonly ResultRecord[]): number[] {
     }
   }
   return codes;
+}
+
+/** Why a reporter's `onRunFinished` was given up on: the message is the stderr line. */
+class ReporterAbandoned extends Error {}
+
+/**
+ * Awaits every reporter's `onRunFinished` at once, each within `timeoutMs`
+ * and until a forced interrupt, and collects the summary rows they resolve
+ * with. Each reporter gets a signal that aborts on either, so a well-behaved
+ * one cancels its own work and leaves no handle holding the process. A
+ * reporter that throws, runs out of time, or returns something other than
+ * rows is one line on stderr; it can never change the run's outcome.
+ */
+async function runReporters(
+  reporters: readonly Reporter[],
+  finished: FinishedRun,
+  timeoutMs: number,
+  force: AbortSignal,
+): Promise<ReporterSummary> {
+  const warn = (reporter: Reporter, detail: string): void => {
+    process.stderr.write(`e2e: reporter "${reporter.name}" ${detail}\n`);
+  };
+  const budget = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+  const outcomes = await Promise.all(
+    reporters.map(async (reporter): Promise<ReporterSummary> => {
+      const { onRunFinished } = reporter;
+      if (onRunFinished === undefined) return [];
+      const abandon = new AbortController();
+      const timer = setTimeout(
+        () => abandon.abort(new ReporterAbandoned(`did not finish within ${budget}`)),
+        timeoutMs,
+      );
+      const onForce = (): void => abandon.abort(new ReporterAbandoned('abandoned: the run was forced to stop'));
+      if (force.aborted) onForce();
+      else force.addEventListener('abort', onForce, { once: true });
+      try {
+        const result = await withAbort(
+          () => Promise.resolve(onRunFinished.call(reporter, finished, abandon.signal)),
+          abandon.signal,
+          () => abandon.signal.reason as ReporterAbandoned,
+        );
+        if (result === undefined) return [];
+        if (!Array.isArray(result)) {
+          warn(reporter, 'returned something other than summary rows; dropped');
+          return [];
+        }
+        const rows = result.filter(isSummaryRow);
+        const dropped = result.length - rows.length;
+        if (dropped > 0) warn(reporter, `returned ${dropped} row(s) without a label and text; dropped`);
+        return rows;
+      } catch (cause) {
+        warn(reporter, cause instanceof ReporterAbandoned ? cause.message : `failed: ${errorMessage(cause)}`);
+        return [];
+      } finally {
+        clearTimeout(timer);
+        force.removeEventListener('abort', onForce);
+      }
+    }),
+  );
+  return outcomes.flat();
+}
+
+/** A row is a non-empty label and non-empty text; anything else came from untyped code. */
+function isSummaryRow(value: unknown): value is ReporterSummary[number] {
+  if (typeof value !== 'object' || value === null) return false;
+  const { label, text } = value as { label?: unknown; text?: unknown };
+  return typeof label === 'string' && label.length > 0 && typeof text === 'string' && text.length > 0;
 }
 
 function resolveArtifactsRoot(config: ResolvedConfig, override: string | undefined): string {

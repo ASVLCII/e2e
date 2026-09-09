@@ -13,6 +13,8 @@ import type { StepExecutor } from './agent/executor.ts';
 import type { StepCacheInfo } from './run/steps.ts';
 import type { EngineHandle } from './engine/index.ts';
 import type { TraceCacheStore } from './cache/store.ts';
+import type { RunEvent, RunExitCode, RunStatus } from './run/events.ts';
+import type { Report1Document } from './report/build.ts';
 
 export type { CacheReadResult, TraceCacheStore } from './cache/store.ts';
 export type { StepCacheInfo } from './run/steps.ts';
@@ -772,6 +774,56 @@ export interface AgentConfig {
   providerOptions?: ProviderOptions;
 }
 
+/** The reporters the runner ships, named by id; each is a `Reporter` on the same contract. */
+export type BuiltinReporter = 'list' | 'json' | 'junit';
+
+/**
+ * The run's report document, the one `.e2e/report.json` holds. Its
+ * `schemaVersion` names the wire format (`report-1`), pinned by
+ * `schema/report-v1.schema.json` in the package.
+ */
+export type Report = Report1Document;
+
+/** What a reporter receives once the run is over and its report is on disk. */
+export interface FinishedRun {
+  readonly report: Report;
+  /** The same status `report.run.status` carries. */
+  readonly status: RunStatus;
+  readonly exitCode: RunExitCode;
+  /** Absolute project root, what the terminal shows paths relative to. */
+  readonly projectRoot: string;
+  /** Where `report.json` was written; undefined when the write failed or config never loaded. */
+  readonly reportPath: string | undefined;
+  /** Absolute directory the report's artifact paths are relative to. */
+  readonly artifactsRoot: string;
+  /** Where `--ai-trace` wrote the run's model calls, when it was requested. */
+  readonly aiTracePath: string | undefined;
+}
+
+/** Rows a reporter hands back for the terminal summary: a label and its text, a URL or a path. */
+export type ReporterSummary = readonly { readonly label: string; readonly text: string }[];
+
+/**
+ * A reporter in `reporters`, the contract the built-in `list`, `json`, and
+ * `junit` reporters implement too. `onEvent` sees every run event as it
+ * happens, exactly what the `list` reporter renders, and must not block: a
+ * throw quarantines it for the rest of the run. `onRunFinished` runs once
+ * `report.json` is written and the summary has printed; it is awaited within
+ * a fixed budget, and the rows it resolves with print under the summary. Its
+ * `signal` aborts when that budget runs out or the run is forced to stop, so
+ * a reporter hands it to its requests and leaves nothing running behind. A
+ * reporter can never change the run's status or exit code: a failure or a
+ * timeout is one line on stderr. Like every live value, a reporter never
+ * crosses a process boundary; workers construct their own copy when they
+ * load the config module and never call it, so constructing one must have no
+ * side effects.
+ */
+export interface Reporter {
+  readonly name: string;
+  onEvent?(event: RunEvent): void;
+  onRunFinished?(run: FinishedRun, signal: AbortSignal): Promise<ReporterSummary | void>;
+}
+
 export interface E2EConfig {
   specVersion?: '0.1';
   projectId?: string;
@@ -786,8 +838,12 @@ export interface E2EConfig {
   workers?: number;
   /** Artifact kinds, or `{ kinds, store, video }` to also hand every artifact to a host store. */
   artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
-  /** Output renderers; `junit` writes `.e2e/junit.xml`, `json` prints the report and excludes `list`. */
-  reporters?: readonly ('list' | 'json' | 'junit')[];
+  /**
+   * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
+   * `json` prints the report and excludes `list`; a `Reporter` object runs
+   * beside them and `--reporter` never removes it.
+   */
+  reporters?: readonly (BuiltinReporter | Reporter)[];
   screen?: {
     testIdAttribute?: string;
   };
