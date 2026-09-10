@@ -1,5 +1,102 @@
 # @e2edev/e2e
 
+## 0.11.0
+
+### Minor Changes
+
+- [#243](https://github.com/tester-army/e2e/pull/243) [`b8a7824`](https://github.com/tester-army/e2e/commit/b8a7824e9bbe51465d90d88ea063a3742246305c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e explore [goal]` runs the agent against the app with a goal instead of a
+  test file. It plans one exploration step at a time from the goal, the steps
+  and findings so far, and the current screen; runs each charter as an
+  `agent.act()` step of the built-in agent, with the project's tools plus a
+  `report_finding` tool that records a defect with its severity and reproduction
+  steps, the current path when the engine reports one, and a redacted evidence
+  screenshot when the engine grants pixels; and ends with a closing assessment when the goal
+  is covered, at the step limit (`--max-steps`, 1 to 12, default 8), at the wall
+  clock (`--timeout` in milliseconds, 180000 to 900000, default 600000), or
+  after three failed or blocked steps in a row that reported nothing. A failed
+  step is recorded and the run goes on; a step that hits its budget ended at its
+  limit and is not a failure; findings of kind `issue` fail the run (exit 1),
+  warnings do not; a run that explored nothing and found nothing is blocked,
+  never a pass. The run is an ordinary run of one in-memory test under the
+  virtual file `explore`, so reporters, `.e2e/report.json`, artifacts,
+  `--video`, `--ai-trace`, `--debug`, and Ctrl-C behave as for `e2e run`; the
+  report gains `run.explore` with the goal, budgets, steps, findings, and
+  assessment, and the `list` reporter prints the findings under the summary. The
+  exploration runs as `agents.default`, or as the agent `--agent` names, with the
+  explorer built from that agent, so the model is that agent's or `E2E_MODEL`. Configured `credentials` travel with
+  every charter as step secrets, so the explorer signs in with `type_secret` by
+  account name and the password never reaches the model. An agent built with
+  `createAgent({ tools, system })` lends its vocabulary to the explorer:
+  `createAgent` now returns a `DefaultAgent` whose `options` are readable. A
+  finding's evidence screenshot is an ordinary `screenshot` artifact of the
+  attempt, attached to the step that reported it and referenced by `artifactId`;
+  project tools can keep evidence the same way through the new
+  `attachScreenshot(pixels, label)` on the tool context and on
+  `StepExecutorContext`. `e2e guide explore` prints the new skill topic.
+
+- [#255](https://github.com/tester-army/e2e/pull/255) [`2d0c693`](https://github.com/tester-army/e2e/commit/2d0c6931c4336de1a9479d7bf4c0afa0baa18277) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The model is always an AI SDK instance the config constructs, and the runner
+  has no gateway of its own. `provider/model-id` strings and the `ModelConfig`
+  object are gone, along with `E2E_MODEL`, `E2E_VISION_MODEL`,
+  `E2E_MODEL_API_KEY`, `E2E_MODEL_ENDPOINT`, and the `AI_GATEWAY_API_KEY`
+  fallback: every one of them quietly routed through the Vercel AI Gateway,
+  which the runner is not supposed to know about. Write the constructor
+  instead: `gateway('openai/gpt-5.4-mini')` from `ai` for the Vercel AI Gateway
+  (reads `AI_GATEWAY_API_KEY`), `openrouter('openai/gpt-5.4-mini')` from
+  `@openrouter/ai-sdk-provider` (reads `OPENROUTER_API_KEY`),
+  `createOpenAICompatible({ name, baseURL }).chatModel('llama3.2')` from
+  `@ai-sdk/openai-compatible` for any OpenAI-compatible endpoint, or a provider's
+  own package. A string in `agent.model`, `agent.visionModel`, or
+  `createAgent({ model })` is `INVALID_CONFIG` naming the constructor to write.
+  
+  `e2e init` asks which gateway agent steps use (Vercel AI Gateway, OpenRouter,
+  an OpenAI-compatible endpoint with its URL, or none) instead of a yes/no on AI,
+  adds that provider package, and writes the import and the constructor into
+  `e2e.config.ts`; `--yes` picks the Vercel AI Gateway and still writes it out.
+  Credentials are the provider's business: a missing key is the provider's own
+  error on the first agent step, and a rejected one is reported as such. Reports
+  record the instance's provider and model id, OpenRouter's per-request cost is
+  read from its usage accounting, and telemetry gains `model_gateway`, the AI
+  SDK provider that served the first model-backed step. A new docs page, Models
+  and credentials, covers which package constructs which model and where each
+  reads its key.
+
+- [#253](https://github.com/tester-army/e2e/pull/253) [`31db985`](https://github.com/tester-army/e2e/commit/31db98562ad004205e9862e944f6218bc504964f) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The agent loop addresses the provider's prompt cache, keeps its history
+  cacheable, and recovers once from a request the model cannot fit.
+  
+  - Every model call carries what the provider needs to serve the repeated
+    prefix from its cache: on Anthropic models a cache breakpoint on the system
+    prompt (covering the tool definitions) and one on the newest message, moved
+    forward each turn; on OpenAI models a prompt-cache key derived from the
+    system prompt, so every call of a run routes to the same cache. A caller's
+    own `providerOptions` win on conflict. Other providers see no change.
+  - Superseded full screens are no longer elided one turn at a time. They stay
+    verbatim until they together outgrow 32 KB, then go in one batch, so the
+    request prefix stays byte-identical across the turns of a step and the
+    cache can serve it. A two-turn step whose screens fit the budget never
+    elides.
+  - The report records the cache split: `model.cacheReadTokens` and
+    `model.cacheWriteTokens` per step, `usage.modelCachedTokens` per run, the
+    `list` reporter's usage line shows the cached share (`12.4k tokens · 38%
+    cached`), `--debug` adds a `cached` column to the agent step table, and
+    the run telemetry event gains `model_cached_tokens`.
+  - A request the provider refuses as larger than the model's context window
+    is recognized (the error catalog covers twenty providers and the HTTP 413
+    some answer with) and retried once with the step's history shrunk:
+    superseded screens elided, any text longer than 16 KB cut to its head with
+    a notice. The retry continues the same turn budget and is skipped when
+    shrinking would change nothing. A second refusal, a refusal nothing could
+    shrink, or one on a judgment call, is the new `CONTEXT_OVERFLOW` code
+    (blocked: automation) instead of `MODEL_PROVIDER_FAILED`.
+  - A text result from a project tool is bounded to 400 lines or 16 KB,
+    whichever comes first, notice included. The cut lands on a line boundary,
+    except for a single line that alone exceeds the budget, which keeps its
+    head; the notice names how much was left out. Structured results pass
+    through unchanged.
+
+### Patch Changes
+
+- [#254](https://github.com/tester-army/e2e/pull/254) [`95cc950`](https://github.com/tester-army/e2e/commit/95cc950dd2389d415cd0c5667c42eca04053e18d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A test's `source` in the report names the `test()` call in the test file again. Under tsx, source maps relocate the runner's own stack frames from `dist/` to `src/`, which the frame filter did not recognize, so every test was attributed to the runner's `registry.ts`: relative to the project when `node_modules` lives inside it, otherwise the file's first line. The GitHub reporter's source links and the JUnit locations follow.
+
 ## 0.10.0
 
 ### Minor Changes
