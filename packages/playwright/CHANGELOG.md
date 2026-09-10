@@ -1,5 +1,22 @@
 # @e2edev/playwright
 
+## 0.8.0
+
+### Minor Changes
+
+- [#247](https://github.com/tester-army/e2e/pull/247) [`f11f881`](https://github.com/tester-army/e2e/commit/f11f8813e5cb6c77eaab339f2ac2074e8491478a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `playwright()` takes `headers` and `basicAuth`, so an app behind a gate - a
+  Vercel preview under deployment protection, an ngrok tunnel with its
+  interstitial, a staging host behind HTTP basic authentication - is reachable
+  on every path onto the page, `agent.act` included, where before
+  only a `web.route` handler in a deterministic test could add a header.
+  `headers` ride every request bound for an allowed origin and no other, so a
+  bypass secret never leaves the app it unlocks; `basicAuth` answers a `401`
+  challenge from an allowed origin only. Both are validated at config load.
+
+### Patch Changes
+
+- [#245](https://github.com/tester-army/e2e/pull/245) [`38d4424`](https://github.com/tester-army/e2e/commit/38d4424eb1fd2e16ab5fd2fb1fc6b64862ced3a7) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `stopTrace` returns every trace archive the attempt wrote, in order, when a restart or a state reset cut the trace (`trace/trace-part<n>.zip` before `trace/trace.zip`), so the runner registers and redacts each segment instead of only the final one.
+
 ## 0.7.1
 
 ### Patch Changes

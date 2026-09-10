@@ -1,5 +1,41 @@
 # @e2edev/e2e
 
+## 0.10.0
+
+### Minor Changes
+
+- [#249](https://github.com/tester-army/e2e/pull/249) [`658b9c2`](https://github.com/tester-army/e2e/commit/658b9c22cc46abdeca54a373fd164616c2b70ff2) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A test or a describe block pins the configured agent it runs with through the
+  `agent` option (`{ agent: 'buyer' }`), and `act`, `assert`, `waitFor`, and
+  `extract` take `{ agent: 'name' }` to run one call with another. Innermost
+  wins: a call's agent beats the test's, which beats its groups, which beat the
+  run; `e2e run --agent <name>` re-points what unpinned tests use and never
+  overrides a pin. A pin naming nothing in `agents` is a `COLLECTION_ERROR`
+  before any process starts, with the configured names; an unknown name on a
+  call is `INVALID_ARGUMENT` before the step opens. Every agent step records the
+  agent it ran with as `step.agent` in report-1. Each worker checks an agent's
+  model once, on its first use, and shares the adapter with every agent that
+  names the same model.
+
+- [#244](https://github.com/tester-army/e2e/pull/244) [`c72b05e`](https://github.com/tester-army/e2e/commit/c72b05e57fae0e4925d9ff6d4ad896f2df64cb35) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Agents are named. `agents` is a record of the shapes `agent` used to take: an
+  options block, or the agent itself from `createAgent(...)` or any
+  `StepExecutor`. `default` is the agent tests run with and exists even when the
+  config names none (the built-in agent with `E2E_MODEL`); other names are other
+  brains for the same suite, and `e2e run --agent <name>` runs with one of them.
+  An unknown name is `INVALID_CONFIG` before anything starts, naming the
+  configured agents; every agent diagnostic names its entry (`agents.ux.model`);
+  the run-started event and the `list` reporter's run banner carry the agent's
+  name when it is not `default`. Breaking: the `agent` key is removed. Write
+  `agents: { default: <what agent held> }`; the old key is rejected with that
+  replacement in the message. `e2e init` scaffolds the new shape.
+
+### Patch Changes
+
+- [#250](https://github.com/tester-army/e2e/pull/250) [`d4a1953`](https://github.com/tester-army/e2e/commit/d4a1953a85df1e88d83de9f3cc1c3f18705296f4) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e run` loads `.ts` config, tests, and helpers as ES modules whatever the nearest `package.json` says. A Next.js app, or any other package without `"type": "module"`, no longer has to change its module type (which also changes how its `.js` files run), and `init` stops asking for it. `.cts` files and dependencies keep their own format.
+
+  `init` writes the engine version released alongside the CLI (`^0.7.0` for `@e2edev/playwright`) instead of `0.x`. Package managers resolve a range to the registry's `latest` tag whenever it satisfies, and `latest` trails the tag the runner installs from, so `0.x` fetched an old engine whose peer range rejected the runner.
+
+- [#245](https://github.com/tester-army/e2e/pull/245) [`38d4424`](https://github.com/tester-army/e2e/commit/38d4424eb1fd2e16ab5fd2fb1fc6b64862ced3a7) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A filled credential no longer leaves the runner inside a Playwright trace. The trace recorded the value as typed: in the `fill` action's parameters, in every DOM snapshot of the field, and in the request body that carried it, while the report marked the artifact `redaction: "complete"`. Once a secret was filled in an attempt, the runner now rewrites every text entry of that attempt's trace archives before any is registered, hashed, or handed to an artifact store: JSON records value by value, other text as text, replacing each credential value (as typed, JSON-quoted, HTML-escaped, and URL-encoded) with `<secret:name>`; a binary entry holding a credential's bytes is dropped, and the rest is carried as stored. A trace from an attempt that filled no secret is labelled `not-required`; one the runner could not rewrite is deleted (a path the engine returned outside the attempt's artifact directory is refused and left untouched), the attempt's `secondaryErrors` carry a `TRACE_WITHHELD` entry, and a required trace marks cleanup failed. The engine contract's `stopTrace` may now return every trace segment instead of one path, and each is registered. The secret redactor that guards observations, logs, and the cache now covers those encodings as well.
+
 ## 0.9.0
 
 ### Minor Changes

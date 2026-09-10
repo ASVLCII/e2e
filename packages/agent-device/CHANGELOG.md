@@ -1,5 +1,11 @@
 # @e2edev/agent-device
 
+## 0.5.1
+
+### Patch Changes
+
+- [#245](https://github.com/tester-army/e2e/pull/245) [`38d4424`](https://github.com/tester-army/e2e/commit/38d4424eb1fd2e16ab5fd2fb1fc6b64862ced3a7) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Engine contract: `artifacts.stopTrace` may return every trace segment instead of one path. The device engine declares no trace; republished for the widened contract.
+
 ## 0.5.0
 
 ### Minor Changes
