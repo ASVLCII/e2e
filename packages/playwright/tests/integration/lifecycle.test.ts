@@ -677,6 +677,64 @@ describe('playwright engine lifecycle', () => {
     });
   });
 
+  it('observes and acts inside a closed shadow root, which Playwright locators cannot reach', async () => {
+    const engine = playwright();
+    await withAttempt(engine, app, artifactsDir, 'cs1', async () => {
+      await engine.app!.navigate!(`${app.url}/closed-shadow`, operation('cs1'));
+      // The control exists only for the reader: a role query goes through
+      // Playwright, which stops at a closed root.
+      expect(await engine.locate!(byRole('button'), operation('cs1'))).toHaveLength(0);
+
+      const snapshot = await engine.observe!(operation('cs1'));
+      const checkout = [...walk(snapshot.nodes[0]!)].find((node) => node.role === 'button');
+      expect(checkout?.name).toBe('Checkout');
+
+      await engine.perform!(checkout!.ref, { kind: 'tap' }, operation('cs1'));
+      const headings = await engine.locate!(byRole('heading'), operation('cs1'));
+      expect(headings.map((node) => node.name)).toEqual(['Checked out']);
+    });
+  });
+
+  it('walks through a display:contents element to the fields it lays out', async () => {
+    const engine = playwright();
+    await withAttempt(engine, app, artifactsDir, 'dc1', async () => {
+      await engine.app!.navigate!(`${app.url}/contents`, operation('dc1'));
+      const snapshot = await engine.observe!(operation('dc1'));
+      const fields = [...walk(snapshot.nodes[0]!)].filter((node) => node.role === 'textbox').map((node) => node.name);
+      expect(fields).toEqual(['Email', 'First name']);
+    });
+  });
+
+  it('masks a password inside a closed shadow root in artifact screenshots', async () => {
+    const engine = playwright();
+    const shotDir = mkdtempSync(path.join(tmpdir(), 'e2e-shot-'));
+    try {
+      await boot(engine, app);
+      await engine.startAttempt!(attempt('cm1', shotDir));
+      await engine.app!.navigate!(`${app.url}/closed-login`, operation('cm1'));
+      const snapshot = await engine.observe!(operation('cm1'));
+      const nodes = [...walk(snapshot.nodes[0]!)];
+      const user = nodes.find((node) => node.role === 'textbox' && node.name === 'User');
+      const password = nodes.find((node) => node.states?.secure === true);
+      expect(user?.rect).toBeDefined();
+      expect(password?.rect).toBeDefined();
+      await engine.perform!(password!.ref, { kind: 'fill', value: 'hunter2', sensitive: true }, operation('cm1'));
+
+      const relative = await engine.artifacts!.screenshot('closed', operation('cm1'));
+      const image = decodePng(new Uint8Array(readFileSync(path.join(shotDir, relative))));
+      const centre = (rect: NonNullable<SemanticNode['rect']>) =>
+        [Math.round(rect.x + rect.width / 2), Math.round(rect.y + rect.height / 2)] as const;
+      const [px, py] = centre(password!.rect!);
+      const [ux, uy] = centre(user!.rect!);
+      expect(image.pixelAt(px, py).slice(0, 3)).toEqual([0, 0, 0]);
+      expect(image.pixelAt(ux, uy).slice(0, 3)).toEqual([255, 255, 255]);
+    } finally {
+      await engine.endAttempt!(cleanup());
+      await engine.dispose!(cleanup());
+      rmSync(shotDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps tracing across clearState: the earlier segment is kept and the trace still stops', async () => {
     const engine = playwright();
     const traceDir = mkdtempSync(path.join(tmpdir(), 'e2e-trace-'));

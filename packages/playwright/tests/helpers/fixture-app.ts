@@ -53,6 +53,59 @@ const LOGIN = `<!doctype html>
 </body>
 </html>`;
 
+/**
+ * A checkout control rendered the way third-party storefront widgets render
+ * theirs: inside a closed shadow root, invisible to `shadowRoot` and to
+ * Playwright's own locators. Clicking it writes into the light DOM.
+ */
+const CLOSED_SHADOW = `<!doctype html>
+<html>
+<head><title>Fixture Closed Shadow</title></head>
+<body>
+<h1 id="status">Cart</h1>
+<x-checkout></x-checkout>
+<script>
+  const host = document.querySelector('x-checkout');
+  const root = host.attachShadow({ mode: 'closed' });
+  const button = document.createElement('button');
+  button.textContent = 'Checkout';
+  button.addEventListener('click', () => { document.getElementById('status').textContent = 'Checked out'; });
+  root.appendChild(button);
+</script>
+</body>
+</html>`;
+
+/**
+ * A form that generates no box of its own, the way Shopify's one-page checkout
+ * form is styled: `getClientRects()` is empty for it while every field paints.
+ */
+const CONTENTS = `<!doctype html>
+<html>
+<head><title>Fixture Contents</title></head>
+<body>
+<h1>Checkout</h1>
+<form id="checkout" style="display:contents">
+  <label>Email <input name="email"></label>
+  <label>First name <input name="first"></label>
+</form>
+</body>
+</html>`;
+
+/** `/login` with the password field inside a closed shadow root, as embedded auth widgets render it. */
+const CLOSED_LOGIN = `<!doctype html>
+<html>
+<head><title>Fixture Closed Login</title></head>
+<body style="margin:0;background:#fff">
+<h1>Login</h1>
+<label>User <input name="user" value="ada" style="width:200px;height:40px;background:#fff;border:1px solid #fff"></label>
+<x-auth></x-auth>
+<script>
+  const root = document.querySelector('x-auth').attachShadow({ mode: 'closed' });
+  root.innerHTML = '<label>Password <input type="password" name="password" style="width:200px;height:40px;background:#fff;border:1px solid #fff"></label>';
+</script>
+</body>
+</html>`;
+
 /** Shows the stored token; `?set=<value>` stores one first. */
 const STATE = `<!doctype html>
 <html>
@@ -148,6 +201,9 @@ const PROTECTED_AUTHORIZATION = `Basic ${Buffer.from(
 
 const PAGES: Readonly<Record<string, string>> = {
   '/': HOME,
+  '/closed-shadow': CLOSED_SHADOW,
+  '/contents': CONTENTS,
+  '/closed-login': CLOSED_LOGIN,
   '/form': FORM,
   '/values': VALUES,
   '/login': LOGIN,
