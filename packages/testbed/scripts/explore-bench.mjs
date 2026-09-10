@@ -1,9 +1,9 @@
 /**
  * Scores `e2e explore` against the bug garden's planted defects, across
- * models, all runs in parallel on their own app instance.
+ * models, each run on its own app instance, a few at a time.
  *
  *   AI_GATEWAY_API_KEY=... node scripts/explore-bench.mjs \
- *     --models openai/gpt-5.6-luna-fast,google/gemini-3.6-flash --steps 8 --timeout 600000
+ *     --models openai/gpt-5.6-luna-fast,google/gemini-3.6-flash --steps 8 --timeout 600000 --repeats 3 --concurrency 6
  *
  * Each run writes under .e2e/explore-bench/<label>/ (report.json, artifacts,
  * cli.log); the matrix and the per-bug hits land in summary.json and on
@@ -38,6 +38,10 @@ const BUGS = [
 
 const args = parseArgs(process.argv.slice(2));
 const models = (args.models ?? 'openai/gpt-5.6-luna-fast').split(',').map((value) => value.trim()).filter(Boolean);
+const repeats = Number(args.repeats ?? '1');
+const concurrency = Number(args.concurrency ?? '6');
+if (!Number.isInteger(repeats) || repeats < 1) throw new Error(`--repeats must be a positive integer, got "${args.repeats}"`);
+if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error(`--concurrency must be a positive integer, got "${args.concurrency}"`);
 const steps = args.steps ?? '8';
 const timeout = args.timeout ?? '600000';
 const goal =
@@ -45,21 +49,48 @@ const goal =
   'Explore this bookshop like a careful first-time buyer: browse the catalog, add books to the cart, change quantities, remove one, check out, then visit the account, orders, and sign-in pages. Report every defect you have evidence of.';
 
 const firstPort = Number(args.port ?? 4300);
-// The index keeps two ids that slug alike apart.
-const runs = models.map((model, index) => ({
-  model,
-  port: firstPort + index,
-  label: `${String(index + 1).padStart(2, '0')}-${model.replace(/[^A-Za-z0-9.-]+/g, '_')}`,
-}));
+const runs = [];
+for (const model of models) {
+  for (let repeat = 1; repeat <= repeats; repeat += 1) {
+    const index = runs.length;
+    // The index keeps two ids that slug alike apart.
+    runs.push({
+      model,
+      repeat,
+      port: firstPort + index,
+      label: `${String(index + 1).padStart(2, '0')}-${model.replace(/[^A-Za-z0-9.-]+/g, '_')}-r${repeat}`,
+    });
+  }
+}
 
 mkdirSync(OUT, { recursive: true });
 // Every run settles on its own: one garden that fails to start is one row, not a lost matrix.
-const results = (await Promise.allSettled(runs.map((run) => execute(run)))).map((settled, index) =>
-  settled.status === 'fulfilled' ? settled.value : { ...runs[index], exitCode: -1, durationMs: 0, error: String(settled.reason?.message ?? settled.reason) },
-);
-const summary = { goal, steps: Number(steps), timeoutMs: Number(timeout), runs: results };
+const results = await pool(runs, concurrency, async (run) => {
+  try {
+    return await execute(run);
+  } catch (cause) {
+    return { ...run, exitCode: -1, durationMs: 0, error: String(cause?.message ?? cause) };
+  }
+});
+const summary = { goal, steps: Number(steps), timeoutMs: Number(timeout), repeats, runs: results, aggregate: aggregate(results) };
 writeFileSync(path.join(OUT, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`);
 print(results);
+printAggregate(summary.aggregate);
+
+/** Runs `work` over `items` with at most `limit` in flight, preserving order. */
+async function pool(items, limit, work) {
+  const out = Array.from({ length: items.length });
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next++;
+        out[index] = await work(items[index]);
+      }
+    }),
+  );
+  return out;
+}
 
 async function execute(run) {
   const dir = path.join(OUT, run.label);
@@ -106,6 +137,10 @@ function score(run, dir, exitCode, durationMs) {
     if (bug === undefined) other.push(`[${finding.kind} S${finding.severity}] ${finding.title}`);
     else (hits[bug.id] ??= []).push(finding.title);
   }
+  // A planted defect reported more than once is a duplicate.
+  const duplicates = Object.values(hits).reduce((sum, titles) => sum + titles.length - 1, 0);
+  const startedAt = Date.parse(report.run.startedAt);
+  const firstFinding = explore.findings.map((finding) => Date.parse(finding.reportedAt)).filter(Number.isFinite).toSorted((a, b) => a - b)[0];
   return {
     ...run,
     exitCode,
@@ -116,17 +151,95 @@ function score(run, dir, exitCode, durationMs) {
     findings: explore.findings.length,
     found: Object.keys(hits),
     other,
+    duplicates,
+    firstFindingMs: firstFinding === undefined ? undefined : firstFinding - startedAt,
     modelTokens: report.run.usage.modelTokens,
+    modelCalls: countModelCalls(report),
     costUsd: report.run.usage.estimatedCostUsd,
     summary: explore.summary,
   };
+}
+
+function countModelCalls(report) {
+  let calls = 0;
+  for (const result of report.run.results) {
+    for (const attempt of result.attempts) {
+      for (const step of attempt.steps) calls += step.metrics?.modelCalls ?? 0;
+    }
+  }
+  return calls;
+}
+
+/** Means per model over the repeats. */
+function aggregate(scored) {
+  const groups = new Map();
+  for (const result of scored) {
+    if (result.error !== undefined) continue;
+    const key = result.model;
+    const group = groups.get(key) ?? { model: result.model, runs: 0, recall: 0, other: 0, duplicates: 0, steps: 0, calls: 0, tokens: 0, cost: 0, costKnown: 0, seconds: 0, firstFinding: [], stuck: 0 };
+    group.runs += 1;
+    group.recall += result.found.length / BUGS.length;
+    group.other += result.other.length;
+    group.duplicates += result.duplicates;
+    group.steps += result.steps.length;
+    group.calls += result.modelCalls;
+    group.tokens += result.modelTokens;
+    if (result.costUsd !== undefined) {
+      group.cost += result.costUsd;
+      group.costKnown += 1;
+    }
+    group.seconds += result.durationMs / 1000;
+    if (result.firstFindingMs !== undefined) group.firstFinding.push(result.firstFindingMs / 1000);
+    if (result.ended === 'aborted' || result.ended === 'stuck') group.stuck += 1;
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => ({
+    model: group.model,
+    runs: group.runs,
+    recall: group.recall / group.runs,
+    other: group.other / group.runs,
+    duplicates: group.duplicates / group.runs,
+    steps: group.steps / group.runs,
+    calls: group.calls / group.runs,
+    tokens: group.tokens / group.runs,
+    // A mean over the runs that priced themselves; undefined when none did,
+    // and marked partial when some did not, so a missing estimate never reads as free.
+    costUsd: group.costKnown === 0 ? undefined : group.cost / group.costKnown,
+    costPartial: group.costKnown > 0 && group.costKnown < group.runs,
+    seconds: group.seconds / group.runs,
+    firstFindingSeconds: group.firstFinding.length === 0 ? undefined : group.firstFinding.reduce((a, b) => a + b, 0) / group.firstFinding.length,
+    abortedOrStuck: group.stuck,
+  }));
+}
+
+function printAggregate(rows) {
+  if (rows.length === 0) return;
+  const line = (cells) => process.stdout.write(`${cells.join('  ')}\n`);
+  process.stdout.write('\n== means over repeats\n');
+  line(['model'.padEnd(28), 'runs', 'recall', 'other', 'dupes', 'steps', 'calls', 'tokens', 'cost', 'time', 'first', 'cut']);
+  for (const row of rows) {
+    line([
+      row.model.padEnd(28),
+      String(row.runs).padEnd(4),
+      `${Math.round(row.recall * 100)}%`.padEnd(6),
+      row.other.toFixed(1).padEnd(5),
+      row.duplicates.toFixed(1).padEnd(5),
+      row.steps.toFixed(1).padEnd(5),
+      row.calls.toFixed(0).padEnd(5),
+      `${Math.round(row.tokens / 1000)}k`.padEnd(6),
+      row.costUsd === undefined ? '  -   ' : `$${row.costUsd.toFixed(3)}${row.costPartial ? '?' : ''}`,
+      `${Math.round(row.seconds)}s`.padEnd(4),
+      row.firstFindingSeconds === undefined ? '  -  ' : `${Math.round(row.firstFindingSeconds)}s`.padEnd(5),
+      String(row.abortedOrStuck),
+    ]);
+  }
 }
 
 function print(scored) {
   const ids = BUGS.map((bug) => bug.id);
   const width = Math.max(...scored.map((result) => result.label.length), 5);
   const line = (cells) => process.stdout.write(`${cells.join('  ')}\n`);
-  line(['run'.padEnd(width), ...ids.map((id) => id.padEnd(3)), 'found', 'other', 'steps', 'cost', 'time']);
+  line(['run'.padEnd(width), ...ids.map((id) => id.padEnd(3)), 'found', 'other', 'dupes', 'steps', 'cost', 'time']);
   for (const result of scored) {
     if (result.error !== undefined) {
       line([result.label.padEnd(width), result.error]);
@@ -137,6 +250,7 @@ function print(scored) {
       ...ids.map((id) => (result.found.includes(id) ? ' ✓ ' : ' · ')),
       `${result.found.length}/${ids.length}`.padEnd(5),
       String(result.other.length).padEnd(5),
+      String(result.duplicates).padEnd(5),
       String(result.steps.length).padEnd(5),
       result.costUsd === undefined ? '  ?  ' : `$${result.costUsd.toFixed(3)}`,
       `${Math.round(result.durationMs / 1000)}s`,

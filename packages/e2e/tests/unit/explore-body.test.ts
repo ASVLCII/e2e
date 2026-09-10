@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AgentError, isAgentError } from '../../src/agent/error.ts';
+import { setCredentialRegistry } from '../../src/credentials.ts';
+import { isSecret } from '../../src/locator/screen.ts';
 import { CONSECUTIVE_FAILURE_LIMIT, createExploreBody } from '../../src/explore/body.ts';
 import { ExploreState } from '../../src/explore/state.ts';
 import type { Agent, App, TestFixtures } from '../../src/types.ts';
@@ -223,6 +225,37 @@ describe('the exploration body', () => {
     expect(state.ended).toBe('time');
   });
 
+  it('hands the configured credentials to every charter as secrets and tells the planner which accounts exist', async () => {
+    setCredentialRegistry(new Map([['ada', { name: 'ada', username: 'ada@example.test', password: 'bookworm', allowedOrigins: undefined }]]));
+    try {
+      const state = new ExploreState('goal', budgets);
+      const planInstructions: string[] = [];
+      const actParams: unknown[] = [];
+      let plans = 0;
+      const agent = {
+        extract: async (instruction: string) => {
+          planInstructions.push(instruction);
+          plans += 1;
+          return plans === 1 ? { decision: 'step', title: 'Sign in', instruction: 'sign in as ada' } : { decision: 'finish', summary: 'Signed in fine.' };
+        },
+        act: async (_instruction: string, options?: { params?: unknown }) => {
+          actParams.push(options?.params);
+          return { summary: 'signed in', modelCalls: 2, actions: 3 };
+        },
+      } as unknown as Agent;
+      const app = { open: async () => undefined } as unknown as App;
+      await createExploreBody({ state, stepTimeoutMs: 240_000, openApp: true, accounts: [{ name: 'ada', username: 'ada@example.test' }] })({ agent, app, screen: {} as never, platform: 'web' } as TestFixtures);
+      expect(planInstructions[0]).toContain('- ada (username: ada@example.test)');
+      expect(planInstructions[0]).not.toContain('bookworm');
+      const params = actParams[0] as { credentials: { ada: { username: string; password: unknown } } };
+      expect(params.credentials.ada.username).toBe('ada@example.test');
+      expect(isSecret(params.credentials.ada.password)).toBe(true);
+      expect(JSON.stringify(params)).not.toContain('bookworm');
+    } finally {
+      setCredentialRegistry(undefined);
+    }
+  });
+
   it('fails the run for issues, naming them', async () => {
     const state = new ExploreState('goal', budgets);
     const harness = fixtures(
@@ -271,6 +304,7 @@ describe('the exploration body', () => {
     expect(first.steps.map((step) => step.title)).toEqual(['Survey the app']);
     expect(first.ended).toBe('finished');
 
+    // One mid-run failure is covered by a continuation charter; a second in a row ends the exploration.
     const later = new ExploreState('goal', budgets);
     let laterPlans = 0;
     await run(later, {
@@ -281,9 +315,25 @@ describe('the exploration body', () => {
       },
       act: async () => ({ summary: 'opened', modelCalls: 1, actions: 1 }),
     } as unknown as Agent);
-    expect(later.steps).toHaveLength(1);
+    expect(later.steps.map((step) => step.title)).toEqual(['Cart', 'Continue exploring']);
     expect(later.ended).toBe('aborted');
     expect(later.summary).toBeUndefined();
+
+    // A planner that recovers after one failure keeps going.
+    const recovering = new ExploreState('goal', budgets);
+    let recoveringPlans = 0;
+    await run(recovering, {
+      extract: async () => {
+        recoveringPlans += 1;
+        if (recoveringPlans === 1) return { decision: 'step', title: 'Cart', instruction: 'open the cart' };
+        if (recoveringPlans === 2) throw invalid();
+        if (recoveringPlans === 3) return { decision: 'step', title: 'Orders', instruction: 'open orders' };
+        return { decision: 'finish', summary: 'Recovered and done.' };
+      },
+      act: async () => ({ summary: 'ok', modelCalls: 1, actions: 1 }),
+    } as unknown as Agent);
+    expect(recovering.steps.map((step) => step.title)).toEqual(['Cart', 'Continue exploring', 'Orders']);
+    expect(recovering.ended).toBe('finished');
 
     // Asked to finish, the model answers outside the grammar: the run ends for its own reason, without an assessment.
     const closing = new ExploreState('goal', { maxSteps: 1, timeoutMs: 600_000 });

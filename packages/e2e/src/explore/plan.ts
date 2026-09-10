@@ -6,45 +6,64 @@
  */
 
 import { z } from 'zod';
+import type { ReportExploreStep } from '../report/build.ts';
 import type { Agent } from '../types.ts';
-import { MAX_INSTRUCTION_CHARS, MAX_SUMMARY_CHARS, MAX_TITLE_CHARS, type ExploreState } from './state.ts';
+import { MAX_TITLE_CHARS, type ExploreState } from './state.ts';
 
 const MIN_SUMMARY_CHARS = 10;
 /** A title derived from an instruction stops at the first clause or here. */
 const DERIVED_TITLE_CHARS = 80;
+/**
+ * The most the grammar accepts in one field. Well above the report's ceilings,
+ * which the state clips to when the step opens: a model that pours a whole
+ * charter into one field (seen live, past 2000 characters) has still planned
+ * a step, and a rejection would cost a repair round for nothing.
+ */
+const MAX_FIELD_CHARS = 8_000;
 
 /**
- * A flat object with optional fields rather than a union: every provider
- * renders it, and the refinement below turns a missing field into a repair
- * round that names it. The shape is lenient on purpose: a model that puts the
- * whole charter into `title` and leaves `instruction` empty (seen live) has
- * still planned a step, and `planNext` derives the missing field rather than
- * spending the repair round on it.
+ * A flat object with every field required rather than a union: OpenAI's
+ * strict structured output rejects a schema whose `required` omits a
+ * property, and every provider renders a flat object. Fields the decision
+ * does not use are empty strings. The shape is lenient on purpose: a model
+ * that puts the whole charter into `title` and leaves `instruction` empty
+ * (seen live) has still planned a step, and `repairPlan` derives the missing
+ * field rather than spending the repair round on it.
  */
 export const PLAN_SCHEMA = z
   .object({
     decision: z.enum(['step', 'finish']),
-    title: z.string().max(MAX_INSTRUCTION_CHARS).optional(),
-    instruction: z.string().max(MAX_INSTRUCTION_CHARS).optional(),
-    summary: z.string().max(MAX_SUMMARY_CHARS).optional(),
+    title: z.string().max(MAX_FIELD_CHARS).describe('For a step: the area or flow in a few words. Empty for finish.'),
+    instruction: z.string().max(MAX_FIELD_CHARS).describe('For a step: the concrete charter. Empty for finish.'),
+    summary: z.string().max(MAX_FIELD_CHARS).describe('For finish: the overall assessment. Empty for a step.'),
   })
   .superRefine((value, context) => {
     if (value.decision === 'step') {
-      if (`${value.title ?? ''}${value.instruction ?? ''}`.trim() === '') {
+      if (`${value.title}${value.instruction}`.trim() === '') {
         context.addIssue({ code: 'custom', path: ['instruction'], message: 'a step needs a concrete instruction' });
       }
-    } else if ((value.summary ?? '').trim().length < MIN_SUMMARY_CHARS) {
+    } else if (value.summary.trim().length < MIN_SUMMARY_CHARS) {
       context.addIssue({ code: 'custom', path: ['summary'], message: 'finishing needs an overall assessment' });
     }
   });
+
+type PlanAnswer = z.output<typeof PLAN_SCHEMA>;
 
 export type PlanDecision =
   | { readonly kind: 'step'; readonly title: string; readonly instruction: string }
   | { readonly kind: 'finish'; readonly summary: string };
 
+/** One configured credential the explorer can sign in with, by name; the password stays out of every prompt. */
+export interface PlanAccount {
+  readonly name: string;
+  readonly username: string;
+}
+
 export interface PlanRequest {
   /** The run must end now; the planner is asked for the closing assessment only. */
   readonly mustFinish: boolean;
+  /** The accounts the explorer can sign in with. */
+  readonly accounts?: readonly PlanAccount[] | undefined;
   /** Why it must end, in the planner's prompt. */
   readonly reason?: string | undefined;
   readonly remainingMs: number;
@@ -53,27 +72,38 @@ export interface PlanRequest {
 
 /** Asks the model for the next charter or the closing assessment. */
 export async function planNext(agent: Agent, state: ExploreState, request: PlanRequest): Promise<PlanDecision> {
-  const plan = await agent.extract(planInstruction(state, request), {
-    schema: PLAN_SCHEMA,
-    timeout: request.timeoutMs,
-  });
-  if (plan.decision === 'finish') return { kind: 'finish', summary: plan.summary!.trim() };
-  return normalizeStep(plan.title, plan.instruction);
+  return repairPlan(await agent.extract(planInstruction(state, request), { schema: PLAN_SCHEMA, timeout: request.timeoutMs }));
 }
 
 /**
- * The step's title and instruction, each derived from the other when the
- * model filled only one: a charter with no title takes its first clause, a
- * title with no charter is the charter.
+ * The decision, after the repairs live providers' answers have needed. Every
+ * repair the planner makes is here:
+ *
+ * - Digit runs a provider pads a field with (seen live: a title followed by
+ *   hundreds of `1234567890`) are removed; they carry no meaning and would
+ *   otherwise become the charter's tail. The threshold sits past any number a
+ *   charter can mean: phone numbers, order ids, card numbers, and amounts all
+ *   stop short of twenty digits.
+ * - A step with only one of `title` and `instruction` filled has the other
+ *   derived: a charter with no title takes its first clause, a title with no
+ *   charter is the charter.
+ *
+ * Length is not repaired here: the grammar accepts long fields, and the state
+ * clips them to the report's ceilings when the step opens.
  */
-export function normalizeStep(title: string | undefined, instruction: string | undefined): PlanDecision {
-  const givenTitle = (title ?? '').trim();
-  const givenInstruction = (instruction ?? '').trim();
-  const charter = givenInstruction === '' ? givenTitle : givenInstruction;
+export function repairPlan(answer: PlanAnswer): PlanDecision {
+  if (answer.decision === 'finish') return { kind: 'finish', summary: unpad(answer.summary) };
+  const title = unpad(answer.title);
+  const instruction = unpad(answer.instruction);
+  const charter = instruction === '' ? title : instruction;
   // A title that stood in for the charter is a heading only while it is short.
-  const longest = givenInstruction === '' ? DERIVED_TITLE_CHARS : MAX_TITLE_CHARS;
-  const heading = givenTitle !== '' && givenTitle.length <= longest ? givenTitle : deriveTitle(charter);
+  const longest = instruction === '' ? DERIVED_TITLE_CHARS : MAX_TITLE_CHARS;
+  const heading = title !== '' && title.length <= longest ? title : deriveTitle(charter);
   return { kind: 'step', title: heading, instruction: charter };
+}
+
+function unpad(text: string): string {
+  return text.replace(/\s*\d{20,}\s*/g, ' ').trim();
 }
 
 function deriveTitle(charter: string): string {
@@ -82,7 +112,7 @@ function deriveTitle(charter: string): string {
   return short.length <= DERIVED_TITLE_CHARS ? short : `${short.slice(0, DERIVED_TITLE_CHARS - 1)}…`;
 }
 
-const STATUS_MARKS: Record<ExploreState['steps'][number]['status'], string> = {
+const STATUS_MARKS: Record<ReportExploreStep['status'], string> = {
   passed: 'passed',
   failed: 'FAILED',
   blocked: 'blocked',
@@ -116,13 +146,20 @@ export function planInstruction(state: ExploreState, request: PlanRequest): stri
     '',
     'Findings so far:',
     findings,
+    ...(request.accounts === undefined || request.accounts.length === 0
+      ? []
+      : [
+          '',
+          'Accounts the agent can sign in with (it fills the password itself, by name):',
+          ...request.accounts.map((account) => `- ${account.name} (username: ${account.username})`),
+        ]),
     '',
   ];
   if (request.mustFinish) {
     return [
       ...header,
       `The run must end now: ${request.reason ?? 'its budget is spent'}.`,
-      'Respond with {"decision": "finish", "summary": "..."}: the overall assessment in two to five sentences,',
+      'Respond with {"decision": "finish", "title": "", "instruction": "", "summary": "..."}: the overall assessment in two to five sentences,',
       'what was explored, the key findings, and your verdict on the goal. Ground it in the steps and findings above.',
     ].join('\n');
   }
@@ -133,13 +170,13 @@ export function planInstruction(state: ExploreState, request: PlanRequest): stri
     '  self-contained charter for an agent that sees only the screen and that text: which flow to exercise, what inputs',
     '  to try, what to check. One flow or screen per step, sized for five to fifteen actions; split anything bigger.',
     '  Ask the agent to interact, not only to look: submit forms with made-up test data, save and revisit, sign in with',
-    '  made-up credentials when none are configured, act on a non-first item of a list. Prefer breadth: touch the main',
+    '  the accounts listed above (or made-up credentials when none are configured), act on a non-first item of a list. Prefer breadth: touch the main',
     '  flows the goal names before drilling deeper into one. Do not re-test an area a passed step already covered, and',
     '  never plan a step to re-confirm a finding already recorded above. When a step ended at its limit, continue where',
     '  it stopped or move on. When a step summary mentions something odd that is not among the findings, spend the next',
     '  step confirming it.',
     '- "finish": the goal is covered, or nothing new is reachable. "summary" is the overall assessment in two to',
     '  five sentences: what was explored, the key findings, and your verdict on the goal.',
-    'Respond with {"decision": "step", "title": "...", "instruction": "..."} or {"decision": "finish", "summary": "..."}.',
+    'Respond with every field present: {"decision": "step", "title": "...", "instruction": "...", "summary": ""} or {"decision": "finish", "title": "", "instruction": "", "summary": "..."}.',
   ].join('\n');
 }
