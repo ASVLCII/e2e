@@ -1,0 +1,153 @@
+---
+title: Exploring without a test
+description: e2e explore gives the agent a goal instead of a test file. It plans its own steps, drives the app, and reports what it finds.
+---
+
+`e2e explore` is a run with no test file. You give the agent a goal, it decides
+what to exercise, one step at a time, and reports every defect it has evidence
+of. The run ends with an assessment, a list of findings, and the same
+`.e2e/report.json` a test run writes.
+
+```bash
+npx --no-install e2e explore 'Explore the checkout flow like a first-time buyer and report anything off'
+```
+
+Use it before there are tests, to see what the agent can do with your app; on a
+feature branch, to hunt for regressions a scripted suite would not know to look
+for; or to find out what is worth turning into a test. It runs the same agent
+`agent.act()` runs, with the same model, the same project tools, and the same
+safety rules, so what it finds is what a test would find.
+
+## What a run does
+
+1. **Opens the app** on the target's declared URL, exactly as `app.open()` does. A device target that declares no URL is already showing its app, so this step is skipped.
+2. **Plans a step.** One structured model call reads the goal, the steps so
+   far, the findings so far, and the current screen, and answers with the next
+   charter: a title and a concrete instruction for one flow or area. It prefers
+   breadth over depth, does not re-test what a passed step covered, and follows
+   up on anything odd a previous step reported.
+3. **Runs the step** as an ordinary `agent.act()` step with the charter as its
+   instruction. The agent has the whole action grammar, your project tools,
+   and one more: `report_finding`.
+4. **Records findings** the moment the agent calls the tool: title, kind, a
+   severity from 1 to 5, what it expected, what it saw, and how to get there,
+   plus the current path when the engine reports one and a redacted
+   screenshot when the engine grants pixels.
+5. **Repeats** until the planner decides the goal is covered, or a budget ends
+   the run, then asks the model for a closing assessment.
+
+The explorer is built from `agents.default`, or from the agent `--agent` names,
+so its model is that agent's, with `E2E_MODEL` filling in when the agent sets
+none, like any run. To try another model on the same goal with an agent that
+sets none:
+
+```bash
+E2E_MODEL=anthropic/claude-sonnet-4.5 npx --no-install e2e explore 'Hunt for broken forms and dead links'
+```
+
+## How steps end
+
+A step that finishes its charter passes. A step whose flow the application
+would not let it complete fails, and the run **keeps going**: the failed step
+is recorded with the agent's account of what stopped it, and only findings the
+agent reported count toward the verdict. A step that runs out of its action
+or time budget mid-charter ended at its limit; that is a time box, not a
+failure, and it does not count against the run.
+
+Three failed or blocked steps in a row that reported nothing end the run: the
+approach is not working. So does the step limit, and so does the clock.
+
+## Budgets
+
+| Budget | Default | Range | Flag |
+| --- | --- | --- | --- |
+| Exploration steps | 8 | 1 to 12 | `--max-steps <n>` |
+| Wall clock | 10 minutes | 3 to 15 minutes | `--timeout <ms>` |
+| Actions and model calls per step | 40 each | from `agent.maxSteps`, `agent.maxModelCalls` | config |
+
+Exploration is breadth first and hits diminishing returns fast, which is why
+the ceilings are low. A first look at an app fits in four steps; a thorough
+pass over one flow fits in twelve. Each step's own deadline is four minutes,
+capped by what remains of the run.
+
+## The verdict
+
+| Outcome | Run status | Exit code |
+| --- | --- | --- |
+| Steps ran, no `issue` finding (warnings allowed) | passed | 0 |
+| At least one `issue` finding | failed | 1 |
+| No step ran and nothing was found | blocked | 1 |
+| Config, engine, or model provider error | error | 2 or 3 |
+
+A finding of kind `issue` is a defect a user would hit; a `warning` is
+cosmetic or polish and never fails the run. A run that explored nothing and
+found nothing is blocked rather than passed: a zero-coverage pass would say
+the app is fine when nothing was checked.
+
+A planner answer outside the grammar is not an error. The first time, the run
+falls back to a survey step (visit each top-level screen once); a later time,
+the exploration ends with the record so far and `ended: 'aborted'`; when the
+run had to finish anyway, it ends for that reason, without an assessment. The
+run's own clock running out is a normal ending too (`ended: 'time'`), judged
+like any other. A provider failure, or a single planner call exceeding its own
+deadline (`STEP_TIMEOUT`), is the run's error.
+
+## What you get
+
+The terminal shows each step as it runs, the way `e2e run` shows agent steps,
+and under the run summary:
+
+```text
+   Explored  4 steps (3 passed, 1 failed); ended: the agent covered the goal
+   Findings  2 issues, 1 warning
+   S4 issue  Checkout total shows $0.00 with two items in the cart (/cart)
+   S3 issue  Promo code field accepts any text and shows no error (/checkout)
+ S2 warning  Footer links wrap onto two lines at 1280px (/)
+ Assessment  Browsing and the cart work. Checkout computes the total wrong...
+```
+
+`.e2e/report.json` carries the exploration under `run.explore`: the goal, the
+budgets, why the run ended, the assessment, every step with its title,
+instruction, status, and the agent's summary, and every finding with its
+severity, kind, reproduction steps, path, observation revision, and the
+evidence screenshot path under the artifact root. The one result in
+`run.results` is the exploration itself, under the virtual file `explore`,
+with the planner's `agent.extract` steps and the charters' `agent.act` steps
+in its timeline. `--reporter json`, `--reporter junit`, reporter objects,
+`--video`, `--ai-trace`, and `--debug` work as they do for `e2e run`.
+
+## Your config applies
+
+Explore reads your `e2e.config.ts`. The target's engine, app command, allowed
+origins, and the agent's `context`, `vision`, and provider options all apply.
+`--agent <name>` builds the explorer from another configured agent, so a
+UX-review agent and a functional one can explore the same app in turn.
+Configured `credentials` do not reach the explorer yet: a secret is filled only
+through a step that declares it in its params, and exploration steps declare
+none, so a sign-in behind a real credential is out of reach for now. An agent built with `createAgent({ tools, system })` lends its
+tools and guidance to the explorer, so a `seedCart` tool is available while
+exploring too. A hand-rolled `StepExecutor` has no vocabulary the explorer
+can reuse; it is replaced by the built-in agent for the run, with a notice.
+
+With several targets, pass `--target`; otherwise the first configured target
+is explored and the CLI says so. The trace cache is off and retries are zero
+for the run: nothing replays an exploration, and a retry would explore twice.
+
+## Writing a good goal
+
+Name the area and the posture. "Explore the checkout flow like a first-time
+buyer and report anything off" beats "test checkout": it tells the planner
+where to start, how deep to go, and what counts. Mention what not to touch
+when it matters ("do not place a real order"). The default goal, `Explore the
+app and find bugs`, is a fair first look at a small app.
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="CLI reference" href="/reference/cli#e2e-explore">
+    Every flag of `e2e explore`.
+  </Card>
+  <Card title="Your own agent" href="/agents">
+    The agent explore runs, and how to extend it.
+  </Card>
+</CardGroup>
