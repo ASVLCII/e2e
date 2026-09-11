@@ -1,5 +1,13 @@
 # @e2edev/agent-device
 
+## 0.5.2
+
+### Patch Changes
+
+- [#257](https://github.com/tester-army/e2e/pull/257) [`6526dc6`](https://github.com/tester-army/e2e/commit/6526dc6daa0d3c646c650800560447674af93ae0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Runtime dependencies move to their current releases: `zod` 4.6.1 in both
+  packages, `@clack/prompts` 1.8.0 in `@e2edev/e2e`, and `agent-device` 0.21.0
+  in `@e2edev/agent-device`. No behavior changes on our side.
+
 ## 0.5.1
 
 ### Patch Changes

@@ -1,5 +1,58 @@
 # @e2edev/e2e
 
+## 0.12.0
+
+### Minor Changes
+
+- [#265](https://github.com/tester-army/e2e/pull/265) [`00ce413`](https://github.com/tester-army/e2e/commit/00ce41396d1f0789032b7a8cd3078d03b34092ec) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The `list` reporter's summary gains a `Cache` row under `AI` with the trace
+  cache's part in the run, counted by agent step: `9 replayed · 2 handed off ·
+  4 missed`. A replayed step ran whole from its recorded actions with no model
+  turn, a handed-off step replayed a prefix before the model took over, and a
+  missed step had no usable entry. Zero counts are left out, so a cold cache
+  reads `Cache  20 missed`; a run with the cache off has no row.
+
+- [#181](https://github.com/tester-army/e2e/pull/181) [`afde198`](https://github.com/tester-army/e2e/commit/afde1981c569e796dafd3eeed303c1eac8a6833c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e mcp` serves a project's live app to a coding agent over the Model
+  Context Protocol on stdio, through four fixed tools in the style of
+  executor.sh: `open_session` loads a config (the nearest one, or the path
+  the call names), starts the declared app command, boots the engine, and
+  returns the session's catalog and first observation; `call` runs any
+  catalog tool by name (`observe`, `tap`, `type`, `press`, `select`,
+  `scroll`, `navigate`, `type_secret`, `locate` to try a semantic locator
+  before writing it, a masked `screenshot`, and the project's `defineTool`
+  values), validating its arguments against the tool's own schema; `tools`
+  describes the catalog; `close_session` ends it. The client's tool list
+  never changes, so one server covers every project and config the agent
+  opens without a restart. Sessions enforce the same origin, secret, and
+  pixel policy as tests, close on idle, and never outlive the client. The
+  agent skill is served as resources. `e2e init` registers the server in
+  `.mcp.json` and `.cursor/mcp.json`, `e2e guide mcp` prints the new skill
+  topic, and `createAgent` now returns its `tools` so a host can serve them.
+
+- [#262](https://github.com/tester-army/e2e/pull/262) [`8287bf9`](https://github.com/tester-army/e2e/commit/8287bf930b2e37311d215900eb91d192edefc663) Thanks [@okwasniewski](https://github.com/okwasniewski)! - One flow, several personas. The `agent` option on a test or describe block accepts a list, and the test then runs once per agent named, as one result each, in one run. `--agent` takes several names too, comma-separated or repeated: every unpinned test runs once per name, and a pinned list narrows to the names the flag also gives (a pin the flag misses stands whole, so `--agent thorough` still benchmarks a model across everything that has no opinion while every persona stays itself). A serial group runs as one unit per agent and its members share one pin; a setup test runs once per target and pins at most one agent.
+  
+  Every result and serial group in the report records the `agent` it ran as, and the result id now digests `{ testId, targetId, agent }`, so the id of every result changes once. Reporters tell variants apart: the list reporter appends `[admin]` to a title that ran as an agent other than `default`, JUnit case names carry the same tag, and artifacts of one attempt live under `<target>/<test id>/<agent>/attempt-<n>`. The `run-started` event carries `agents` (a list) in place of `agent`, and `test-started` and `step` events carry the pair's `agent`.
+
+### Patch Changes
+
+- [#257](https://github.com/tester-army/e2e/pull/257) [`6526dc6`](https://github.com/tester-army/e2e/commit/6526dc6daa0d3c646c650800560447674af93ae0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Runtime dependencies move to their current releases: `zod` 4.6.1 in both
+  packages, `@clack/prompts` 1.8.0 in `@e2edev/e2e`, and `agent-device` 0.21.0
+  in `@e2edev/agent-device`. No behavior changes on our side.
+
+- [#264](https://github.com/tester-army/e2e/pull/264) [`3e66c42`](https://github.com/tester-army/e2e/commit/3e66c4280b18985266dabf892d5a2c5ebd3e23b7) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e explore --help` and the `explore` skill topic no longer say the model can
+  come from `E2E_MODEL`. Nothing reads that variable: the model is the selected
+  agent's, constructed in `e2e.config.ts`, as for `e2e run`.
+
+- [#259](https://github.com/tester-army/e2e/pull/259) [`07c5334`](https://github.com/tester-army/e2e/commit/07c5334d08167941b49aadb46945e54cb84cfd66) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `agent.act` runs on models that refuse a forced tool choice. The loop asks
+  every model for a tool call per turn and names `complete_step` on the final
+  ones; a model that answers HTTP 400 to that request shape (Anthropic's Claude
+  Fable 5.1 does) is asked again with `auto` and a tool-calls-only rule in its
+  instructions, on the same turn budget, and later steps on that model start in
+  that mode. A turn that comes back as prose without a tool call no longer ends
+  the step: the reply stays in the history and the model is told to act, until
+  the turn budget runs out as before.
+
+- [#256](https://github.com/tester-army/e2e/pull/256) [`4cc86dc`](https://github.com/tester-army/e2e/commit/4cc86dcfafab5ef9ab12e37aac18d0d3c3d4f3de) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init` lists the engines as Web (Playwright), Mobile (iOS/Android) with agent-device, and None last. Its closing `next:` line and the skipped-skill hint run the CLI through the project's package manager (`npm run test:e2e`, `pnpm exec e2e guide`) instead of `npx --no-install`. The CLI, README, and skill link to the docs at https://e2e.mintlify.app; the Vercel-hosted address returns 404.
+
 ## 0.11.0
 
 ### Minor Changes
