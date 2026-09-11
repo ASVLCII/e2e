@@ -94,6 +94,7 @@ function declaredVerbs(engine: EngineHandle | undefined): ReadonlySet<GrammarVer
     for (const verb of ['tap', 'type', 'typeSecret', 'press', 'select'] as const) verbs.add(verb);
   }
   if (engine?.swipe !== undefined) verbs.add('scroll');
+  if (engine?.tapAt !== undefined) verbs.add('tapAt');
   if (engine?.app?.navigate !== undefined) verbs.add('navigate');
   return verbs;
 }
@@ -251,6 +252,7 @@ export function createEngineSession(options: EngineSessionOptions): TargetSessio
       await guard(`the "${action.kind}" action`, engine?.perform)(ref, action, operation);
     },
     swipe: guard('swipe gestures', engine?.swipe),
+    tapAt: guard('point taps', engine?.tapAt),
     // The engine outlives the attempt; only the per-attempt isolation ends
     // here, exactly once. dispose() belongs to the worker.
     close: guard('attempt end', async (operation) => {

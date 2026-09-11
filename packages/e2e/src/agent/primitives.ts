@@ -14,7 +14,9 @@ import { z } from 'zod';
 import type { AgentErrorCode } from '../types.ts';
 import { isRuntimeHardStop, BLOCKABLE_CODES, type StepExecutorContext, type StepVerdict } from './executor.ts';
 import { cacheTokenFields, readCost } from './model/sdk.ts';
-import { ScreenPresenter } from './screen-update.ts';
+import { OperationQueue } from './operation-queue.ts';
+import { imagePointToViewport } from './point-tap.ts';
+import { ScreenPresenter, type ScreenOutput } from './screen-update.ts';
 
 /** Codes the model may pick when concluding; runtime codes are runtime-assigned. */
 const MODEL_ERROR_CODES = [
@@ -67,12 +69,51 @@ export const VERDICT_RULES = `Verdict rules:
  * A plain AI SDK function tool with its input typed from the schema — what
  * `tool()` from `ai` does, without loading `ai` to do it.
  */
-function schemaTool<Schema extends z.ZodType>(definition: {
+function schemaTool<Schema extends z.ZodType, Output = string>(definition: {
   readonly description: string;
   readonly inputSchema: Schema;
-  readonly execute: (input: z.output<Schema>) => Promise<string>;
+  readonly execute: (input: z.output<Schema>) => Promise<Output>;
+  /** Maps a structured result onto model content; a string result needs none. */
+  readonly toModelOutput?: (options: { readonly output: Output }) => ModelOutput;
 }): Tool {
-  return definition;
+  return definition as Tool;
+}
+
+/** The model-facing shape of a tool result: text, or text with a screenshot attached. */
+type ModelOutput =
+  | { readonly type: 'text'; readonly value: string }
+  | {
+      readonly type: 'content';
+      readonly value: ({ readonly type: 'text'; readonly text: string } | { readonly type: 'file'; readonly data: { readonly type: 'data'; readonly data: string }; readonly mediaType: string })[];
+    };
+
+/**
+ * A grammar tool: its result is a rendered screen, text or text with the
+ * screenshot attached as a file part, so every one encodes its output the
+ * same way. A tool that skipped the encoder would hand the model the image
+ * bytes as JSON the first time an action ran in pixel mode.
+ */
+function screenTool<Schema extends z.ZodType>(definition: {
+  readonly description: string;
+  readonly inputSchema: Schema;
+  readonly execute: (input: z.output<Schema>) => Promise<ScreenOutput>;
+}): Tool {
+  return schemaTool({ ...definition, toModelOutput: screenModelOutput });
+}
+
+function screenModelOutput({ output }: { readonly output: ScreenOutput }): ModelOutput {
+  if (typeof output === 'string') return { type: 'text', value: output };
+  return {
+    type: 'content',
+    value: [
+      { type: 'text', text: output.text },
+      {
+        type: 'file',
+        data: { type: 'data', data: Buffer.from(output.pixels.data).toString('base64') },
+        mediaType: output.pixels.mediaType,
+      },
+    ],
+  };
 }
 
 /** The conclusion tool and the verdict it collected. */
@@ -143,7 +184,7 @@ export interface GrammarToolOptions {
    * (budget, timeout, cancel) propagates out of the tool; the chassis's guard
    * instead turns it into text and ends the loop.
    */
-  readonly guard?: (body: () => Promise<string>) => Promise<string>;
+  readonly guard?: <T>(body: () => Promise<T>) => Promise<T | string>;
   /**
    * Renders screens for the model and remembers what it has seen, so every
    * result after the first reports the changes rather than the whole tree.
@@ -152,6 +193,24 @@ export interface GrammarToolOptions {
    */
   readonly screen?: ScreenPresenter;
 }
+
+/**
+ * Every name `createGrammarTools` may hand out. The grammar owns these in the
+ * model's vocabulary whatever the engine declares, so a project tool cannot
+ * take one: it would be silently shadowed on one engine and live on another.
+ */
+export const GRAMMAR_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'observe',
+  'tap',
+  'type',
+  'type_secret',
+  'press',
+  'select',
+  'scroll',
+  'navigate',
+  'screenshot',
+  'tap_at',
+]);
 
 /**
  * AI SDK tools over the harness action grammar, limited to the verbs the
@@ -168,21 +227,20 @@ export function createGrammarTools(
   options: GrammarToolOptions = {},
 ): ToolSet {
   const guard = options.guard ?? ((body) => body());
-  const screen = options.screen ?? new ScreenPresenter();
+  const screen: ScreenPresenter = options.screen ?? new ScreenPresenter();
   const { verbs } = context.target;
 
-  // The chain is always already settled-to-undefined, so a failed body
-  // reaches its own caller and never poisons the queue (same idiom as the
-  // dispatch's own serialization).
-  let chain: Promise<unknown> = Promise.resolve();
-  const inOrder = <T>(body: () => Promise<T>): Promise<T> => {
-    const run = chain.then(body);
-    chain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  };
+  // One queue for the tool bodies: an action and its look at the result run
+  // together, so a batched turn gets one coherent result per action.
+  const queue = new OperationQueue();
+  const inOrder = <T>(body: () => Promise<T>): Promise<T> => queue.run(body);
+
+  /**
+   * The screen after an action, as the model reads it: the changes since the
+   * screen it holds and, once the step is showing pixels, a fresh screenshot.
+   */
+  const present = async (lead: string, expectChange?: boolean): Promise<ScreenOutput> =>
+    screen.present(await context.observe({ pixels: screen.showingPixels }), { lead, expectChange });
 
   /**
    * Performs one action and reads its result. A failed action still returns
@@ -190,25 +248,25 @@ export function createGrammarTools(
    * once instead of spending a turn to observe; runtime hard stops propagate
    * to the guard, which ends the loop. The guard runs inside the queue, so a
    * batched call that queued behind a hard stop or a verdict is skipped when
-   * its turn comes rather than acted on because it was queued in time.
+   * its turn comes rather than acted on because it was queued in time. The
+   * action may return its own lead line, for a result only it can describe.
    */
   const acting = (
     description: string,
-    action: () => Promise<void>,
+    action: () => Promise<string | void>,
     expectChange = true,
-  ): Promise<string> =>
+  ): Promise<ScreenOutput> =>
     inOrder(() =>
       guard(async () => {
+        let lead = description;
         try {
-          await action();
+          lead = (await action()) ?? description;
         } catch (cause) {
           if (isRuntimeHardStop(cause)) throw cause;
           const message = cause instanceof Error ? cause.message : String(cause);
-          const observation = await context.observe();
-          return screen.update(observation, { lead: `${description} failed: ${message}` });
+          return present(`${description} failed: ${message}`);
         }
-        const observation = await context.observe();
-        return screen.update(observation, { lead: description, expectChange });
+        return present(lead, expectChange);
       }),
     );
 
@@ -218,15 +276,15 @@ export function createGrammarTools(
     .describe('Node id from any screen in this conversation that is still present, e.g. "n42"');
 
   const tools: ToolSet = {
-    observe: schemaTool({
+    observe: screenTool({
       description:
         'Look at the screen again and get what changed since the screen you last received. Action results already include their changes, so call this only after waiting for something in progress, never right after an action.',
       inputSchema: z.object({}),
-      execute: () => inOrder(() => guard(async () => screen.update(await context.observe()))),
+      execute: () => inOrder(() => guard(() => present('Observed.', false))),
     }),
   };
   if (verbs.has('tap')) {
-    tools['tap'] = schemaTool({
+    tools['tap'] = screenTool({
       description:
         'Tap or click one node. The result waits for the effect (a navigation, a route change, a submit) and reports what changed.',
       inputSchema: z.object({ target }),
@@ -234,7 +292,7 @@ export function createGrammarTools(
     });
   }
   if (verbs.has('type')) {
-    tools['type'] = schemaTool({
+    tools['type'] = screenTool({
       description: 'Type a plain-text value into one input node, replacing its current value. Several fields can be typed in one turn.',
       inputSchema: z.object({ target, value: z.string() }),
       execute: ({ target: id, value }) =>
@@ -242,7 +300,7 @@ export function createGrammarTools(
     });
   }
   if (verbs.has('press')) {
-    tools['press'] = schemaTool({
+    tools['press'] = screenTool({
       description: 'Send one key (e.g. "Enter", "Escape", "Tab") to one node.',
       inputSchema: z.object({ target, key: z.string().min(1).max(64) }),
       execute: ({ target: id, key }) =>
@@ -250,7 +308,7 @@ export function createGrammarTools(
     });
   }
   if (verbs.has('select')) {
-    tools['select'] = schemaTool({
+    tools['select'] = screenTool({
       description: 'Pick one option from a select-like control by its visible label.',
       inputSchema: z.object({ target, value: z.string().min(1) }),
       execute: ({ target: id, value }) =>
@@ -278,14 +336,14 @@ export function createGrammarTools(
       count === 1 ? `Scrolled ${way}.` : `Scrolled ${way} ${String(count)} screens.`;
     // Node-targeted scrolling rides `perform`; without it only the viewport scrolls.
     tools['scroll'] = verbs.has('tap')
-      ? schemaTool({
+      ? screenTool({
           description:
             'Scroll the viewport, or one scrollable node when target is given. The result reports the rows that came into or left the tree.',
           inputSchema: z.object({ direction, target: target.optional(), times }),
           execute: ({ direction: way, target: id, times: count }) =>
             acting(scrolled(way, count ?? 1), () => scrolling(way, id, count ?? 1), false),
         })
-      : schemaTool({
+      : screenTool({
           description: 'Scroll the viewport. The result reports the rows that came into or left the tree.',
           inputSchema: z.object({ direction, times }),
           execute: ({ direction: way, times: count }) =>
@@ -293,16 +351,48 @@ export function createGrammarTools(
         });
   }
   if (verbs.has('navigate')) {
-    tools['navigate'] = schemaTool({
+    tools['navigate'] = screenTool({
       description: 'Navigate to a URL or app-relative path within the allowed origins.',
       inputSchema: z.object({ url: z.string().min(1) }),
       execute: ({ url }) => acting(`Navigated to ${url}.`, () => context.actions.navigate(url)),
     });
   }
+  // The pixel verbs are offered while pixels can still leave the runner. Once
+  // a secret was filled in the attempt they could only decline, and a verb
+  // that is absent costs the model nothing where one that declines costs a
+  // turn. tap_at lands either as a tap by id or as a bare point, so it needs
+  // one of the two; screenshot needs only the observation every step has.
+  if (!context.pixelsTainted) {
+    tools['screenshot'] = screenTool({
+      description:
+        'Attach a screenshot of the current viewport. Use it when the screen lists too little to act on (a canvas, a map, an image, a game, a system sheet) or contradicts what you expect. From then on every action result carries a fresh screenshot too, so you can see what each action did.',
+      inputSchema: z.object({}),
+      execute: () => inOrder(() => guard(async () => screen.present(await context.observe({ pixels: true })))),
+    });
+    if (verbs.has('tap') || verbs.has('tapAt')) {
+      tools['tap_at'] = screenTool({
+        description:
+          'Tap a point in the latest screenshot, given as pixel coordinates in that image (x from the left edge, y from the top edge). Aim for the center of the target. A listed control under the point is tapped by its id; otherwise the bare point is tapped' +
+          (verbs.has('tapAt') ? '.' : ', which this engine cannot do: the point must land on a listed control.') +
+          ' Last resort: when the screen lists the target, tap it by id.',
+        inputSchema: z.object({ x: z.number(), y: z.number() }),
+        execute: ({ x, y }) => {
+          const shot = screen.latestScreenshot;
+          if (shot === undefined) {
+            return Promise.resolve(
+              'No screenshot has been taken in this step: tap_at coordinates are pixels of the latest screenshot. Call screenshot first, or tap a listed node by id.',
+            );
+          }
+          const point = imagePointToViewport({ x, y }, shot.pixels, shot.viewport);
+          return acting(`tap_at (${String(x)}, ${String(y)})`, async () => (await context.actions.tapAt(point)).summary);
+        },
+        });
+    }
+  }
   // Offered only when the step declared secrets and the surface can fill: an
   // empty vocabulary is better than a tool the model can only be rejected on.
   if (verbs.has('typeSecret') && context.step.secrets.length > 0) {
-    tools['type_secret'] = schemaTool({
+    tools['type_secret'] = screenTool({
       description:
         'Fill one declared secret credential into a secure input field; the plaintext never passes through you and never shows on screen. Available: ' +
         context.step.secrets.map((secret) => `"${secret.name}" (${secret.purpose})`).join(', ') +

@@ -44,7 +44,6 @@ import {
   type ModelAdapter,
   type ModelImage,
 } from './model/adapter.ts';
-import type { ModelRouter } from './model/router.ts';
 import { pixelsForModel, prepareObservation, type AgentObservation } from './observation.ts';
 import { observationByteBudget } from './observation-budget.ts';
 import type { ProtocolValidation } from './protocol.ts';
@@ -67,8 +66,8 @@ export interface AgentSelection {
    * default path keeps the optimized single-judgment tier.
    */
   readonly customExecutor: boolean;
-  /** Chooses the model for a call; a vision call may use a pinned one. */
-  readonly models: ModelRouter;
+  /** The adapter over the agent's model, built on first use. */
+  readonly model: () => ModelAdapter;
   /** Trusted project context: the agent's `context` then test/group agentContext. */
   readonly agentContext: string | undefined;
 }
@@ -118,7 +117,7 @@ export interface InvocationOptions {
    * Whether masked viewport pixels travel alongside the semantic tree.
    * Additive in every mode: the tree is always sent, and pixel evidence
    * degrades away under taint or unprovable masking rather than failing the
-   * call. `'fallback'` behaves as `false` for the judgment methods.
+   * call.
    */
   readonly vision: VisionMode;
 }
@@ -184,13 +183,8 @@ export class Invocation {
     return this.runtime.engine.session;
   }
 
-  /**
-   * The model this invocation talks to. It follows the pixel tier, so an
-   * escalated fallback invocation asks the pinned vision model — the reason
-   * for escalating is that the cheaper model's tree-only answer missed.
-   */
   private get adapter(): ModelAdapter {
-    return this.agent.models.select(this.pixelTier);
+    return this.agent.model();
   }
 
   /**

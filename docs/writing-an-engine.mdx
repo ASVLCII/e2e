@@ -98,6 +98,7 @@ never silently.
 | `perform(ref, action, context)` | `actions` (needs `observe`) | Node-targeted actions: `tap`, `type`, `press`, `select`, node `scroll`, and the `Locator` action set; `type_secret` when the step declares credentials |
 | `locate(expression, context)` | `location` (needs `observe`) | `screen`, `Locator`, `expect(locator)` |
 | `swipe(direction, momentum, context)` | (needs `observe`) | the agent's viewport `scroll` verb, `screen.swipe`, `scrollUntilVisible` |
+| `tapAt(point, context)` | `pointer` (needs `observe`) | the agent's `tap_at` verb when the point lands on nothing the tree lists |
 | `state.{capture,restore}` | `state` | `test.setup` and the `session` option |
 | `artifacts.{screenshot,startTrace?,stopTrace?,startVideo?,stopVideo?}` | `artifacts` | Screenshots while pixels are allowed (`app.screenshot()` raises `POLICY_DENIED` after a secret fill); traces when the trace hooks exist; video and `--video` when both `startVideo` and `stopVideo` exist |
 | `app.{url?,allowedOrigins?,environment?,identity?,command?,readyUrl?,services?}` | | declares the app under test: navigation policy, cache and session identity, the app process ([reference](/reference/config#the-app-under-test)) |
@@ -140,10 +141,15 @@ binds.
 
 ### Vision-only surfaces
 
-A surface that offers screenshots and coordinates but no semantic tree
-declares `observe` returning a pixels-only snapshot (`nodes: []` plus
-`pixels`) and acts through agent-side coordinate tools, since `perform` takes
-observation refs it cannot hand out.
+A surface that offers screenshots and coordinates but no semantic tree (a
+desktop shell, a canvas app, a computer-use agent) declares `observe`
+returning a pixels-only snapshot (`nodes: []` plus `pixels`) and `tapAt` for
+the taps: a screen that lists nothing opens with its screenshot attached, the
+model names a point in it with `tap_at`, and the harness hands the point to
+`tapAt` when the tree lists nothing there, so a surface with no refs to hand
+out still gets tapped through the grammar. Bare points replay as recorded on a
+viewport of the same size, and the recorded end state decides whether the
+replay passes on its own; nothing else in the harness changes.
 
 ### State is a credential
 

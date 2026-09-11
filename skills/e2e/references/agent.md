@@ -42,7 +42,6 @@ AI_GATEWAY_API_KEY=... npx --no-install e2e run
   lazily and fails without it.
 - `context` in the config and `agentContext` on a test or group add trusted
   project vocabulary to every prompt.
-- `visionModel` serves the calls that send pixels.
 - The model passed to `createAgent({ model })` is the one model for every
   `agent.*` call, `act` and the judgments alike.
   An agent `model` naming a different model is `INVALID_CONFIG`.
@@ -80,8 +79,15 @@ verdict.
 Options: `params` (the values the instruction refers to; a `Secret` is filled
 by the runner), `timeout` (default the test timeout), `maxSteps` (default 25
 actions), `maxModelCalls` (default 25). Per-call budgets can only lower the
-configured limits. `act` takes no `schema` and no `vision`: structured output
-is `extract({ schema })`, and `vision` belongs to the judgments.
+configured limits. `act` takes no `schema` and no `vision` option: structured
+output is `extract({ schema })`, and pixels reach an `act` step through the
+`screenshot` and `tap_at` tools the agent offers while no secret has been
+filled. `screenshot` attaches the viewport's pixels to the result and turns
+on pixel mode, where every action result carries a fresh screenshot; `tap_at`
+taps a point in the latest screenshot (a canvas shape, a map pin, an image
+region, a control in a system sheet), hit-tested against the tree first so a
+listed control is tapped by id. A screen with nothing to tap by id opens with
+a screenshot already attached.
 
 ## assert, waitFor, extract: one question
 
@@ -158,8 +164,9 @@ every action result after it reports what changed, keyed by node ids that
 stay stable while an element exists, or the whole screen again when most of
 it changed, and is read after the action's effect landed. Never raw HTML,
 cookies, headers, environment
-values, or a `Secret`'s value; password fields arrive masked. Pixels only
-with `vision`, and only while no secret has been filled. Nothing the model
+values, or a `Secret`'s value; password fields arrive masked. Pixels reach a
+model only through `vision` on a judgment or the act loop's `screenshot` and
+pixel mode, masked, and only while no secret has been filled. Nothing the model
 returns runs as code or selectors: the runner validates and authorizes every
 tool call before it executes.
 

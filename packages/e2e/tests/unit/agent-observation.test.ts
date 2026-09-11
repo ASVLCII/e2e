@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Observation, SemanticNode } from '../../src/engine/surface.ts';
-import { observationShape, prepareObservation, settleObservation } from '../../src/agent/observation.ts';
+import { interactiveNodeCount, observationShape, prepareObservation, settleObservation } from '../../src/agent/observation.ts';
 import { createRedactor } from '../../src/internal/redact.ts';
 
 function node(id: string, extra: Partial<SemanticNode> = {}): SemanticNode {
@@ -191,6 +191,17 @@ describe('observationShape', () => {
     );
   });
 
+  it('is shaped by the pixels when a capture carries them, so a canvas that redrew counts as changed', () => {
+    const withPixels = (data: number[]) =>
+      observationShape({
+        text: '#n1 document "Map"',
+        pixels: { data: new Uint8Array(data), mediaType: 'image/png', width: 2, height: 1, scale: 1, maskedRegionCount: 0 },
+      } as unknown as Parameters<typeof observationShape>[0]);
+    expect(withPixels([1, 2, 3])).toBe(withPixels([1, 2, 3]));
+    expect(withPixels([1, 2, 3])).not.toBe(withPixels([1, 2, 4]));
+    expect(withPixels([1, 2, 3])).not.toBe(shapeOf('#n1 document "Map"'));
+  });
+
   it('still notices a state that is about the page', () => {
     expect(shapeOf('#n1 checkbox "Terms" [checked]')).not.toBe(shapeOf('#n1 checkbox "Terms"'));
     expect(shapeOf('#n1 button "Save" [disabled]')).not.toBe(shapeOf('#n1 button "Save"'));
@@ -297,5 +308,17 @@ describe('settleObservation', () => {
     const value = await settleObservation(source.capture, (v) => v, clock, fast);
     expect(value).toBe('b');
     expect(source.calls()).toBe(3);
+  });
+});
+
+describe('interactiveNodeCount', () => {
+  it('counts the listed nodes the model could act on by id', () => {
+    const lines = (...items: string[]) => ({ text: items.join('\n') });
+    expect(
+      interactiveNodeCount(
+        lines('#n1 document "Home"', ' #n2 heading "Welcome"', ' #n3 button "Increment"', ' #n4 status "Counter" text="0"', ' #n5 link "About"', ' #n6 textbox "Email"'),
+      ),
+    ).toBe(3);
+    expect(interactiveNodeCount(lines('#n1 document "Canvas"', ' #n2 heading "Map"', ' #n3 status "Picked"'))).toBe(0);
   });
 });

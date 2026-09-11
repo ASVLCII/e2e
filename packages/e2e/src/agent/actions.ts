@@ -9,7 +9,7 @@
  * summary, a live event line, and a relocation candidate can never drift.
  */
 
-import type { SemanticNode } from '../engine/surface.ts';
+import type { SemanticNode, ViewportPoint } from '../engine/surface.ts';
 import {
   bound,
   MAX_TRACE_DESCRIPTOR_CHARS,
@@ -29,7 +29,19 @@ export type RecordableAction =
   | ({ readonly name: 'press'; readonly node: SemanticNode; readonly key: string } & Placement)
   | ({ readonly name: 'select'; readonly node: SemanticNode; readonly value: string } & Placement)
   | ({ readonly name: 'scroll'; readonly direction: ScrollDirection; readonly node?: SemanticNode } & Placement)
-  | { readonly name: 'navigate'; readonly url: string };
+  | { readonly name: 'navigate'; readonly url: string }
+  /**
+   * A tap on a bare viewport point that no listed control contained, with
+   * the viewport it was placed in and, when one is listed, the node whose
+   * box contained it: the trace records the point's place inside that box
+   * so replay can follow the node when the layout shifts.
+   */
+  | {
+      readonly name: 'tapAt';
+      readonly point: ViewportPoint;
+      readonly viewport: { readonly width: number; readonly height: number };
+      readonly under?: SemanticNode;
+    };
 
 /** Where the node sat when it was acted on: its container's key and its place among identical twins. */
 interface Placement {
@@ -117,7 +129,7 @@ export function describeAction(
   redact: (text: string) => string,
   testIdAttribute: string,
 ): DescribedAction {
-  const node = 'node' in action ? action.node : undefined;
+  const node = 'node' in action ? action.node : action.name === 'tapAt' ? action.under : undefined;
   const within = 'within' in action ? action.within : undefined;
   const position = 'position' in action ? action.position : undefined;
   const described = node === undefined ? undefined : describeTarget(node, redact, testIdAttribute);
@@ -147,6 +159,10 @@ export function describeAction(
         return target === undefined ? `scroll ${action.direction}` : `scroll ${action.direction} on ${where}`;
       case 'navigate':
         return `navigate to ${safe(action.url)}`;
+      case 'tapAt': {
+        const at = `tap the point (${String(action.point.x)}, ${String(action.point.y)})`;
+        return target === undefined ? at : `${at} on ${where}`;
+      }
     }
   })();
   return { target, summary: bound(prose, MAX_TRACE_SUMMARY_CHARS) };

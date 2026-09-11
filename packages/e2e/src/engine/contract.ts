@@ -114,6 +114,12 @@ export interface SemanticNode {
     >
   >;
   readonly attributes?: Readonly<Record<string, string>>;
+  /**
+   * The node's box in the top-level viewport's CSS pixels (`ViewportPoint`
+   * space), for every node, including those inside nested documents: an
+   * engine that measures a child document against its own viewport shifts
+   * the boxes by the boundary element's before reporting them.
+   */
   readonly rect?: {
     readonly x: number;
     readonly y: number;
@@ -142,8 +148,9 @@ export interface SemanticNode {
 }
 
 /**
- * Viewport point in CSS pixels, origin at the top-left of the viewport.
- * Reserved for coordinate-addressed actions; no runner surface consumes it yet.
+ * Viewport point in CSS pixels, origin at the top-left of the viewport: the
+ * space `SemanticNode.rect` is in, and the space `Engine.tapAt` dispatches in.
+ * A point read off `ObservationPixels` is divided by its `scale` to get here.
  */
 export interface ViewportPoint {
   readonly x: number;

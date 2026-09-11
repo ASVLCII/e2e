@@ -252,12 +252,11 @@ screen?: {
 agents?: Record<string, StepExecutor | {
   executor?: StepExecutor;
   model?: ModelInstance;
-  visionModel?: ModelInstance;
   maxSteps?: number;
   maxModelCalls?: number;
   maxObservationBytes?: number;
   context?: string;
-  vision?: boolean | 'fallback' | 'only';
+  vision?: boolean | 'only';
   providerOptions?: Record<string, Record<string, unknown>>;
 }>;
 ```
@@ -295,12 +294,11 @@ Each agent takes three shapes: an options object, an options object with an
 | --- | --- | --- | --- | --- |
 | `executor` | `StepExecutor` | the built-in agent | `createAgent(...)` or any `{ name, runStep(context) }` | The brain `agent.act()` dispatches to. Never crosses a process boundary; workers rebuild it from the config module. See [Custom executors](/executors) |
 | `model` | `ModelInstance` | unset | an AI SDK model instance | Unset means acquiring `agent` fails with `MODEL_UNAVAILABLE`; a string is `INVALID_CONFIG` naming the constructor to write. Naming a model that differs from `createAgent({ model })` is `INVALID_CONFIG` |
-| `visionModel` | `ModelInstance` | the agent's `model` | an AI SDK model instance | Model used by calls with `vision` |
 | `maxSteps` | `number` | `25` | integer 1-100 | Committed actions per agent call |
 | `maxModelCalls` | `number` | `25` | integer 1-100 | Model requests per agent call |
 | `maxObservationBytes` | `number` | `262144` | integer 1024-16777216 | Observation payload ceiling for `act` turns and judgment calls alike |
 | `context` | `string` | unset | at most `limits.maxAgentContextBytes` UTF-8 bytes | Trusted project context prepended to agent prompts |
-| `vision` | `boolean \| 'fallback' \| 'only'` | `false` | | Project-wide default for the per-call `vision` option; see [Vision](/reference/agent#vision) |
+| `vision` | `boolean \| 'only'` | `false` | | Project-wide default for the per-call `vision` option; `'only'` sends pixels instead of the tree. See [Vision](/reference/agent#vision) |
 | `providerOptions` | `Record<string, Record<string, unknown>>` | unset | object keyed by provider name | AI SDK provider options sent with every model call, e.g. `{ openai: { reasoningEffort: 'low' } }`. `createAgent({ providerOptions })` overrides it for `act` |
 
 Judgments (`assert`, `waitFor`, `extract`) allow 8192 output tokens per call
@@ -435,7 +433,6 @@ A pair for a name absent from `credentials` is ignored.
 | --- | --- |
 | Base URL | the engine's declared `url`, else `APP_URL_REQUIRED` at the first navigation. The runner reads no `APP_URL`; the scaffolded config reads it itself |
 | Model | the model passed to `createAgent({ model })`, then `agents.<name>.model`, then `MODEL_UNAVAILABLE` at `agent` acquisition |
-| Vision model | the agent's `visionModel`, then its `model` |
 | Model credential | the provider package's own variable or the key passed at construction, read by the provider on the first model call |
 | Credential username and password | the `E2E_USER_*` variable, then the config value |
 

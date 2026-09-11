@@ -12,8 +12,10 @@ import type { ToolExecutionOptions, ToolSet } from 'ai';
 import type { SdkLanguageModel } from '../config/agent.ts';
 import { AgentError } from './error.ts';
 import type { ReplayedPrefix, StepExecutor, StepExecutorContext } from './executor.ts';
-import { createGrammarTools } from './primitives.ts';
-import { compactScreenHistory, ScreenPresenter } from './screen-update.ts';
+import { interactiveNodeCount } from './observation.ts';
+import { createGrammarTools, GRAMMAR_TOOL_NAMES } from './primitives.ts';
+import { ScreenPresenter } from './screen-update.ts';
+import { compactScreenHistory, compactScreenshotHistory } from './transcript-compaction.ts';
 import { createToolLoopExecutor, type ToolLoopHelpers } from './tool-loop.ts';
 import type { DefinedTool } from './tool.ts';
 import { isDefinedTool, toolAppliesTo, withToolContext } from './tool.ts';
@@ -26,7 +28,8 @@ Rules:
 - The screen is a tree of nodes with stable ids like "n42": a node keeps its id for as long as it exists, across every screen and change in this conversation. The first screen is sent whole. Every action result and every observe then reports what changed since the screen you last received, one line per node: "added" (a new node), "changed" (with what it read before), or "removed" (the node is gone; never target it again); a node not listed as removed is still there under the id you have. When most of the screen changed, the result sends the whole new screen instead, headed "Current screen", and it replaces what you had: target only the ids it lists. Never invent ids.
 - Every action result already waited for the effect and contains the changes, so do not call observe after an action. Call observe only after waiting for something the last result showed in progress.
 - You may issue several actions in one turn when each targets a node already on screen and no earlier action in the turn changes what a later one targets: fill several fields, then press the submit button as the last action. Actions run in order; each result reports its own changes. Anything that changes the page (a tap on a link or button, a navigation, a submit) should be the last action of its turn.
-- If the target is not on screen, bring it on screen with the tools you have (scroll, navigate) or conclude. Scrolling may repeat (times) or be issued several times in one turn to move far; each result reports what came into the tree.`;
+- If the target is not on screen, bring it on screen with the tools you have (scroll, navigate) or conclude. Scrolling may repeat (times) or be issued several times in one turn to move far; each result reports what came into the tree.
+- Pixel tools, when offered: screenshot attaches the viewport's pixels when the tree lacks what you need (a shape on a canvas, a pin on a map, a region of an image, a control inside a system sheet) or contradicts what you expect; once you have one, every action result carries a fresh screenshot so you can see what the action did. tap_at(x, y) taps a point in the latest screenshot's pixel coordinates; a listed control under the point is tapped by its id. Tap by id whenever the screen lists the target, and take a screenshot rather than guessing what is drawn.`;
 
 /** One presenter per dispatched step, shared by the opening prompt and the tools that follow it. */
 const presenters = new WeakMap<StepExecutorContext, ScreenPresenter>();
@@ -90,13 +93,21 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
     system,
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.providerOptions === undefined ? {} : { providerOptions: options.providerOptions }),
-    prepareMessages: (messages) => compactScreenHistory(messages),
+    prepareMessages: (messages) => compactScreenshotHistory(compactScreenHistory(messages)),
     tools: (context, helpers) => ({
       ...guardedTools(helpers, projectTools(context, userTools)),
       ...createGrammarTools(context, { guard: helpers.guard, screen: presenterFor(context) }),
     }),
     buildPrompt: async (context) => {
-      const observation = await context.observe();
+      let observation = await context.observe();
+      // With no listed interactive node at all, the opening prompt carries a
+      // screenshot: the tree describes a canvas, a game, or a semantics-free
+      // native screen too poorly to act on, and the model would only spend a
+      // turn asking for one. One listed control is enough to leave the
+      // decision to the model; a small page is not a blind one.
+      if (!context.pixelsTainted && interactiveNodeCount(observation) === 0) {
+        observation = await context.observe({ pixels: true });
+      }
       const parts = [
         context.step.kind === 'assert'
           ? `Judge whether this assertion holds; do not change application state: ${context.step.instruction}`
@@ -111,8 +122,17 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
       if (context.ledger !== '') {
         parts.push(`Previously completed steps:\n${context.ledger}`);
       }
-      parts.push(presenterFor(context).initial(observation));
-      return parts.join('\n\n');
+      const opening = presenterFor(context).open(observation);
+      if (typeof opening === 'string') return [...parts, opening].join('\n\n');
+      return [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: [...parts, opening.text].join('\n\n') },
+            { type: 'file', data: opening.pixels.data, mediaType: opening.pixels.mediaType },
+          ],
+        },
+      ];
     },
   });
   const agent: DefaultAgent = { ...executor, options: { ...options, tools: userTools }, tools: userTools };
@@ -159,8 +179,8 @@ function validateUserTools(
         `tool "${name}" was not created with defineTool; undeclared semantics are not trusted`,
       );
     }
-    if (name === 'complete_step') {
-      throw new AgentError('POLICY_DENIED', 'the complete_step tool name is reserved');
+    if (name === 'complete_step' || GRAMMAR_TOOL_NAMES.has(name)) {
+      throw new AgentError('POLICY_DENIED', `the ${name} tool name is reserved for the agent's own tools`);
     }
     if (defined.tool.execute === undefined) {
       throw new AgentError('POLICY_DENIED', `tool "${name}" has no execute function`);

@@ -17,7 +17,7 @@
  * matter whose brain runs the step.
  */
 
-import type { ObservationPixels, SemanticNode } from '../engine/surface.ts';
+import type { ObservationPixels, SemanticNode, ViewportPoint } from '../engine/surface.ts';
 import type { VisionDegradation } from '../run/steps.ts';
 import type {
   AgentErrorCode,
@@ -165,6 +165,26 @@ export interface ExecutorActions {
   scroll(direction: ScrollDirection, target?: ExecutorTarget): Promise<void>;
   /** Navigates within the configured allowed origins. */
   navigate(url: string): Promise<void>;
+  /**
+   * Taps one viewport point, in the CSS pixels of the newest observation
+   * (`SemanticNode.rect` space; a point read off `pixels` is divided by its
+   * `scale`). The point is routed onto the tree: a listed, enabled control
+   * whose box contains it is tapped by its id, exactly like `tap`, with a
+   * replayable descriptor; a point on nothing listed goes to the engine as a
+   * bare point when it has the `pointer` capability, recorded as a trace gap.
+   * Fails when the point is on nothing listed and the engine taps nodes only.
+   */
+  tapAt(point: ViewportPoint): Promise<PointTapResult>;
+}
+
+/** What one `tapAt` did, for the executor to relay to its model. */
+export interface PointTapResult {
+  /** Where the tap landed, in the newest observation's CSS pixels. */
+  readonly point: ViewportPoint;
+  /** The listed control the point resolved to; absent when a bare point was tapped. */
+  readonly target?: ExecutorTarget;
+  /** Prose for a model: what was tapped, or what sits under a bare point. */
+  readonly summary: string;
 }
 
 /** Usage detail of one executor-made model call, all fields optional. */
@@ -220,6 +240,8 @@ export type ReplayHandOffReason =
   | 'gap'
   | 'target-not-found'
   | 'target-ambiguous'
+  /** A recorded bare-point tap met a viewport of another size; the point would land elsewhere. */
+  | 'viewport-changed'
   | 'action-failed'
   | 'action-uncertain'
   | 'end-mismatch';
@@ -301,6 +323,13 @@ export interface StepExecutorContext {
    */
   observe(options?: ExecutorObserveOptions): Promise<ExecutorObservation>;
   readonly actions: ExecutorActions;
+  /**
+   * True once a secret was filled in this attempt: `observe({ pixels: true })`
+   * withholds pixels for the rest of it. An executor reads it when assembling
+   * its vocabulary, to leave screenshot verbs out rather than offer tools
+   * that can only decline.
+   */
+  readonly pixelsTainted: boolean;
   /**
    * Attaches the executor's model transcript to the step. Persisted as a
    * `log` artifact when the run collects debug detail (`--debug`); a no-op

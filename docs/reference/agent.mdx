@@ -83,6 +83,54 @@ spent, and `cache`: how the [trace cache](/cache) took part
 (`self-finalized`, `agent-concluded`, or `missed` with a `reason`; absent when
 caching is off).
 
+### Pixel tools: screenshot and tap_at
+
+`act` takes no `vision` option. Pixels reach an `act` step through two tools
+the built-in agent offers while pixels can leave the runner. The act model
+itself receives the image: no separate vision model, no extra model call, and
+nothing lost in a description.
+
+| Tool | What it does |
+| --- | --- |
+| `screenshot()` | Attaches a masked screenshot of the viewport to the tool result, with the changes since the screen the model holds. From then on the step is in pixel mode: every action result carries a fresh screenshot, so the model sees what each action did. |
+| `tap_at({ x, y })` | Taps a point given in the latest screenshot's pixel coordinates. The harness scales the point into the observation's CSS pixels and hit-tests it against the tree: on an engine with `perform`, a listed control under it is tapped by its id, exactly like `tap`, with a replayable descriptor; a point on nothing listed, or any point on an engine that taps by point only, is tapped as a bare point through the engine's `tapAt`. The result names what was tapped or what sits under the point, and carries a fresh screenshot. |
+
+While the step is showing pixels, the wait after an action watches the
+pixels too: a tap that redraws a canvas is read as soon as the redraw lands,
+instead of waiting out the change window on a tree that never moves.
+A screen that lists nothing to act on by id (a canvas, a game, a
+semantics-free native screen) opens with a screenshot already attached, so
+the model never spends a turn discovering that it needs one; any screen with
+a listed control opens tree-only and the model asks when the tree falls
+short. Older screenshots are elided from the conversation in batches, keeping
+the newest two, so a long flow in pixel mode carries a bounded number of
+images, and each is resampled to a long side of at most 768 pixels before it
+goes to the model: on a drawn keypad and a drawn wizard that size kept every
+run passing at a third less cost than the full capture, and 512 did not.
+Coordinates the model returns are in that image; the harness scales them
+back. Both tools are offered while no secret has been filled when the step
+opens; a secret filled during the step keeps them listed but withholds every
+later screenshot (`PIXEL_TAINTED`), and each result says so; `tap_at`
+needs an engine that can tap by node (`perform`) or by point (`tapAt`, the
+`pointer` capability, which the Playwright and agent-device engines declare),
+and on an engine without `tapAt` the point must land on a listed control. A
+bare-point tap replays from the [trace cache](/cache) the way a
+coordinate-driven tool does: the same point on a viewport of the recorded
+size, or, when a listed node contained the point, the same place inside that
+node's live box. A viewport of another size or a node that cannot be re-found
+hands the step to the model, and the recorded end state still has to return
+before a replay passes on its own. A step that sent pixels records
+`visionInput: true` and `metrics.pixelBytes`.
+
+The pixel path asks the act model to ground a point in an image, and models
+differ widely there. Measured on a drawn ten-key keypad and an eight-screen
+drawn wizard: the gpt-5.6 luna family and Gemini 3.8 Flash completed both;
+Claude Sonnet 5 completed the wizard's large shapes but never the keypad's
+small keys; DeepSeek and GLM flash models gave up, and their providers bill a
+1280 by 720 screenshot at tens of thousands of input tokens against a few
+hundred on OpenAI. Pin an act model that grounds well when your flows leave
+the tree.
+
 Throws `ACTION_FAILED` for a failed verdict with no more specific code; a
 blocked code (`AUTH_CREDENTIAL_UNAVAILABLE`, `ENVIRONMENT_UNAVAILABLE`,
 `SEED_DATA_MISSING`, `TEST_SETUP_FAILED`, `AUTOMATION_UNSUPPORTED`) when the
@@ -178,18 +226,18 @@ const summary = await agent.extract('the workspace name and plan', {
 
 `assert`, `waitFor`, and `extract` accept `vision`. It controls what evidence
 the model is shown. Sending pixels needs a model that accepts images; images
-are billed as input tokens.
+are billed as input tokens. `act` has no such option; its pixel path is the
+`screenshot` and `tap_at` tools above.
 
 | Mode | What the model sees | Cost |
 | --- | --- | --- |
 | `false` | the tree | no image tokens |
 | `true` | the tree and a masked screenshot, every call | image tokens on every call |
 | `'only'` | the screenshot, and not the tree | image tokens, minus the observation bytes |
-| `'fallback'` | the tree; behaves like `false` for the judgments | no image tokens |
 
 Set `vision` on the agent in config to make a mode the project default; a
-per-call value wins. Calls that send pixels use the agent's `visionModel`
-when set, and its `model` otherwise, and keep it for the whole invocation.
+per-call value wins. Pixels go to the agent's `model`, the same one the act
+loop shows its screenshots to.
 
 <Warning>
 **Use `'only'` for questions about what the page presents**
@@ -223,14 +271,10 @@ the engine masked fewer regions than the secure fields it observed
 cases rather than answer a question about pixels from the tree. A step that
 sent pixels records `visionInput: true` and `metrics.pixelBytes`.
 
-`'fallback'` exists for calls that could discover mid-flight that the tree
-was not enough. A judgment never does, so the three judgments run tree-only
-under it.
-
 ## Types
 
 ```ts
-export type VisionMode = boolean | 'fallback' | 'only';
+export type VisionMode = boolean | 'only';
 
 export interface VisionOption {
   vision?: VisionMode;

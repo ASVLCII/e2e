@@ -4,7 +4,8 @@ import type { Observation, SemanticNode } from '../engine/surface.ts';
 import { collapseText } from '../internal/text.ts';
 import { sleep } from '../internal/time.ts';
 import type { VisionDegradation } from '../run/steps.ts';
-import type { ExecutorNode, ExecutorPixels } from './executor.ts';
+import type { ExecutorNode, ExecutorObservation, ExecutorPixels } from './executor.ts';
+import { sizeForModel } from './pixels.ts';
 
 /** Appended when the node walk stopped at the observation byte budget. */
 const TRUNCATION_MARKER = '[observation truncated at the resolved observation byte limit]';
@@ -131,7 +132,48 @@ export function pixelsForModel(
   if (observation.pixels === undefined) {
     return { withheld: observation.pixelsWithheld ?? 'UNSUPPORTED_CAPABILITY' };
   }
-  return { pixels: observation.pixels };
+  // Sized here, once per observation a model receives, not per capture: the
+  // settle loop captures several times per action and only digests the bytes.
+  return { pixels: sizeForModel(observation.pixels) };
+}
+
+/**
+ * Roles the model can act on by id: the controls a hit-tested point resolves
+ * to, and the lines that mark a screen as one the tree can drive at all.
+ */
+export const INTERACTIVE_ROLES: ReadonlySet<string> = new Set([
+  'button',
+  'link',
+  'textbox',
+  'searchbox',
+  'combobox',
+  'checkbox',
+  'radio',
+  'switch',
+  'tab',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'option',
+  'slider',
+  'spinbutton',
+  'treeitem',
+]);
+
+/**
+ * How many listed nodes the model could act on by id, read off the rendered
+ * lines. A screen with none is one the tree cannot describe (a canvas, a
+ * game, a native surface the platform exposes no semantics for), and the
+ * model needs pixels from the first turn rather than a round trip to discover
+ * that. Lives next to `formatNode` so the line grammar keeps one owner.
+ */
+export function interactiveNodeCount(observation: Pick<ExecutorObservation, 'text'>): number {
+  let count = 0;
+  for (const line of observation.text.split('\n')) {
+    const role = /^\s*#\S+ (\S+)/.exec(line)?.[1];
+    if (role !== undefined && INTERACTIVE_ROLES.has(role)) count += 1;
+  }
+  return count;
 }
 
 /**
@@ -222,13 +264,29 @@ function formatNode(
  * Lives next to `formatNode` so the line grammar keeps one owner.
  */
 export function observationShape(observation: AgentObservation): string {
-  return observation.text
+  const text = observation.text
     .replaceAll(/(^|\n)(\s*)#\S+/g, '$1$2')
     .replaceAll(/ \[([^\]]*)\]/g, (_match, states: string) => {
       const stable = states.split(' ').filter((state) => state !== 'focused');
       return stable.length === 0 ? '' : ` [${stable.join(' ')}]`;
     })
     .replaceAll(CLOCK_PATTERN, '<time>');
+  // A capture taken with pixels is shaped by them too: on a canvas, a map, or
+  // a game the tree never moves, and without the pixels every action would
+  // wait out the whole change window and then be reported as having done
+  // nothing. A digest keeps the shape a string and the comparison cheap.
+  const pixels = observation.pixels;
+  return pixels === undefined ? text : `${text}\n<pixels ${digest(pixels.data)}>`;
+}
+
+/** FNV-1a over the image bytes: fast, and equal frames encode to equal bytes. */
+function digest(bytes: Uint8Array): string {
+  let hash = 0x811c9dc5;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16);
 }
 
 /** `12:05`, `0:59`, `23:59:59`: a value that changes on its own once a second or minute. */

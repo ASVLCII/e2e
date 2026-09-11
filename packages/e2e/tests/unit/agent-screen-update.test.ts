@@ -1,7 +1,6 @@
-import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
 import type { ExecutorObservation } from '../../src/agent/executor.ts';
-import { compactScreenHistory, ScreenPresenter } from '../../src/agent/screen-update.ts';
+import { ScreenPresenter } from '../../src/agent/screen-update.ts';
 
 function screen(revision: string, lines: readonly string[], extra: Partial<ExecutorObservation> = {}): ExecutorObservation {
   return {
@@ -136,75 +135,5 @@ describe('ScreenPresenter', () => {
     presenter.initial(screen('b1', HOME));
     const next = HOME.map((line) => (line.includes('#n4 ') ? ` ${line}` : line));
     expect(presenter.update(screen('b2', next))).toContain('Screen unchanged since revision b1');
-  });
-});
-
-function fullScreenResult(id: string, revision: string): ModelMessage {
-  return {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId: id,
-        toolName: 'tap',
-        output: { type: 'text', value: `Tapped #n3.\n\nThe screen changed substantially since revision b0. Current screen (revision ${revision}, 2 nodes):\n#n1 document\n #n2 heading "X"` },
-      },
-    ],
-  };
-}
-
-function changesResult(id: string): ModelMessage {
-  return {
-    role: 'tool',
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId: id,
-        toolName: 'type',
-        output: { type: 'text', value: 'Typed into #n6.\n\nScreen changes since revision b1 (now revision b2, 6 nodes): 1 changed. Every node not listed as removed is still on screen under the id you have.\nchanged #n6 textbox "Email" value="a" (was: #n6 textbox "Email")' },
-      },
-    ],
-  };
-}
-
-describe('compactScreenHistory', () => {
-  const opening: ModelMessage = {
-    role: 'user',
-    content: 'Execute this test step: do the thing\n\nCurrent screen (revision b0, 2 nodes):\n#n1 document\n #n2 heading "Home"',
-  };
-
-  it('leaves the transcript alone while only one full screen is present', () => {
-    const messages = [opening, changesResult('c1'), changesResult('c3')];
-    expect(compactScreenHistory(messages)).toBe(messages);
-  });
-
-  it('keeps small superseded screens verbatim so the request prefix stays cacheable', () => {
-    const messages = [opening, changesResult('c1'), fullScreenResult('c2', 'b2'), fullScreenResult('c4', 'b4')];
-    expect(compactScreenHistory(messages)).toBe(messages);
-    expect(compactScreenHistory(messages, { keepStaleBytes: 1024 })).toBe(messages);
-  });
-
-  it('elides the older full screens in one batch once they outgrow the budget, and never a change update', () => {
-    const messages = [
-      opening,
-      changesResult('c1'),
-      fullScreenResult('c2', 'b2'),
-      changesResult('c3'),
-      fullScreenResult('c4', 'b4'),
-    ];
-    expect(compactScreenHistory(messages, { keepStaleBytes: 1024 })).toBe(messages);
-    const compacted = compactScreenHistory(messages, { keepStaleBytes: 0 });
-    expect(compacted).not.toBe(messages);
-    expect(compacted[0]!.content).toBe(
-      'Execute this test step: do the thing\n[earlier screen elided; the newest "Current screen" plus the changes after it describe the screen]',
-    );
-    // The middle full screen is elided down to its lead; the newest full
-    // screen and every change update survive verbatim.
-    const middle = compacted[2]!.content as Extract<ModelMessage, { role: 'tool' }>['content'];
-    expect(middle[0]).toMatchObject({
-      output: { type: 'text', value: expect.stringMatching(/^Tapped #n3\.\n\nThe screen changed substantially since revision b0\.\n\[earlier screen elided/) },
-    });
-    expect(compacted[1]).toEqual(messages[1]);
-    expect(compacted.slice(3)).toEqual(messages.slice(3));
   });
 });

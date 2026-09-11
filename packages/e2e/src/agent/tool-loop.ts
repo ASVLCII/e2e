@@ -20,7 +20,8 @@ import { credentialHint, isAbort, TRANSPORT_RETRIES } from './model/sdk.ts';
 import { isContextOverflow } from './model/overflow.ts';
 import { isForcedToolChoiceRejected } from './model/tool-choice.ts';
 import { promptCacheHints, type CacheModelRef, type PromptCacheHints } from './model/prompt-cache.ts';
-import { compactScreenHistory } from './screen-update.ts';
+import { isScreenOutput } from './screen-update.ts';
+import { compactScreenHistory } from './transcript-compaction.ts';
 import { AgentError, isAgentError } from './error.ts';
 import {
   RUNTIME_CODES,
@@ -560,7 +561,7 @@ class LoopRun {
       lines.push(`tool call: ${call.toolName}(${truncate(safeJson(call.input), 400)})`);
     }
     for (const result of step.toolResults) {
-      lines.push(`tool result [${result.toolName}]: ${truncate(safeJson(result.output), 600)}`);
+      lines.push(`tool result [${result.toolName}]: ${truncate(describeOutput(result.output), 600)}`);
     }
     this.transcript.push(lines.join('\n'));
   }
@@ -628,6 +629,12 @@ function textChars(messages: readonly ModelMessage[]): number {
 
 function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…[truncated]`;
+}
+
+/** A tool result for the transcript: a screenshot-carrying result reads as its text plus the image size, never the bytes. */
+function describeOutput(output: unknown): string {
+  if (isScreenOutput(output)) return `${output.text}\n[screenshot, ${String(output.pixels.data.byteLength)} bytes]`;
+  return safeJson(output);
 }
 
 function safeJson(value: unknown): string {
