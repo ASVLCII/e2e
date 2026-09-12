@@ -837,7 +837,7 @@ export interface AgentConfig {
 }
 
 /** The reporters the runner ships, named by id; each is a `Reporter` on the same contract. */
-export type BuiltinReporter = 'list' | 'json' | 'junit';
+export type BuiltinReporter = 'list' | 'json' | 'junit' | 'markdown';
 
 /**
  * The run's report document, the one `.e2e/report.json` holds. Its
@@ -866,8 +866,8 @@ export interface FinishedRun {
 export type ReporterSummary = readonly { readonly label: string; readonly text: string }[];
 
 /**
- * A reporter in `reporters`, the contract the built-in `list`, `json`, and
- * `junit` reporters implement too. `onEvent` sees every run event as it
+ * A reporter in `reporters`, the contract the built-in `list`, `json`,
+ * `junit`, and `markdown` reporters implement too. `onEvent` sees every run event as it
  * happens, exactly what the `list` reporter renders, and must not block: a
  * throw quarantines it for the rest of the run. Event types are added over
  * time; a reporter handles the ones it knows and ignores the rest. `onRunFinished` runs once
@@ -903,7 +903,8 @@ export interface E2EConfig {
   artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
   /**
    * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
-   * `json` prints the report and excludes `list`; a `Reporter` object runs
+   * `markdown` writes `.e2e/summary.md`, `json` prints the report and
+   * excludes `list`; a `Reporter` object runs
    * beside them and `--reporter` never removes it.
    */
   reporters?: readonly (BuiltinReporter | Reporter)[];
