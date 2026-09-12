@@ -1,14 +1,11 @@
 /**
  * Secret and credential declarations: the public types a test or config
  * spells, and the rules that read them (the env-variable name a declaration
- * answers to, what counts as a value, the one shape a `secrets` entry
- * normalizes to). `types.ts` re-exports the types; `resolve.ts` and the
- * handle module apply the rules.
+ * answers to, what counts as a value). `types.ts` re-exports the types;
+ * `resolve.ts` and the handle module apply the rules.
  */
 
 import type { credentialBrand, secretBrand } from '../internal/brands.ts';
-import { ConfigurationError } from '../internal/errors.ts';
-import { didYouMean } from '../internal/suggest.ts';
 
 /**
  * What a secret is for, which decides where it may be filled: a `password`
@@ -60,25 +57,10 @@ export type SecretProvider = () => string | Promise<string>;
 export interface CredentialConfig {
   username: string;
   password: string | SecretProvider;
-  allowedOrigins?: readonly string[];
 }
 
-/** A `config.secrets` entry in its one full shape; a bare value or provider is shorthand for `{ value }`. */
-export interface SecretDeclaration {
-  value: string | SecretProvider;
-  allowedOrigins?: readonly string[];
-}
-
-/**
- * One `config.secrets` entry: the value itself (or a provider computing it at
- * fill time), or an object narrowing the origins the secret may be filled on.
- */
-export type SecretConfig = string | SecretProvider | SecretDeclaration;
-
-/** Every `SecretConfig` as the full `{ value, allowedOrigins? }` shape. */
-export function normalizeSecretConfig(entry: SecretConfig): SecretDeclaration {
-  return typeof entry === 'object' ? entry : { value: entry };
-}
+/** One `config.secrets` entry: the value itself, or a provider computing it at fill time. */
+export type SecretConfig = string | SecretProvider;
 
 /** A non-empty static value or a provider function; anything else is the caller's error to name. */
 export function isSecretValue(value: unknown): value is string | SecretProvider {
@@ -90,61 +72,3 @@ export function envName(prefix: 'E2E_USER' | 'E2E_SECRET', name: string): string
   return `${prefix}_${name.toUpperCase().replaceAll(/[^A-Z0-9]/g, '_')}`;
 }
 
-const SECRET_DECLARATION_KEYS = new Set(['value', 'allowedOrigins']);
-
-/**
- * Validates the object form of a `secrets` entry the way config resolution
- * validates every other block, so a mistake fails the run at load rather than
- * at the first fill: no unknown keys, and `allowedOrigins` a list of
- * serialized origins if present. The value itself is checked by the caller,
- * after the environment override.
- */
-export function validateSecretDeclaration(where: string, declared: SecretDeclaration): void {
-  for (const key of Object.keys(declared)) {
-    if (!SECRET_DECLARATION_KEYS.has(key)) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `unknown ${where} key "${key}"${didYouMean(key, [...SECRET_DECLARATION_KEYS])}`,
-      );
-    }
-  }
-  validateAllowedOrigins(where, declared.allowedOrigins);
-}
-
-/** `allowedOrigins` on a credential or a secret: absent, or a list of serialized origins. */
-export function validateAllowedOrigins(where: string, origins: unknown): void {
-  if (origins === undefined) return;
-  if (!Array.isArray(origins)) {
-    throw new ConfigurationError('INVALID_CONFIG', `${where} allowedOrigins must be an array`);
-  }
-  for (const origin of origins) {
-    let parsed: URL | undefined;
-    try {
-      parsed = typeof origin === 'string' ? new URL(origin) : undefined;
-    } catch {
-      parsed = undefined;
-    }
-    if (parsed === undefined || parsed.origin !== origin) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `${where} allowedOrigins must hold serialized origins such as https://auth.example.com, got ${JSON.stringify(origin)}`,
-      );
-    }
-  }
-}
-
-/**
- * Whether a secret may be filled on `origin`: the target must allow it, and
- * the secret's own list, when declared, may only narrow that. One rule for
- * the agent's `type_secret` and a test's `locator.fill`.
- */
-export function secretOriginAllowed(
-  origin: string,
-  appAllowedOrigins: readonly string[],
-  secret: { readonly allowedOrigins: readonly string[] | undefined },
-): boolean {
-  return (
-    appAllowedOrigins.includes(origin) &&
-    (secret.allowedOrigins === undefined || secret.allowedOrigins.includes(origin))
-  );
-}

@@ -123,11 +123,11 @@ describe('generic secrets', () => {
     }
   });
 
-  it('fills a secret on a target without an origin policy, such as a device whose URL is only a cache anchor', async () => {
+  it('fills a secret on a target without a site, such as a device whose URL is only a cache anchor', async () => {
     let filled: string | undefined;
     const engine = defineEngine({
       name: 'fake', version: '1', spiVersion: 1,
-      app: { allowedOrigins: [] },
+      app: {},
       url: async () => 'app://device/com.example.app/Sign%20In',
       observe: async () => ({ nodes: [] }),
       locate: async () => [{ ref: { id: 'key', revision: '' }, role: 'textbox', name: 'API key' }],
@@ -144,30 +144,24 @@ describe('generic secrets', () => {
   });
 
   it.each([
-    ['the app origin', 'https://app.test/checkout', true],
-    ['a foreign origin', 'https://evil.test/collect', false],
-    ['an origin outside the secret\'s own list', 'https://other.test/', false],
-  ])('a deterministic fill runs the origin rule: %s', async (_label, currentUrl, allowed) => {
+    ['the app origin', 'https://app.test/checkout'],
+    ['another host on the app\'s site', 'https://auth.app.test/login'],
+    ['a third-party sign-in page', 'https://accounts.idp.test/'],
+  ])('a deterministic fill is not gated by origin: %s', async (_label, currentUrl) => {
     let filled: string | undefined;
     const engine = defineEngine({
       name: 'fake', version: '1', spiVersion: 1,
-      app: { url: 'https://app.test', allowedOrigins: ['https://app.test', 'https://other.test'] },
+      app: { url: 'https://app.test' },
       url: async () => currentUrl,
       observe: async () => ({ nodes: [] }),
       locate: async () => [{ ref: { id: 'key', revision: '' }, role: 'textbox', name: 'API key' }],
       perform: async (_ref, action) => { if (action.kind === 'fill') filled = action.value; },
     });
-    const { fixtures, config } = runtime(engine, { secrets: { key: { value: 'sk_live_1', allowedOrigins: ['https://app.test'] } } });
+    const { fixtures, config } = runtime(engine, { secrets: { key: 'sk_live_1' } });
     setSecretRegistry(config);
     try {
-      const fill = fixtures.screen.getByLabel('API key').fill(secrets.get('key'));
-      if (allowed) {
-        await fill;
-        expect(filled).toBe('sk_live_1');
-      } else {
-        await expect(fill).rejects.toMatchObject({ code: 'POLICY_DENIED' });
-        expect(filled).toBeUndefined();
-      }
+      await fixtures.screen.getByLabel('API key').fill(secrets.get('key'));
+      expect(filled).toBe('sk_live_1');
     } finally {
       setSecretRegistry(undefined);
     }

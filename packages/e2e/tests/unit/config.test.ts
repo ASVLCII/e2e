@@ -83,7 +83,7 @@ describe('resolveConfig', () => {
   it('resolves the empty app for a target without an engine, or whose engine declares none', () => {
     expect(resolve({}).targets[0]!.app).toEqual({
       base: undefined,
-      allowedOrigins: [],
+      site: undefined,
       environment: 'test',
       identity: undefined,
       command: undefined,
@@ -296,16 +296,10 @@ describe('resolveConfig', () => {
     expect(() => fakeEngine({ allowProduction: true } as never)).toThrow(/app has unknown key "allowProduction"/);
   });
 
-  it('defaults allowedOrigins to the exact base origin, or to none without a URL', () => {
-    expect(resolveApp({ url: 'http://localhost:3000/app' }).allowedOrigins).toEqual(['http://localhost:3000']);
-    expect(resolveApp().allowedOrigins).toEqual([]);
-    expect(resolveApp({ allowedOrigins: ['https://api.test'] }).allowedOrigins).toEqual(['https://api.test']);
-  });
-
-  it('rejects non-origin allowedOrigins entries', () => {
-    expect(() => resolveApp({ url: 'http://localhost:3000', allowedOrigins: ['http://x.test/path'] })).toThrow(
-      /serialized origin/,
-    );
+  it('derives the site from the base URL, or none without one', () => {
+    expect(resolveApp({ url: 'http://localhost:3000/app' }).site).toBe('localhost');
+    expect(resolveApp({ url: 'https://app.staging.example.com' }).site).toBe('example.com');
+    expect(resolveApp().site).toBeUndefined();
   });
 
   it('rejects json combined with list reporters', () => {
@@ -410,42 +404,26 @@ describe('resolveConfig', () => {
         secrets: {
           'stripe-key': 'sk_test_123',
           totp: provider,
-          scoped: { value: 'v', allowedOrigins: ['https://auth.example.test'] },
           rotated: 'stale',
         },
       },
       { ...BASE_ENV, E2E_SECRET_ROTATED: 'fresh-from-env' } as NodeJS.ProcessEnv,
     );
-    expect(config.secrets.get('stripe-key')).toEqual({ name: 'stripe-key', purpose: 'generic-secret', value: 'sk_test_123', allowedOrigins: undefined });
+    expect(config.secrets.get('stripe-key')).toEqual({ name: 'stripe-key', purpose: 'generic-secret', value: 'sk_test_123' });
     expect(config.secrets.get('totp')?.value).toBe(provider);
-    expect(config.secrets.get('scoped')?.allowedOrigins).toEqual(['https://auth.example.test']);
     expect(config.secrets.get('rotated')?.value).toBe('fresh-from-env');
   });
 
   it('rejects an empty or non-string secret and a secret sharing a credential name', () => {
     expect(() => resolve({ secrets: { key: '' } })).toThrow(/secret "key" must be a non-empty string/);
     expect(() => resolve({ secrets: { key: 42 as never } })).toThrow(/secret "key" must be a non-empty string/);
-    expect(() => resolve({ secrets: { key: { value: '' } } })).toThrow(/secret "key" must be a non-empty string/);
+    expect(() => resolve({ secrets: { key: { value: 'v' } as never } })).toThrow(/secret "key" must be a non-empty string/);
     expect(() => resolve({ secrets: { key: 'v' } }, { ...BASE_ENV, E2E_SECRET_KEY: '' } as NodeJS.ProcessEnv)).toThrow(/secret "key" must be/);
     expect(() =>
       resolve({ credentials: { admin: { username: 'u', password: 'p' } }, secrets: { admin: 'v' } }),
     ).toThrow(/secret "admin" is also a credential/);
   });
 
-  it('rejects malformed allowedOrigins and unknown keys on a secret or credential at load, not at fill', () => {
-    expect(() => resolve({ secrets: { key: { value: 'v', allowedOrigins: 42 as never } } })).toThrow(
-      /secret "key" allowedOrigins must be an array/,
-    );
-    expect(() => resolve({ secrets: { key: { value: 'v', allowedOrigins: ['https://a.test/path'] } } })).toThrow(
-      /secret "key" allowedOrigins must hold serialized origins/,
-    );
-    expect(() => resolve({ secrets: { key: { value: 'v', origins: [] } as never } })).toThrow(
-      /unknown secret "key" key "origins"/,
-    );
-    expect(() =>
-      resolve({ credentials: { admin: { username: 'u', password: 'p', allowedOrigins: ['not an origin'] } } }),
-    ).toThrow(/credential "admin" allowedOrigins must hold serialized origins/);
-  });
 
   it('replaces secret values in the config digest', () => {
     const a = resolve({ secrets: { key: 'secret-1' } });
@@ -453,8 +431,6 @@ describe('resolveConfig', () => {
     expect(a.configDigest).toBe(b.configDigest);
     const c = resolve({ secrets: { other: 'secret-1' } });
     expect(a.configDigest).not.toBe(c.configDigest);
-    const d = resolve({ secrets: { key: { value: 'secret-1', allowedOrigins: ['https://a.test'] } } });
-    expect(a.configDigest).not.toBe(d.configDigest);
   });
 
   it('replaces credential passwords in the config digest', () => {

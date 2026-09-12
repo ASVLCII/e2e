@@ -13,7 +13,6 @@ import type { DebugTrace } from '../internal/debug.ts';
 import { ConfigurationError, errorMessage, InfrastructureError, TestError } from '../internal/errors.ts';
 import { didYouMean } from '../internal/suggest.ts';
 import { sessionSecrecy, type SessionSecrecy } from './secrecy.ts';
-import { secretOriginAllowed } from '../config/secrets.ts';
 import { unavailableCode } from '../secrets.ts';
 import { obj } from '../internal/objects.ts';
 import { resolveNavigationUrl } from '../internal/urls.ts';
@@ -106,19 +105,6 @@ export function createFixtures(environment: AttemptEnvironment): AttemptFixtures
       const registered = environment.config.secrets.get(secret.name);
       if (registered === undefined) {
         throw new ConfigurationError(unavailableCode(secret), `secret "${secret.name}" is not configured`);
-      }
-      // A test names the field, so the sink is the author's choice; the page
-      // is not. A redirect must not carry the value to a foreign origin, so
-      // a deterministic fill runs the same origin rule as `type_secret` on a
-      // target that has an origin policy. A device target has none: its
-      // `app://` URL is a cache anchor, not a place a page can steer to, and
-      // the deterministic fill is the documented way to fill a secret there.
-      const url = environment.session.url;
-      if (url !== undefined && environment.target.app.allowedOrigins.length > 0) {
-        const origin = new URL(await url(engine.operation())).origin;
-        if (!secretOriginAllowed(origin, environment.target.app.allowedOrigins, registered)) {
-          throw new ConfigurationError('POLICY_DENIED', `origin ${origin} is not authorized for secret "${secret.name}"`);
-        }
       }
       const value = registered.value;
       const plaintext = typeof value === 'function' ? await value() : value;
@@ -325,11 +311,10 @@ function fixtureContext(
     targetName: environment.target.name,
     fixture: (name, surface, operations) => recorder.fixture(name, surface, operations),
     app: {
-      ...obj({ baseUrl: app.base?.href }),
-      allowedOrigins: app.allowedOrigins,
+      ...obj({ baseUrl: app.base?.href, site: app.site }),
       resolveUrl: (url) => {
         requireAppUrl(environment.target);
-        return resolveNavigationUrl(url, app.base, app.allowedOrigins).url;
+        return resolveNavigationUrl(url, app.base).url;
       },
     },
     timeouts: {
@@ -434,14 +419,14 @@ function unreachableApp(cause: unknown, url: string): InfrastructureError | unde
 function createApp(environment: AttemptEnvironment, engine: LocatorEngine, taint: SessionSecrecy['taint']): App {
   const { config, steps, target } = environment;
 
-  /** One recorded navigation: policy-resolved against the base URL, on the test budget. */
+  /** One recorded navigation: resolved against the base URL, on the test budget. */
   const navigate = (api: string, label: string, url: string | undefined): Promise<void> =>
     steps.run('app', api, label, async () => {
       requireAppUrl(target);
       const resolved =
         url === undefined
           ? target.app.base.href
-          : resolveNavigationUrl(url, target.app.base, target.app.allowedOrigins).url;
+          : resolveNavigationUrl(url, target.app.base).url;
       try {
         await engine.session.app.open(resolved, engine.operation(config.timeout));
       } catch (cause) {
