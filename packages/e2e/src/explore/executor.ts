@@ -62,7 +62,7 @@ const FINDING_SCHEMA = z.object({
     .string()
     .min(4)
     .max(200)
-    .describe('A short, specific name for the defect, e.g. "Checkout total shows $0.00 with two items in the cart".'),
+    .describe('A specific headline for the defect under 80 characters, e.g. "Checkout total shows $0.00 with two items in the cart".'),
   kind: z
     .enum(['issue', 'warning'])
     .describe(
@@ -73,13 +73,13 @@ const FINDING_SCHEMA = z.object({
     .describe(
       '5: a core journey is impossible, data is lost, or money or security is wrong. 4: a core feature is broken but a workaround exists, or wrong money or quantity values are shown. 3: a secondary feature is broken, or wrong non-monetary content. 2: a cosmetic or layout defect that blocks nothing. 1: a trivial polish item (usually a warning).',
     ),
-  expected: z.string().min(1).max(2000).describe('What a user would expect here.'),
-  actual: z.string().min(1).max(2000).describe('What the screen shows instead, quoted from the observation.'),
+  expected: z.string().min(1).max(2000).describe('What a user would expect here, in one sentence.'),
+  actual: z.string().min(1).max(2000).describe('What the screen shows instead, in one sentence, quoting the text on screen.'),
   reproduction: z
     .array(z.string().min(1).max(500))
     .min(1)
     .max(20)
-    .describe('The actions that reach the defect from the start of the app, one per entry.'),
+    .describe('The actions that reach the defect from the start of the app, one short imperative per entry, e.g. "Open the cart".'),
 });
 
 type FindingReport = z.output<typeof FINDING_SCHEMA>;
@@ -91,6 +91,10 @@ type FindingReport = z.output<typeof FINDING_SCHEMA>;
  * model with the finding's number so it is not reported twice.
  */
 function createFindingTool(state: ExploreState): DefinedTool {
+  // Numbered as the calls arrive, before any await: a model may report two
+  // findings in one turn, and read-only tools run in parallel, so the
+  // finding's own index is not known until its screenshot is saved.
+  let reported = 0;
   return defineTool(
     {
       description:
@@ -98,13 +102,16 @@ function createFindingTool(state: ExploreState): DefinedTool {
       inputSchema: FINDING_SCHEMA,
       execute: async (input: FindingReport, executionOptions: ToolExecutionOptions<unknown>) => {
         const { observe, attachScreenshot } = getToolContext(executionOptions);
+        reported += 1;
+        const label = `finding-${reported}`;
         const observation = await observe({ pixels: true }).catch(() => undefined);
-        const finding = state.addFinding({ ...input, path: observation?.path, observationRevision: observation?.revision });
-        if (observation?.pixels !== undefined) {
-          // Evidence is worth keeping, never worth failing the finding for.
-          const artifactId = await attachScreenshot(observation.pixels, `finding-${finding.index + 1}`).catch(() => undefined);
-          if (artifactId !== undefined) state.attachEvidence(finding.id, artifactId);
-        }
+        // Evidence is worth keeping, never worth failing the finding for. It
+        // is saved first, so the finding is announced complete, evidence included.
+        const artifactId =
+          observation?.pixels === undefined
+            ? undefined
+            : await attachScreenshot(observation.pixels, label).catch(() => undefined);
+        const finding = state.addFinding({ ...input, path: observation?.path, observationRevision: observation?.revision, artifactId });
         return `Finding ${finding.index + 1} recorded (${finding.kind}, severity ${finding.severity}): ${finding.title}. Do not report it again; continue the charter or conclude the step.`;
       },
     },
