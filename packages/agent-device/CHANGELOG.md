@@ -1,5 +1,21 @@
 # @e2edev/agent-device
 
+## 0.7.0
+
+### Minor Changes
+
+- [#278](https://github.com/tester-army/e2e/pull/278) [`7a45609`](https://github.com/tester-army/e2e/commit/7a456094a8d8ebb930c073f2cfe5ffa83315bd77) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Breaking: `agent-device` is no longer installed by this package. It is a peer dependency, `0.21.x`, replacing the pinned `agent-device` dependency the engine carried. Add it to your project:
+  
+  ```bash
+  npm install --save-dev agent-device
+  ```
+  
+  A project that already drives devices with the agent-device CLI keeps its version and one copy in `node_modules`; before, the engine pulled in a second copy pinned to another revision. agent-device is 0.x and its minors break, so the range pins the minor the engine was built and tested against, and each agent-device minor moves it with an engine release. A version outside the range may be rejected by the package manager as an unmet peer (npm's `ERESOLVE`). Projects scaffolded with `e2e init` need no change: init now adds `agent-device` alongside the engine.
+
+- [#283](https://github.com/tester-army/e2e/pull/283) [`4480e8b`](https://github.com/tester-army/e2e/commit/4480e8b0e589ef06c116c59eddbef82e1bb65dfb) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Deterministic steps no longer settle. A test's tap, fill, check, or back acts at once and leaves verification to `expect`; only agent actions keep the `settle` window. The one wait that remains is the new `transition` budget (default 500 ms): a control that appeared or moved with the previous action is given that long, counted from the action, to finish arriving, because accessibility frames report a control's final position from the first frame of a transition and a tap at a point it has not reached lands on whatever is behind it. Controls that were already in place are acted on immediately. react-native-pager-view's 11-test suite: 190 s with a 500 ms settle on every action, 142 s with 150 ms, about 125 s with this, all 11 passing.
+
+- [#281](https://github.com/tester-army/e2e/pull/281) [`8ad60e4`](https://github.com/tester-army/e2e/commit/8ad60e4aeb13a28355b69f72c23b5066aa1591d2) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Actions settle faster. After a tap, fill, or back, the engine waits for the UI to hold still before the next observation; that quiet window was agent-device's 500 ms default, which put a fixed second on every tap (1.6 s per tap measured, 2 s on an alert, up to 5 s on a screen push). The window is now 150 ms by default, enough to catch a running animation since every frame changes the tree, and the new `settle` option sets it per engine or disables the wait with `false`. A 13-test React Native suite went from 29 s to 17 s on the two tests measured, with every step still passing.
+
 ## 0.6.0
 
 ### Minor Changes

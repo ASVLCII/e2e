@@ -1,5 +1,41 @@
 # @e2edev/e2e
 
+## 0.14.0
+
+### Minor Changes
+
+- [#280](https://github.com/tester-army/e2e/pull/280) [`f03006d`](https://github.com/tester-army/e2e/commit/f03006d47f1627d35d4777245bc24df83ff0db86) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Secrets are no longer passwords only. A new `secrets` config block declares any value the model must never see (an API key, a token, anything from the environment), as a string, a provider function, or `{ value, allowedOrigins }`, overridable per run with `E2E_SECRET_<NAME>`. `secrets.get(name)` from `@e2edev/e2e` returns the same opaque `Secret` handle a credential's password is, accepted by `locator.fill`, `agent.act` params, and the `type_secret` tool; the runner fills it, masks it in every observation, and redacts it from logs, traces, and the report. A password still fills only a password field; a generic secret fills any editable input. An unconfigured name fails with the new `SECRET_UNAVAILABLE` code. `Secret.purpose` narrows to `'password' | 'generic-secret'`; `'one-time-code'` was never produced. A deterministic `locator.fill` of a secret now checks the current origin against the target's and the secret's `allowedOrigins` before resolving the value, as `type_secret` always has; `allowedOrigins` entries and the keys of a `secrets` object are validated at config load.
+
+- [#284](https://github.com/tester-army/e2e/pull/284) [`8811ba7`](https://github.com/tester-army/e2e/commit/8811ba7de97b239f8d1a32fb0785ff00d7f0011e) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A built-in `markdown` reporter writes the run as one markdown page,
+  `.e2e/summary.md` beside `report.json`, laid out for a pull request: a
+  headline with the counts and, when the agent ran, what the run spent (agent
+  steps, cache replays, model calls, tokens, cost); run-level errors; one block
+  per test that failed or was flaky with its error, the step it went wrong at,
+  the agent's own explanation of what it saw, the attempt's step timeline, and
+  the paths of its evidence from the project root; a table with one row per
+  test file; and every test folded away, grouped by file. An `e2e explore` run
+  renders its record instead: the goal and steps, every finding with what was
+  expected, what the screen showed, the actions that reach it, and its
+  screenshot, then the assessment. It is the text a coding agent pastes into a
+  pull request or a handoff instead of retelling the result.
+  `renderMarkdownReport(report, { artifactsUrl, artifactsDir, sourceUrl })` is
+  exported from the main entrypoint for a reporter that posts the page
+  elsewhere. `@e2edev/github` posts this page as the pull request comment in
+  place of its one table of tests that did not pass; its `renderComment`,
+  `CommentOptions`, `MAX_MARKER_CHARS`, and `MAX_URL_CHARS` exports are gone
+  (nothing consumed them), and the package now needs `@e2edev/e2e` 0.13 or
+  later. `e2e init` ignores `.e2e/summary.md`.
+
+- [#283](https://github.com/tester-army/e2e/pull/283) [`4480e8b`](https://github.com/tester-army/e2e/commit/4480e8b0e589ef06c116c59eddbef82e1bb65dfb) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `OperationContext.origin` tells an engine who is acting: `'test'` for a test's own deterministic step, `'agent'` for the agent. A step verifies its outcome with `expect`, so an engine may act as soon as the target holds still; the agent reads the screen right after acting, so an engine may wait for the transition to end first. The locator engine marks its calls `test`, the agent loop marks its calls `agent`; an absent origin is treated as the agent's.
+
+### Patch Changes
+
+- [#282](https://github.com/tester-army/e2e/pull/282) [`ff33218`](https://github.com/tester-army/e2e/commit/ff33218345d96098d6c2b665b23ece67e46b8eec) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The bundled skill and the `init` scaffold now describe e2e as agentic testing first. The skill's workflow tells a coding agent to drive a flow with `agent.act` and pin each outcome with `expect`, to use `screen` for exact values, to commit the trace cache so CI replays passing steps, and to specialise the agent for the app (goal wording, `context`, `system`, tools, model options) before rewriting a goal as clicks. The CI guidance runs agent steps in the same job as everything else instead of a separate config on a schedule. The scaffold's config and example test carry one comment each instead of five, and say "natural language" where they said "plain language".
+
+- [#278](https://github.com/tester-army/e2e/pull/278) [`7a45609`](https://github.com/tester-army/e2e/commit/7a456094a8d8ebb930c073f2cfe5ffa83315bd77) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init` adds `agent-device` to `devDependencies` next to `@e2edev/agent-device`, which now peers on it instead of installing it. The range pins the minor the engine was built and tested against, recorded at build time like the engine ranges; a project that already declares `agent-device` keeps its version untouched.
+
+- [#286](https://github.com/tester-army/e2e/pull/286) [`fce4aaf`](https://github.com/tester-army/e2e/commit/fce4aafeea8e6154e42ea0f2e6574b0b13285401) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Replayed trace actions carry the test origin. A replay executes recorded actions with no model reading the screen after them, only its own relocation, which polls; so an engine treats them as deterministic steps. On the device engine that removes the settle wait from every replayed action.
+
 ## 0.13.0
 
 ### Minor Changes
