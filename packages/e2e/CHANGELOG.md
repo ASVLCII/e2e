@@ -1,5 +1,135 @@
 # @e2edev/e2e
 
+## 0.13.0
+
+### Minor Changes
+
+- [#258](https://github.com/tester-army/e2e/pull/258) [`c553b61`](https://github.com/tester-army/e2e/commit/c553b614def4da798be5bfa3f7f04591dc253b69) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The act loop sees pixels. Two tools join the built-in agent's grammar while no
+  secret has been filled in the attempt: `screenshot()` attaches a masked
+  screenshot of the viewport to its result, and `tap_at({ x, y })` taps a point
+  given in that screenshot's pixel coordinates. The act model receives the image
+  itself, so nothing is lost in a description and no second model call is spent
+  on a localizer. Once a screenshot was sent the step is in pixel mode: every
+  action result carries a fresh screenshot, and older screenshots are elided
+  from the conversation in batches, keeping the newest two, and each is
+  resampled to a long side of at most 768 pixels, so a long flow on a canvas
+  carries a bounded number of images at a third of the full capture's cost.
+  While the step shows pixels, the wait after an action watches the pixels too,
+  so a tap that redraws a canvas is read as soon as the redraw lands. A screen that lists nothing to act
+  on by id opens with a screenshot already attached. `tap_at` is routed onto the
+  tree: a listed control under the point is tapped by id through the ordinary
+  `tap` path, policy and trace descriptor included; a point on nothing listed is
+  tapped as a bare point through the engine's new `tapAt` member. The trace
+  cache replays a bare point the way a coordinate-driven tool does, at the same
+  point on a viewport of the recorded size or at the same place inside the
+  re-found node that contained it, and hands the step to the model when the
+  viewport changed (`viewport-changed`) or the node is gone; the recorded end
+  state still gates a replay passing on its own. The executor socket gains `actions.tapAt(point)` with the same
+  routing and `pixelsTainted`; the engine contract gains an optional
+  `tapAt(point, context)` with the `pointer` capability and the `tapAt` grammar
+  verb, and pins `SemanticNode.rect` to the top-level viewport's CSS pixels for
+  nodes inside nested documents too. `agent.visionModel` is gone: the act model reads
+  screenshots itself, so it is multimodal by requirement, and the judgments
+  send their pixels to the same `model`.
+  Steps that sent pixels record `visionInput` and `metrics.pixelBytes`.
+
+- [#273](https://github.com/tester-army/e2e/pull/273) [`f53e8e2`](https://github.com/tester-army/e2e/commit/f53e8e2246d07f2c7f72bf77202f216a0c44b82d) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A `url` on a literal loopback address declared with port 0 (`http://127.0.0.1:0`, `http://[::1]:0`) asks the run for a free TCP port. The runner picks one when the config loads, before anything spawns, and substitutes it in the base URL, the default `allowedOrigins` entry (and an explicit one spelled with the same host and `:0`), the default `readyUrl`, and the report's target record; worker processes receive the same assignment, as does a session opened by `e2e mcp`. Port 0 on any other host is `INVALID_APP_URL`, `localhost` included: a name may resolve to another address than the one the command binds, and a port free on one is not free on the other.
+  
+  `{port}` in the app command's `args` and `env`, in `readyUrl`, and in each service's `args`, `env`, `readyUrl`, and `teardown` expands to the port the app is served on, allocated or fixed; the command must take the port through it. On a target without a `url` the token is `INVALID_CONFIG` naming the field. Services keep the ports their config gives them. The port is free when chosen and handed to the command a moment later; another process binding it in between fails the start with `APP_UNREACHABLE`, which a rerun resolves.
+  
+  The default cache and session identity derives from the declared URL with `:0`, so trace cache entries survive the port changing per run. Tests read the resolved URL from the new `app.baseUrl`, `undefined` on a surface whose engine declares no `url`.
+
+- [#258](https://github.com/tester-army/e2e/pull/258) [`c553b61`](https://github.com/tester-army/e2e/commit/c553b614def4da798be5bfa3f7f04591dc253b69) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The `'fallback'` vision mode is gone. It was documented as behaving like
+  `false` for every judgment, because a judgment always answers from the tree and
+  has no miss to escalate on, so it never did anything. `VisionMode` is now
+  `boolean | 'only'`; a config or call that still passes `'fallback'` fails with
+  `INVALID_CONFIG` or `INVALID_ARGUMENT` naming the accepted values. Replace it
+  with `false` (the tree) or, where pixels were wanted, `true` or `'only'`.
+
+- [#268](https://github.com/tester-army/e2e/pull/268) [`cadebfa`](https://github.com/tester-army/e2e/commit/cadebfaef4d24f653b1715ea2c21062a78fef3f8) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `expect.poll(read, options?)` re-reads a value until a value matcher passes,
+  the asynchronous form of `expect(value)`. Every value matcher is there under
+  the same name, returning a promise, with `.not` to flip the check. Options:
+  `timeout` (the config `assertionTimeout`, 5000 ms; capped by the attempt's
+  own deadline, and 5000 ms in a standalone script), `interval` (100 ms), and
+  `message`, an extra line in the timeout error. The poll runs on the
+  attempt's budget and stops at once when the attempt is cancelled or times
+  out. A `read` that throws is one failing sample and polling continues; one
+  that hangs is cut at the deadline. The timeout is `ASSERTION_FAILED` with the
+  last sample in its message; a non-finite `timeout` or `interval` is
+  `INVALID_CONFIG` before the first read. It is not recorded as a report step.
+  
+  `expect(value).toMatch(regexp)` now resets a global or sticky regexp before
+  each test, so repeated checks of the same value agree.
+  
+  ```ts
+  await expect
+    .poll(() => getTest(workspace).then((row) => row?.title), { timeout: 15_000 })
+    .toBe('AI checkout regression');
+  ```
+
+- [#276](https://github.com/tester-army/e2e/pull/276) [`1bf533f`](https://github.com/tester-army/e2e/commit/1bf533f6648894f145ef98d919727f22b755bfa7) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e explore` reads as an exploration, not as a test. The terminal shows each step by its title as it finishes, with its duration, actions, and findings, and each finding the moment the agent reports it. The run ends with a `Findings` section, issues first and the most severe first, each with where it was seen, what was expected against what the screen showed, the steps that reach it, and its screenshot; then the assessment and `Findings` and `Steps` summary rows. Severity reads as a word (`critical` to `trivial`). The exploration's progress travels as a new `explore` run event, so custom reporters see it too; the summary rows the explore reporter used to add are gone. The planner titles steps as short headings and closes with a verdict, what was not reached, and what is worth scripting.
+
+- [#271](https://github.com/tester-army/e2e/pull/271) [`694c5fb`](https://github.com/tester-army/e2e/commit/694c5fb9eacf1aa1aa0cbaf70b61bd428331d23b) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `test.extend(fixtures)` defines your own fixtures with setup and teardown, in
+  Playwright's shape: everything before `await use(value)` runs before each
+  attempt's hooks and body, `value` is what the test receives, and everything
+  after runs once they are done, whether or not the body passed (a body that
+  timed out is abandoned first, as with `afterEach`). It returns a new `test`;
+  chains compose, and a definition in a chained `extend` reads the earlier ones. A
+  core name, a name an earlier `extend` defined, or a non-function is a
+  `COLLECTION_ERROR` at import; a name the target's engine contributes, a
+  definition that never calls `use()`, or one that calls it twice fails the
+  attempt with `TEST_SETUP_FAILED`. The zero-argument `test.extend<Extra>()`
+  keeps typing an engine's contributed fixtures without defining anything.
+
+### Patch Changes
+
+- [#266](https://github.com/tester-army/e2e/pull/266) [`fcf4fe6`](https://github.com/tester-army/e2e/commit/fcf4fe6ff7f4ba1b0d6a61af53ce0bde953ad26c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Reject `app.screenshot()` with `POLICY_DENIED` after a secret fill. The runner now stops before engine capture or artifact registration so secrets echoed outside secure fields cannot enter explicit screenshot artifacts.
+
+- [#275](https://github.com/tester-army/e2e/pull/275) [`07cae87`](https://github.com/tester-army/e2e/commit/07cae8787ca1d530ac4f85729a9d7793bf3100fa) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The CLI is documented and registered as `npx e2e`. The `--no-install` flag is gone from the help text, the `e2e init` hints, the MCP server prompt, the `.mcp.json` and `.cursor/mcp.json` entries `init` writes, the skill, and the docs. npx runs the locally installed bin first, so the flag added nothing once the package was a dependency, and the unscoped `e2e` name on npm is the team's own placeholder.
+
+- [#272](https://github.com/tester-army/e2e/pull/272) [`dfc4feb`](https://github.com/tester-army/e2e/commit/dfc4febe46da37420643b51bb969f423800d22fe) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init` adds `playwright` to `devDependencies` next to `@e2edev/playwright`, which now peers on it instead of installing it. The range is the minor the engine was built and tested against, recorded at build time like the engine ranges; a project that already declares `playwright` keeps its version untouched.
+
+- [#263](https://github.com/tester-army/e2e/pull/263) [`c76f152`](https://github.com/tester-army/e2e/commit/c76f152ef5668b1c2cc50b6e756af8f4d273a361) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The notice `e2e init` prints when it adds `.e2e/cache/` to `.gitignore` now
+  links to the caching guide (`/cache#commit-your-traces`) instead of an anchor
+  inside the config reference.
+
+- [#266](https://github.com/tester-army/e2e/pull/266) [`fcf4fe6`](https://github.com/tester-army/e2e/commit/fcf4fe6ff7f4ba1b0d6a61af53ce0bde953ad26c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init` now uses GPT-5.6 Luna in generated model configurations instead of GPT-5.4 mini.
+
+- [#267](https://github.com/tester-army/e2e/pull/267) [`454e9e2`](https://github.com/tester-army/e2e/commit/454e9e24f4f4e766010236925bec62d129dc788f) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e run` and `e2e list` match a positional that names no existing path by
+  name: `saved-tests.e2e.ts`, `regression/saved-tests.e2e.ts`, and `saved-tests`
+  all select `tests/regression/saved-tests.e2e.ts`. Before, such a positional had
+  to be the whole root-relative path or the run ended in `NO_TESTS`. The match is
+  exact and case-sensitive, ends at a path-segment boundary, and still never
+  selects a file the config globs did not discover.
+  
+  A positional that starts with `-` and names no existing file is now a usage
+  error with exit code 2 instead of a file that matches nothing. `pnpm test:e2e
+  -- --headed` reaches the CLI as `run -- --headed`, so `--headed` used to be
+  swallowed and the run went on headless; the message now names the direct
+  command for the detected package manager with the whole forwarded tail
+  (`pnpm exec e2e run --tag smoke`). A file that really starts with a dash still
+  selects as before.
+
+- [#270](https://github.com/tester-army/e2e/pull/270) [`38b3f1e`](https://github.com/tester-army/e2e/commit/38b3f1e7546f379201cf043166c9da3c727c9b39) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A `command` or service that fails to start now says what it was doing. When
+  `log` is set, the `APP_UNREACHABLE` message ends with the last 20 lines
+  appended to the log since the process started (terminal controls stripped,
+  each `command.env` value replaced by its `<secret:NAME>` marker, at most 4 KB), or `no output in <log>` when
+  nothing was appended; without `log` it says to set one. A wait that passes
+  half of `startupTimeout` (once that half is at least 5 s) prints one notice,
+  `service "compose" still starting after 90s: waiting for it to exit; log:
+  .e2e/logs/services.log`, so a stalled `docker compose up --wait` is visible
+  while it stalls and diagnosable from the report alone ([#158](https://github.com/tester-army/e2e/issues/158)).
+
+- [#277](https://github.com/tester-army/e2e/pull/277) [`3de7471`](https://github.com/tester-army/e2e/commit/3de7471f774bd13c4ead65991e56d7c7300ba653) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A test declared through a project helper (`dashboardTest(...)` in
+  `support/test.ts` wrapping `test()`) reports the helper call in the test file
+  as its source, so a GitHub comment or JSON report links the test, not the
+  helper. Before, every such test pointed at the same line inside the helper.
+  When no frame of the test file is on the stack (the file imports a module that
+  declares the tests), the declaring module is reported as before. The runner's
+  own frames and frames under `node_modules` are never a test's source; the
+  0.10.0 build reported a source-mapped runner frame under `node_modules/.pnpm`
+  for every test.
+
 ## 0.12.0
 
 ### Minor Changes

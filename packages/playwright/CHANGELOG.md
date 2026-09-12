@@ -1,5 +1,23 @@
 # @e2edev/playwright
 
+## 0.10.0
+
+### Minor Changes
+
+- [#272](https://github.com/tester-army/e2e/pull/272) [`dfc4feb`](https://github.com/tester-army/e2e/commit/dfc4febe46da37420643b51bb969f423800d22fe) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Breaking: `playwright` is no longer installed by this package. It is a peer dependency, `>=1.63.0 <2`, replacing the pinned `playwright` dependency the engine carried. Add it to your project:
+  
+  ```bash
+  npm install --save-dev playwright
+  ```
+  
+  An app that already depends on Playwright for its own product keeps its version, one copy in `node_modules`, and one browser cache; before, the engine pulled in a second copy pinned to another revision, and `playwright install` provisioned two browser sets. A version outside the range may be rejected by the package manager as an unmet peer (npm's `ERESOLVE`), so upgrade `playwright` within `>=1.63.0 <2`. The floor is 1.63 because `basicAuth` maps to the per-origin `httpCredentials` list that release added. Projects scaffolded with `e2e init` need no change: init now adds `playwright` alongside the engine.
+
+- [#258](https://github.com/tester-army/e2e/pull/258) [`c553b61`](https://github.com/tester-army/e2e/commit/c553b614def4da798be5bfa3f7f04591dc253b69) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The engine declares `tapAt`: a click at one viewport point in CSS pixels with no
+  element resolved behind it, which the agent's `tap_at` uses when the point the
+  model named in a screenshot lands on nothing the tree lists. Nodes inside same-origin
+  iframes now carry boxes in the top-level viewport's coordinates rather than
+  their own document's, so a hit test over the screenshot resolves them.
+
 ## 0.9.0
 
 ### Minor Changes
