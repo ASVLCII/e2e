@@ -71,6 +71,8 @@ export class StepAccounting {
   private ended = false;
   private modelProvider: string | undefined;
   private modelId: string | undefined;
+  /** Whether the step is replaying a recorded trace: its actions are then a test's, not the model's. */
+  private replayingTrace = false;
 
   constructor(
     private readonly runtime: AgentContext,
@@ -184,16 +186,29 @@ export class StepAccounting {
 
   /** One engine operation: `actionTimeout`, capped by the step clock. */
   operation(): OperationContext {
-    return boundedOperation(this.runtime.engine, this.runtime.config.actionTimeout, this.deadline);
+    return this.stamped(boundedOperation(this.runtime.engine, this.runtime.config.actionTimeout, this.deadline));
   }
 
-  /** The operation context of one targeted action; see MAX_TARGETED_ACTION_MS. */
+  /**
+   * The operation context of one targeted action; see MAX_TARGETED_ACTION_MS.
+   * A replayed action carries the test origin: nothing reads the screen after
+   * it but the replay's own relocation, which polls, so an engine may act the
+   * way it does for a deterministic step instead of settling for a model.
+   */
   actionOperation(): OperationContext {
-    return boundedOperation(
-      this.runtime.engine,
-      Math.min(this.runtime.config.actionTimeout, MAX_TARGETED_ACTION_MS),
-      this.deadline,
+    return this.stamped(
+      boundedOperation(this.runtime.engine, Math.min(this.runtime.config.actionTimeout, MAX_TARGETED_ACTION_MS), this.deadline),
     );
+  }
+
+  /** Every operation inside a replayed span is the test's, navigation included; outside it, the agent's. */
+  private stamped(operation: OperationContext): OperationContext {
+    return this.replayingTrace ? { ...operation, origin: 'test' } : operation;
+  }
+
+  /** Marks the span in which the step's actions come from a recorded trace rather than the model. */
+  replaying(active: boolean): void {
+    this.replayingTrace = active;
   }
 
   /**
