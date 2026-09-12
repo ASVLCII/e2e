@@ -20,6 +20,7 @@ import type {
   Platform,
   Reporter,
   SecretProvider,
+  SecretPurpose,
   Target,
   TraceCacheStore,
   VideoArtifactConfig,
@@ -34,6 +35,7 @@ import {
   type ResolvedBaseLimits,
 } from './agent.ts';
 import { digestAppDeclaration, resolveTargetApp, type ResolvedApp } from './app.ts';
+import { envName, isSecretValue, normalizeSecretConfig, validateAllowedOrigins, validateSecretDeclaration } from './secrets.ts';
 
 export type { ResolvedAgentConfig, ResolvedLimits } from './agent.ts';
 export type { ResolvedApp } from './app.ts';
@@ -48,11 +50,19 @@ export interface ResolvedTarget {
   readonly app: ResolvedApp;
 }
 
+/** A named account; its password is the `ResolvedSecret` of the same name. */
 export interface ResolvedCredential {
   readonly name: string;
   readonly username: string;
+}
+
+/** One value the model never sees, from `config.secrets` or a credential's password. */
+export interface ResolvedSecret {
+  readonly name: string;
+  readonly purpose: SecretPurpose;
   /** A static value, or a provider resolved fresh on every authorized fill. */
-  readonly password: string | SecretProvider;
+  readonly value: string | SecretProvider;
+  /** Narrows the target's origin policy for this secret; undefined leaves it as is. */
   readonly allowedOrigins: readonly string[] | undefined;
 }
 
@@ -104,6 +114,8 @@ export interface ResolvedConfig {
   readonly cache: ResolvedCacheConfig;
   readonly limits: ResolvedLimits;
   readonly credentials: ReadonlyMap<string, ResolvedCredential>;
+  /** Every secret by name: `config.secrets` entries and every credential's password. */
+  readonly secrets: ReadonlyMap<string, ResolvedSecret>;
   readonly configDigest: string;
 }
 
@@ -160,6 +172,7 @@ const TOP_LEVEL_KEYS = new Set([
   'cache',
   'limits',
   'credentials',
+  'secrets',
 ]);
 
 const CACHE_KEYS = new Set(['mode', 'store', 'dir']);
@@ -271,7 +284,7 @@ export function resolveConfig(
 
   const testIdAttribute = raw.screen?.testIdAttribute ?? 'data-testid';
   const projectId = resolveProjectId(raw.projectId, options.projectRoot);
-  const credentials = resolveCredentials(raw, env);
+  const { credentials, secrets } = resolveSecrets(raw, env);
   // Limits first: the agent context budget is a limits key, and the resolved
   // observation budget is agent-owned, so the dependency runs one way.
   const baseLimits = resolveLimits(raw);
@@ -312,6 +325,7 @@ export function resolveConfig(
     cache,
     limits,
     credentials,
+    secrets,
     configDigest: computeConfigDigest(raw, projectId),
   };
   return resolved;
@@ -699,31 +713,52 @@ function resolveProjectId(explicit: string | undefined, projectRoot: string): st
   return `unportable-${sha256Hex(projectRoot).slice(0, 32)}`;
 }
 
-function resolveCredentials(
+/**
+ * Credentials and secrets resolve together because they share one namespace:
+ * a credential's password is the secret of the credential's name, so
+ * `typeSecret`, the ledger, and the trace all key on one map.
+ */
+function resolveSecrets(
   raw: E2EConfig,
   env: NodeJS.ProcessEnv,
-): ReadonlyMap<string, ResolvedCredential> {
-  const resolved = new Map<string, ResolvedCredential>();
+): { credentials: ReadonlyMap<string, ResolvedCredential>; secrets: ReadonlyMap<string, ResolvedSecret> } {
+  const credentials = new Map<string, ResolvedCredential>();
+  const secrets = new Map<string, ResolvedSecret>();
   for (const [name, credential] of Object.entries(raw.credentials ?? {})) {
-    const envPrefix = `E2E_USER_${name.toUpperCase().replaceAll(/[^A-Z0-9]/g, '_')}`;
-    const username = env[`${envPrefix}_USERNAME`] ?? credential.username;
+    const prefix = envName('E2E_USER', name);
+    const username = env[`${prefix}_USERNAME`] ?? credential.username;
     // An env override always wins, including over a provider: the operator
     // rotating a credential must not need to know how it was configured.
-    const password = env[`${envPrefix}_PASSWORD`] ?? credential.password;
-    if ((typeof password !== 'string' && typeof password !== 'function') || password === '') {
+    const password = env[`${prefix}_PASSWORD`] ?? credential.password;
+    if (!isSecretValue(password)) {
       throw new ConfigurationError(
         'INVALID_CONFIG',
         `credential "${name}" password must be a non-empty string or a provider function`,
       );
     }
-    resolved.set(name, {
-      name,
-      username,
-      password,
-      allowedOrigins: credential.allowedOrigins,
-    });
+    validateAllowedOrigins(`credential "${name}"`, credential.allowedOrigins);
+    credentials.set(name, { name, username });
+    secrets.set(name, { name, purpose: 'password', value: password, allowedOrigins: credential.allowedOrigins });
   }
-  return resolved;
+  for (const [name, entry] of Object.entries(raw.secrets ?? {})) {
+    if (secrets.has(name)) {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `secret "${name}" is also a credential; a credential's password is the secret of its name, so declare one or the other`,
+      );
+    }
+    const declared = normalizeSecretConfig(entry);
+    if (declared === entry) validateSecretDeclaration(`secret "${name}"`, declared);
+    const value = env[envName('E2E_SECRET', name)] ?? declared.value;
+    if (!isSecretValue(value)) {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `secret "${name}" must be a non-empty string or a provider function, or { value, allowedOrigins? }`,
+      );
+    }
+    secrets.set(name, { name, purpose: 'generic-secret', value, allowedOrigins: declared.allowedOrigins });
+  }
+  return { credentials, secrets };
 }
 
 /**
@@ -848,6 +883,14 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
             ? { allowedOrigins: credential.allowedOrigins }
             : {}),
         },
+      ]),
+    );
+  }
+  if (raw.secrets !== undefined) {
+    sanitized['secrets'] = Object.fromEntries(
+      Object.entries(raw.secrets).map(([name, entry]) => [
+        name,
+        { ...normalizeSecretConfig(entry), value: { secretName: name } },
       ]),
     );
   }

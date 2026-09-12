@@ -3,12 +3,8 @@
  * `tests/types/sdk-types.ts` pins the parts that are easy to loosen by accident.
  */
 
-import type {
-  credentialBrand,
-  expectationBrand,
-  secretBrand,
-  testCaseBrand,
-} from './internal/brands.ts';
+import type { expectationBrand, testCaseBrand } from './internal/brands.ts';
+import type { CredentialConfig, Secret, SecretConfig } from './config/secrets.ts';
 import type { StepExecutor } from './agent/executor.ts';
 import type { StepCacheInfo } from './run/steps.ts';
 import type { EngineHandle } from './engine/index.ts';
@@ -18,6 +14,17 @@ import type { Report1Document } from './report/build.ts';
 
 export type { CacheReadResult, TraceCacheStore } from './cache/store.ts';
 export type { StepCacheInfo } from './run/steps.ts';
+export type {
+  Credential,
+  CredentialConfig,
+  Credentials,
+  Secret,
+  SecretConfig,
+  SecretDeclaration,
+  SecretProvider,
+  SecretPurpose,
+  Secrets,
+} from './config/secrets.ts';
 export type {
   ActionTrace,
   RecordedAction,
@@ -35,26 +42,6 @@ export type Platform = 'web' | 'ios' | 'android' | (string & {});
 export type Capability = string;
 export type ScrollDirection = 'up' | 'down' | 'left' | 'right';
 export type Momentum = 'none' | 'slow' | 'fast';
-
-/** Opaque host-side value accepted only by sensitive input sinks. */
-export interface Secret {
-  readonly name: string;
-  readonly purpose: 'password' | 'one-time-code' | 'generic-secret';
-  readonly [secretBrand]: true;
-}
-
-/** Named test identity. The password remains an opaque Secret. */
-export interface Credential {
-  readonly name: string;
-  readonly username: string;
-  readonly password: Secret;
-  readonly [credentialBrand]: true;
-}
-
-export interface Credentials {
-  /** Resolves a named credential without exposing its password. */
-  user(name: string): Credential;
-}
 
 export interface StandardSchemaV1<Input = unknown, Output = Input> {
   readonly '~standard': StandardSchemaV1.Props<Input, Output>;
@@ -202,6 +189,7 @@ export interface ActResult {
 export type AgentErrorCode =
   | 'AUTH_CREDENTIAL_UNAVAILABLE'
   | 'AUTH_CREDENTIAL_INVALID'
+  | 'SECRET_UNAVAILABLE'
   | 'AUTHENTICATION_FAILED'
   | 'ENVIRONMENT_UNAVAILABLE'
   | 'SEED_DATA_MISSING'
@@ -952,24 +940,16 @@ export interface E2EConfig {
     maxEventsPerStep?: number;
     maxModelTokensPerCall?: number;
   };
-  credentials?: Readonly<
-    Record<
-      string,
-      {
-        username: string;
-        password: string | SecretProvider;
-        allowedOrigins?: readonly string[];
-      }
-    >
-  >;
+  /**
+   * Named accounts. A credential's password is registered as a secret under
+   * the credential's name, so the name may not also appear under `secrets`.
+   */
+  credentials?: Readonly<Record<string, CredentialConfig>>;
+  /**
+   * Named values the model must never see: API keys, tokens, anything sourced
+   * from the environment. `secrets.get(name)` hands a test the opaque handle;
+   * the value is filled by the runner, masked in every observation, and
+   * redacted from logs, traces, and the report.
+   */
+  secrets?: Readonly<Record<string, SecretConfig>>;
 }
-
-/**
- * Resolves a secret's plaintext at fill time — a vault lookup, a freshly
- * computed TOTP — instead of a value baked at config load. Called on every
- * fill after the full authorization policy passes; the resolved value goes
- * straight to the trusted driver, joins runner-side redaction, and is never
- * logged, cached, or sent to a model. Like executors and stores, a provider
- * never crosses a process boundary: workers re-resolve the config module.
- */
-export type SecretProvider = () => string | Promise<string>;
