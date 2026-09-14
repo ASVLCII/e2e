@@ -3,19 +3,22 @@ title: agent
 description: Planned flows, judgments, extraction, and their budgets.
 ---
 
-Every `agent` call is one bounded invocation: a fresh observation, an
-explicit deadline, a model-call budget, and no shared transcript between
-calls. Acquiring the fixture without a configured model fails with
-`MODEL_UNAVAILABLE`.
+Every `agent` call starts from a fresh observation, has its own deadline and
+model-call budget, and shares no transcript with earlier calls. Acquiring the
+fixture without a configured model fails with `MODEL_UNAVAILABLE`.
 
 ```ts
 export interface Agent {
+  /** Plans and executes a bounded multi-action flow; resolves with what the step did. */
   act(instruction: string, options?: ActOptions): Promise<ActResult>;
+  /** Polls a natural-language condition until true or timed out. */
   waitFor(condition: string, options?: WaitForOptions): Promise<void>;
+  /** Extracts and validates structured screen data. */
   extract<Schema extends StandardSchemaV1>(
     instruction: string,
     options: ExtractOptions<Schema>,
   ): Promise<StandardSchemaV1.InferOutput<Schema>>;
+  /** Judges a natural-language assertion against a fresh observation. */
   assert(assertion: string, options?: AssertOptions): Promise<void>;
 }
 ```
@@ -53,22 +56,13 @@ Plans and executes one bounded multi-action flow. A passing verdict resolves
 with an `ActResult`; a failing or blocked one throws an `AgentError` whose
 `code` and `blocked` flag say why.
 
-| Name | Type | Default | Valid |
-| --- | --- | --- | --- |
-| `instruction` | `string` | | 1 through 8192 UTF-8 bytes after NFC |
-| `options.params` | `AgentParams` | `undefined` | JSON-safe values plus `Secret`, at most 64 KiB and 32 levels deep |
-| `options.timeout` | `number` | `config.timeout` | positive safe integer |
-| `options.maxSteps` | `number` | the agent's `maxSteps` | positive integer, at most the resolved limit |
-| `options.maxModelCalls` | `number` | the agent's `maxModelCalls` | positive integer, at most the resolved limit |
-| `options.agent` | `string` | the test's agent | a name in `agents`; unknown is `INVALID_ARGUMENT` before the step opens |
+`instruction` is 1 through 8192 UTF-8 bytes after NFC normalization. An
+unknown `agent` name is `INVALID_ARGUMENT` before the step opens.
 
-Values come from your code through `options.params`, never from the model. A
-`Secret` in `params` is projected before the model sees anything: the model
-receives the secret's name and purpose, and the harness fills the value
-host-side under the same authorization as `locator.fill`: the secret must be
-configured, the current origin allowed by both the target and the secret, and
-the field an enabled editable input; a password additionally requires a
-password field.
+Values come from your code through `options.params`, never from the model. The
+model sees a `Secret` as its name and purpose only. The runner fills the value
+under the same rules as `locator.fill`: the field must be an enabled editable
+input, and a password goes only into a password field.
 
 ```ts
 await agent.act('invite {email} as an editor', { params: { email: 'ada@example.test' } });
@@ -86,51 +80,31 @@ caching is off).
 
 ### Pixel tools: screenshot and tap_at
 
-`act` takes no `vision` option. Pixels reach an `act` step through two tools
-the built-in agent offers while pixels can leave the runner. The act model
-itself receives the image: no separate vision model, no extra model call, and
-nothing lost in a description.
+`act` takes no `vision` option. The built-in agent offers two tools instead,
+while no secret has been filled. The act model receives the image itself; no
+second model is involved.
 
 | Tool | What it does |
 | --- | --- |
-| `screenshot()` | Attaches a masked screenshot of the viewport to the tool result, with the changes since the screen the model holds. From then on the step is in pixel mode: every action result carries a fresh screenshot, so the model sees what each action did. |
-| `tap_at({ x, y })` | Taps a point given in the latest screenshot's pixel coordinates. The harness scales the point into the observation's CSS pixels and hit-tests it against the tree: on an engine with `perform`, a listed control under it is tapped by its id, exactly like `tap`, with a replayable descriptor; a point on nothing listed, or any point on an engine that taps by point only, is tapped as a bare point through the engine's `tapAt`. The result names what was tapped or what sits under the point, and carries a fresh screenshot. |
+| `screenshot()` | Attaches a masked viewport screenshot to the tool result. From then on the step is in pixel mode: every action result carries a fresh screenshot. |
+| `tap_at({ x, y })` | Taps a point in the latest screenshot's pixel coordinates. The runner hit-tests the point against the tree. A listed control under it is tapped by id, exactly like `tap`. A point on nothing listed goes to the engine's `tapAt` as a bare point. |
 
-While the step is showing pixels, the wait after an action watches the
-pixels too: a tap that redraws a canvas is read as soon as the redraw lands,
-instead of waiting out the change window on a tree that never moves.
-A screen that lists nothing to act on by id (a canvas, a game, a
-semantics-free native screen) opens with a screenshot already attached, so
-the model never spends a turn discovering that it needs one; any screen with
-a listed control opens tree-only and the model asks when the tree falls
-short. Older screenshots are elided from the conversation in batches, keeping
-the newest two, so a long flow in pixel mode carries a bounded number of
-images, and each is resampled to a long side of at most 768 pixels before it
-goes to the model: on a drawn keypad and a drawn wizard that size kept every
-run passing at a third less cost than the full capture, and 512 did not.
-Coordinates the model returns are in that image; the harness scales them
-back. Both tools are offered while no secret has been filled when the step
-opens; a secret filled during the step keeps them listed but withholds every
-later screenshot (`PIXEL_TAINTED`), and each result says so; `tap_at`
-needs an engine that can tap by node (`perform`) or by point (`tapAt`, the
-`pointer` capability, which the Playwright and agent-device engines declare),
-and on an engine without `tapAt` the point must land on a listed control. A
-bare-point tap replays from the [trace cache](/cache) the way a
-coordinate-driven tool does: the same point on a viewport of the recorded
-size, or, when a listed node contained the point, the same place inside that
-node's live box. A viewport of another size or a node that cannot be re-found
-hands the step to the model, and the recorded end state still has to return
-before a replay passes on its own. A step that sent pixels records
-`visionInput: true` and `metrics.pixelBytes`.
+In pixel mode the wait after an action watches the pixels too, so a redraw on
+a canvas counts as a change. A screen that lists nothing to act on by id (a
+canvas, a game) opens with a screenshot already attached. Screenshots are
+resampled to a long side of 768 px, and older ones are dropped from the
+conversation in batches, keeping the newest two.
 
-The pixel path asks the act model to ground a point in an image, and models
-differ widely there. Measured on a drawn ten-key keypad and an eight-screen
-drawn wizard: the gpt-5.6 luna family and Gemini 3.8 Flash completed both;
-Claude Sonnet 5 completed the wizard's large shapes but never the keypad's
-small keys; DeepSeek and GLM flash models gave up, and their providers bill a
-1280 by 720 screenshot at tens of thousands of input tokens against a few
-hundred on OpenAI. Pin an act model that grounds well when your flows leave
-the tree.
+A secret filled during the step keeps both tools listed but withholds every
+later screenshot (`PIXEL_TAINTED`). `tap_at` needs an engine with `perform`
+or `tapAt`; without `tapAt` the point must land on a listed control. A
+bare-point tap replays from the [trace cache](/cache) only on a viewport of
+the recorded size, or at the same place inside the listed node that contained
+it. A step that sent pixels records `visionInput: true` and
+`metrics.pixelBytes`.
+
+Models differ widely at grounding a point in an image. Pin an act model that
+does it well when your flows leave the tree.
 
 Throws `ACTION_FAILED` for a failed verdict with no more specific code; a
 blocked code (`AUTH_CREDENTIAL_UNAVAILABLE`, `ENVIRONMENT_UNAVAILABLE`,
@@ -150,20 +124,10 @@ One fresh observation, exactly one judgment. It does not poll. The judge is
 shown the assertion and that observation only, never the prior steps or the
 act loop's summaries, and answers `holds`, `fails`, or `inconclusive`.
 
-| Name | Type | Default |
-| --- | --- | --- |
-| `assertion` | `string` | |
-| `options.timeout` | `number` | `max(30000, config.actionTimeout)` |
-| `options.screenshot` | `boolean` | `true` |
-| `options.vision` | `VisionMode` | the agent's `vision`, `false` |
-| `options.agent` | `string` | the test's agent |
-
 Throws `ASSERTION_FAILED` on a false judgment and `ASSERTION_INCONCLUSIVE`
-when the screen did not show enough to decide either way, each carrying the
-explanation and, when permitted, a screenshot path. Neither is a pass: a judge
-that guesses when the evidence is thin is how a broken flow stays green.
-Evidence is skipped with
-`screenshot: false` and once any secret has been filled in the attempt.
+when the screen did not show enough to decide. Both carry the explanation
+and, when permitted, a screenshot path. No evidence is captured with
+`screenshot: false` or once a secret has been filled in the attempt.
 `screenshot` controls failure evidence attached after the judgment; `vision`
 controls what the model is shown before it.
 
@@ -180,15 +144,6 @@ waitFor(condition: string, options?: WaitForOptions): Promise<void>;
 One observation per interval, and a judgment when the screen changed.
 Succeeds on the first judgment that holds; a false or inconclusive round
 keeps waiting.
-
-| Name | Type | Default | Valid |
-| --- | --- | --- | --- |
-| `condition` | `string` | | |
-| `options.timeout` | `number` | `max(30000, config.actionTimeout)` | positive safe integer |
-| `options.interval` | `number` | `3000` | integer 100-60000, milliseconds |
-| `options.maxModelCalls` | `number` | the agent's `maxModelCalls` | positive integer, at most the resolved limit |
-| `options.vision` | `VisionMode` | the agent's `vision`, `false` | |
-| `options.agent` | `string` | the test's agent | a name in `agents` |
 
 Throws `STEP_TIMEOUT` on deadline expiry and `STEP_BUDGET_EXHAUSTED` on
 budget exhaustion, each carrying the last judgment, and `INVALID_ARGUMENT`
@@ -210,14 +165,6 @@ extract<Schema extends StandardSchemaV1>(
 Takes one fresh observation, requests structured output, validates it, and
 returns the validated value. It performs no app actions.
 
-| Name | Type | Default | Valid |
-| --- | --- | --- | --- |
-| `instruction` | `string` | | |
-| `options.schema` | `Schema` | | any Standard Schema v1 validator |
-| `options.timeout` | `number` | `max(30000, config.actionTimeout)` | positive safe integer |
-| `options.vision` | `VisionMode` | the agent's `vision`, `false` | |
-| `options.agent` | `string` | the test's agent | a name in `agents` |
-
 The budget is two model calls: one extraction and one repair round for
 output that failed validation. Throws `INVALID_ARGUMENT` for a schema that is
 not Standard Schema v1, and `MODEL_OUTPUT_INVALID` when validation still
@@ -231,137 +178,129 @@ const summary = await agent.extract('the workspace name and plan', {
 
 ## Vision
 
-`assert`, `waitFor`, and `extract` accept `vision`. It controls what evidence
-the model is shown. Sending pixels needs a model that accepts images; images
-are billed as input tokens. `act` has no such option; its pixel path is the
-`screenshot` and `tap_at` tools above.
-
-| Mode | What the model sees | Cost |
-| --- | --- | --- |
-| `false` | the tree | no image tokens |
-| `true` | the tree and a masked screenshot, every call | image tokens on every call |
-| `'only'` | the screenshot, and not the tree | image tokens, minus the observation bytes |
+`assert`, `waitFor`, and `extract` accept `vision`. Sending pixels needs a
+model that accepts images. `act` has no such option; see the pixel tools
+above.
 
 Set `vision` on the agent in config to make a mode the project default; a
-per-call value wins. Pixels go to the agent's `model`, the same one the act
-loop shows its screenshots to.
-
-<Warning>
-**Use `'only'` for questions about what the page presents**
-
-`vision: true` sends the tree *and* the screenshot, and the tree is a cheaper
-path to an answer. A consent sheet covering a form, a price at `opacity: 0`,
-a button under a cookie banner: the tree reports all of them as fine.
-
-```ts
-// Passes on the tree alone while a consent sheet covers the form.
-await agent.assert('the search form is visible and not covered', { vision: true });
-
-// Judged on the screenshot. There is no tree in the request to answer from.
-await agent.assert('the search form is visible and not covered', { vision: 'only' });
-```
-
-Use `true` when the tree is part of the answer, such as a disabled state that
-is not visible at all.
-</Warning>
+per-call value wins. Pixels go to the agent's `model`.
 
 The screenshot is the viewport, never the full page, so `'only'` cannot see
 below the fold. Write `'only'` conditions about what is on screen and let the
 flow scroll first.
 
-Pixel evidence degrades instead of failing the call in every mode but
-`'only'`. It is withheld, and the tree sent alone, when a secret fill has
-tainted the viewport (`visionDegraded: "PIXEL_TAINTED"` on the step), when
-the engine masked fewer regions than the secure fields it observed
-(`MASKING_UNPROVEN`), or when the engine cannot capture pixels
-(`UNSUPPORTED_CAPABILITY`). `'only'` fails with `POLICY_DENIED` in those
-cases rather than answer a question about pixels from the tree. A step that
-sent pixels records `visionInput: true` and `metrics.pixelBytes`.
+Pixels are withheld and the tree sent alone when a secret fill has tainted
+the viewport (`visionDegraded: "PIXEL_TAINTED"` on the step), when the engine
+masked fewer regions than the secure fields it observed (`MASKING_UNPROVEN`),
+or when the engine cannot capture pixels (`UNSUPPORTED_CAPABILITY`). In
+`'only'` mode those cases fail with `POLICY_DENIED` instead.
 
 ## Types
 
 ```ts
-export type VisionMode = boolean | 'only';
+/**
+ * One `act` call: the values the instruction refers to and the step's
+ * budgets. Structured output and vision are judgment-tier options:
+ * `extract` takes `schema`; `assert`, `waitFor`, and `extract` take `vision`.
+ */
+export interface ActOptions extends AgentOption {
+  /**
+   * JSON-safe values the instruction refers to, at most 64 KiB and 32 levels
+   * deep. A `Secret` reaches the model by name only; the runner fills it.
+   */
+  params?: AgentParams;
+  /** Step deadline in milliseconds; defaults to the test timeout. */
+  timeout?: number;
+  /** Action budget; defaults to `agent.maxSteps` and can only lower it. */
+  maxSteps?: number;
+  /** Model-call budget; defaults to `agent.maxModelCalls` and can only lower it. */
+  maxModelCalls?: number;
+}
+
+/** The configured agent (`agents.<name>`) one call runs with, in place of the test's. */
+export interface AgentOption {
+  agent?: string;
+}
+
+/** `assert` options: one judgment plus one repair round, within `timeout`. */
+export interface AssertOptions extends VisionOption, AgentOption {
+  /** Deadline in milliseconds; defaults to the judgment budget, `max(30000, actionTimeout)`. */
+  timeout?: number;
+  /** Attach a redacted screenshot to the step; on by default, denied after a secret fill. */
+  screenshot?: boolean;
+}
+
+/** `waitFor` options: a judgment at most once per `interval` until `timeout`. */
+export interface WaitForOptions extends VisionOption, AgentOption {
+  /** Deadline in milliseconds; defaults to the judgment budget, `max(30000, actionTimeout)`. */
+  timeout?: number;
+  /** Least time between two judgments, in milliseconds; 100 through 60000, default 3000. */
+  interval?: number;
+  /** Judgment budget; defaults to `agent.maxModelCalls` and can only lower it. */
+  maxModelCalls?: number;
+}
+
+/** `extract` options: one extraction plus one repair round, validated against `schema`. */
+export interface ExtractOptions<Schema extends StandardSchemaV1> extends VisionOption, AgentOption {
+  /** Any Standard Schema v1 validator; the output is validated against it, with one repair round. */
+  schema: Schema;
+  /** Deadline in milliseconds; defaults to the judgment budget, `max(30000, actionTimeout)`. */
+  timeout?: number;
+}
 
 export interface VisionOption {
+  /** What the judge is shown; defaults to the agent's `vision`, `false`. */
   vision?: VisionMode;
 }
 
-export interface AssertOptions extends VisionOption {
-  timeout?: number;
-  screenshot?: boolean;
-  agent?: string;
-}
+/**
+ * What evidence the model is given: the semantic tree, a masked screenshot of
+ * the current observation, or both.
+ *
+ * - `false`: the tree.
+ * - `true`: the tree and a screenshot, on every call.
+ * - `'only'`: the screenshot, and not the tree.
+ *
+ * `'only'` exists because a tree sent alongside pixels is a cheaper path to an
+ * answer, and a model will take it: asked whether a form is covered by an
+ * overlay, it can read from the tree that the form is present and named and
+ * answer yes, while the pixels show the overlay. For a judgment that is about
+ * what the screen presents, the tree is a distractor, so the mode that means it
+ * removes it. It also costs fewer input tokens than `true`, not more.
+ *
+ * In every mode that sends pixels but also the tree, pixel evidence degrades
+ * away rather than failing the call when it cannot be proven redacted. `'only'`
+ * has nothing to degrade to, so it fails with `POLICY_DENIED` instead of
+ * answering the wrong question from the tree.
+ */
+export type VisionMode = boolean | 'only';
 
-export interface WaitForOptions extends VisionOption {
-  timeout?: number;
-  interval?: number;
-  maxModelCalls?: number;
-  agent?: string;
-}
-
-export interface ExtractOptions<Schema extends StandardSchemaV1> extends VisionOption {
-  schema: Schema;
-  timeout?: number;
-  agent?: string;
-}
-
-export interface ActOptions {
-  params?: AgentParams;
-  timeout?: number;
-  maxSteps?: number;
-  maxModelCalls?: number;
-  agent?: string;
-}
-
+/** What one passing `act` step did, as the report records it. */
 export interface ActResult {
+  /** The executor's one-line account of the step, or the replay's when the cache finished it. */
   readonly summary: string;
+  /** How the trace cache took part; absent when caching is off for the step. */
   readonly cache?: StepCacheInfo;
+  /** Model calls the step spent; 0 when a cached replay finished it. */
   readonly modelCalls: number;
+  /** Grammar actions and mutating tool calls the step performed. */
   readonly actions: number;
 }
 
+/** Values an `act` instruction refers to. */
+export type AgentParams = Readonly<Record<string, AgentParam>>;
+
+/** A JSON-safe value or a `Secret`. */
 export type AgentParam =
   | JsonPrimitive
   | Secret
   | readonly AgentParam[]
   | { readonly [key: string]: AgentParam };
-export type AgentParams = Readonly<Record<string, AgentParam>>;
 ```
 
 ## AgentError
 
-```ts
-export class AgentError extends Error {
-  readonly code: AgentErrorCode;
-  readonly explanation: string;
-  readonly screenshot?: string;
-  readonly blocked: boolean;
-}
-```
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `code` | `AgentErrorCode` | Closed union, assigned by the runner, never taken from model text |
-| `explanation` | `string` | Sanitized, bounded prose. Same value as `message`. |
-| `screenshot` | `string \| undefined` | Artifact path, present only when evidence was captured and permitted |
-| `blocked` | `boolean` | True when the failure reports a blocked step (credentials, environment, or budget), not a product failure |
-
-Check `code` with `isAgentError(error)`, exported from `e2e`, rather
-than `instanceof`, which does not hold across the runner's module realms.
-Every code, its class, and its exit code are in [Errors](/reference/errors).
-
-## Usage accounting
-
-Model usage is accounted per step and per run. A step reports
-`tokenAccounting: 'provider'` only when every call supplied complete provider
-token counts; otherwise the aggregate stays at `adapter-upper-bound`.
-Reported costs accumulate where the provider gives one. Token sums saturate
-at `Number.MAX_SAFE_INTEGER` and an overflowing cost total is omitted.
-
-<CardGroup cols={2}>
-  <Card title="How agent steps work" icon="stairs" href="/agent-steps" />
-  <Card title="Agents and personas" icon="users" href="/agents" />
-  <Card title="Config" icon="sliders" href="/reference/config#agents" />
-  <Card title="Errors" icon="triangle-exclamation" href="/reference/errors" />
-</CardGroup>
+Every failure is an `AgentError` with a closed `code`, an `explanation`, an
+optional `screenshot` path, and a `blocked` flag. Check it with
+`isAgentError(error)` from `e2e`, not `instanceof`. The class and
+every code are in [Errors](/reference/errors#agenterror).
