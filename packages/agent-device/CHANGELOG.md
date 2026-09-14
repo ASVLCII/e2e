@@ -1,5 +1,17 @@
 # @e2edev/agent-device
 
+## 0.8.0-canary-20260914095510
+
+### Minor Changes
+
+- [#298](https://github.com/tester-army/e2e/pull/298) [`ec3b6a1`](https://github.com/tester-army/e2e/commit/ec3b6a145a9e1a58bc70227ba4e868d7c9e3c3e5) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `agent-device` is a dependency of this package again, pinned to the exact version the engine was built and tested against (`0.21.1`); the `0.21.x` peer requirement from 0.7.0 is gone, and the pin moves with each engine release. A project that added `agent-device` to satisfy the peer can drop it. A project that also drives devices through the agent-device CLI keeps its own copy; keep its version in step with the pin, so one agent-device runs, not two.
+
+### Patch Changes
+
+- [#297](https://github.com/tester-army/e2e/pull/297) [`6fbf3c7`](https://github.com/tester-army/e2e/commit/6fbf3c77606bfada21327e21d8279370040cfdd0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `@e2edev/agent-device/tools` no longer imports `ai` at run time. `ai` is an optional peer dependency, and the tool pack loads with the project's config, so a project without `ai` failed at config load with `ERR_MODULE_NOT_FOUND` instead of getting as far as its own steps. The tools are typed the same way; nothing changes for a project that has `ai`.
+- Updated dependencies [[`f2f2e6f`](https://github.com/tester-army/e2e/commit/f2f2e6fb1024ffb4cd481f7ea571c2d29be6d6d8), [`ec3b6a1`](https://github.com/tester-army/e2e/commit/ec3b6a145a9e1a58bc70227ba4e868d7c9e3c3e5)]:
+  - e2e@0.15.0-canary-20260914095510
+
 ## 0.8.0-canary-20260914081513
 
 ### Minor Changes

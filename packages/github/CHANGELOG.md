@@ -1,5 +1,12 @@
 # @e2edev/github
 
+## 0.3.0-canary-20260914095510
+
+### Patch Changes
+
+- Updated dependencies [[`f2f2e6f`](https://github.com/tester-army/e2e/commit/f2f2e6fb1024ffb4cd481f7ea571c2d29be6d6d8), [`ec3b6a1`](https://github.com/tester-army/e2e/commit/ec3b6a145a9e1a58bc70227ba4e868d7c9e3c3e5)]:
+  - e2e@0.15.0-canary-20260914095510
+
 ## 0.3.0-canary-20260914081513
 
 ### Minor Changes

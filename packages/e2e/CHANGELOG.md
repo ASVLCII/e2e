@@ -1,5 +1,13 @@
 # e2e
 
+## 0.15.0-canary-20260914095510
+
+### Patch Changes
+
+- [#296](https://github.com/tester-army/e2e/pull/296) [`f2f2e6f`](https://github.com/tester-army/e2e/commit/f2f2e6fb1024ffb4cd481f7ea571c2d29be6d6d8) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The CLI starts without the optional `ai` peer dependency. The MCP bridge imported `asSchema` from `ai` statically and every command loads that module, so `npx e2e --help`, and `e2e init` in a project that has not installed `ai` yet, crashed with `ERR_MODULE_NOT_FOUND` before reading a flag. The bridge now reaches the SDK through the same lazy loader as the agent, and an MCP session opened in a project without `ai` reports `MODEL_UNAVAILABLE` instead.
+
+- [#298](https://github.com/tester-army/e2e/pull/298) [`ec3b6a1`](https://github.com/tester-army/e2e/commit/ec3b6a145a9e1a58bc70227ba4e868d7c9e3c3e5) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init` no longer writes `agent-device` next to `@e2edev/agent-device`, since the engine installs it. A project that already declares `agent-device` keeps it.
+
 ## 0.15.0-canary-20260914081513
 
 ### Minor Changes
