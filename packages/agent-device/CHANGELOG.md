@@ -1,5 +1,12 @@
 # @e2edev/agent-device
 
+## 0.8.0-canary-20260914134810
+
+### Patch Changes
+
+- Updated dependencies [[`5908a10`](https://github.com/tester-army/e2e/commit/5908a107f97d6f3845ed75c5676cc514b6f03dcd)]:
+  - e2e@0.15.0-canary-20260914134810
+
 ## 0.8.0-canary-20260914095510
 
 ### Minor Changes
