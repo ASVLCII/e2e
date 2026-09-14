@@ -37,6 +37,23 @@ export interface ArtifactRecord {
   producer: ArtifactProducer;
 }
 
+/**
+ * What the runner saw the moment an attempt's failure landed, captured while
+ * the session was still open: where the app was, the screen as the model
+ * would read it (a `log` artifact), a masked screenshot when pixels were
+ * allowed, and for a locator that matched nothing, the nodes on screen
+ * closest to what it asked for. Best-effort: any field may be absent.
+ */
+export interface FailureEvidence {
+  url?: string;
+  /** The `log` artifact holding the redacted screen at failure, by id. */
+  screen?: string;
+  /** The masked `screenshot` artifact taken at failure, by id. */
+  screenshot?: string;
+  /** Screen lines of the nodes closest to what a failed locator asked for. */
+  candidates?: string[];
+}
+
 export interface AttemptRecord {
   id: string;
   index: number;
@@ -46,6 +63,7 @@ export interface AttemptRecord {
   steps: StepRecord[];
   artifacts: ArtifactRecord[];
   error?: SerializedError;
+  failure?: FailureEvidence;
   secondaryErrors: SerializedError[];
   cleanup: 'complete' | 'failed' | 'forced';
 }
@@ -59,6 +77,8 @@ export interface SerialMemberRecord {
   durationMs: number;
   steps: StepRecord[];
   error?: SerializedError;
+  /** What the runner saw when this member's failure landed; see `FailureEvidence`. */
+  failure?: FailureEvidence;
   skip?: SkipInfo;
   secondaryErrors: SerializedError[];
 }

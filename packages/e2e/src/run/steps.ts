@@ -7,6 +7,7 @@ import type { TraceReplayMissReason } from '../cache/decide.ts';
 import { withAiTraceStep } from '../internal/ai-trace.ts';
 import { classifyError, serializeError, type SerializedError } from '../internal/errors.ts';
 import { timestamp } from '../internal/ids.ts';
+import { sourceLocation, type SourceLocation } from '../internal/source.ts';
 
 /** The closed step kind set; the type is derived from it, so the two cannot drift. */
 export const STEP_KINDS = ['agent', 'locator', 'assertion', 'screen', 'app', 'session', 'resource'] as const;
@@ -126,6 +127,22 @@ export interface StepAgentDetails {
    * zero, because the observation contributed nothing to the request.
    */
   visionOnly?: boolean;
+  /** The step's last model turns, bounded; see `StepTurn`. */
+  turns?: StepTurn[];
+}
+
+/**
+ * One model turn of an agent step, as the report keeps it: the tool calls
+ * the model made and what came back, each bounded. Enough to read why the
+ * step ended where it did without the full transcript.
+ */
+export interface StepTurn {
+  /** One-based turn number within the step. */
+  index: number;
+  /** `tap({"target":"n19"})`, one per tool call, arguments clipped. */
+  calls: string[];
+  /** The tool results of the turn, clipped; a screen diff reads as its first lines. */
+  outcome: string;
 }
 
 export interface StepRecord {
@@ -134,6 +151,8 @@ export interface StepRecord {
   kind: StepKind;
   api: string;
   label: string;
+  /** The test line the step was called from; absent when no project line was on the stack. */
+  source?: SourceLocation;
   status: 'passed' | 'failed' | 'blocked' | 'timed-out' | 'cancelled';
   startedAt: string;
   durationMs: number;
@@ -146,6 +165,8 @@ export interface StepRecord {
   metrics?: StepMetrics;
   cache?: StepCacheInfo;
   events: StepEvent[];
+  /** The model turns of an agent step, most recent last, bounded. */
+  turns?: StepTurn[];
   model?: StepModelInfo;
   /** The configured agent an agent step ran with, by name. */
   agent?: string;
@@ -200,6 +221,29 @@ export interface StepRecorderOptions {
   readonly maxEventsPerStep?: number;
   /** Live progress sink; omitted in contexts with no reporter to feed. */
   readonly onProgress?: (progress: StepProgress) => void;
+  /** The project root; with it, every step and step error names the test line it came from. */
+  readonly projectRoot?: string;
+  /** Replaces secret values in a step error's message and details before the record keeps them. */
+  readonly redact?: (text: string) => string;
+}
+
+/** Frames kept when a step captures where it was called from; the user's line is a few frames up. */
+const STEP_STACK_FRAMES = 20;
+
+/**
+ * The test line a step was called from, or nothing. Read from a stack taken
+ * at the step's start: every step pays it, since the failing one is not known
+ * until it fails, and a report that names the line is worth the capture.
+ */
+function stepSource(projectRoot: string | undefined): SourceLocation | undefined {
+  if (projectRoot === undefined) return undefined;
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = STEP_STACK_FRAMES;
+  try {
+    return sourceLocation(new Error().stack, projectRoot);
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
 }
 
 export class StepRecorder {
@@ -211,6 +255,8 @@ export class StepRecorder {
   private lastVerified = -1;
   private readonly maxEventsPerStep: number;
   private readonly onProgress: ((progress: StepProgress) => void) | undefined;
+  private readonly projectRoot: string | undefined;
+  private readonly redact: ((text: string) => string) | undefined;
 
   constructor(
     private readonly attemptId: string,
@@ -218,6 +264,8 @@ export class StepRecorder {
   ) {
     this.maxEventsPerStep = options.maxEventsPerStep ?? 1_000;
     this.onProgress = options.onProgress;
+    this.projectRoot = options.projectRoot;
+    this.redact = options.redact;
   }
 
   /** The step currently executing, when inside StepRecorder.run. */
@@ -246,12 +294,14 @@ export class StepRecorder {
     const index = this.steps.length;
     const startedAt = timestamp();
     const startedMs = Date.now();
+    const source = stepSource(this.projectRoot);
     const record: StepRecord = {
       id: `${this.attemptId}:${index}`,
       index,
       kind,
       api,
       label,
+      ...(source === undefined ? {} : { source }),
       status: 'passed',
       startedAt,
       durationMs: 0,
@@ -279,7 +329,7 @@ export class StepRecorder {
           : isAgentError(cause) && cause.blocked
             ? 'blocked'
             : 'failed';
-      record.error = serializeError(error);
+      record.error = serializeError(error, { projectRoot: this.projectRoot, redact: this.redact });
       throw cause;
     } finally {
       this.running.delete(record.id);
@@ -344,6 +394,7 @@ export class StepRecorder {
     if (details.visionInput !== undefined) current.visionInput = details.visionInput;
     if (details.visionDegraded !== undefined) current.visionDegraded = details.visionDegraded;
     if (details.visionOnly !== undefined) current.visionOnly = details.visionOnly;
+    if (details.turns !== undefined) current.turns = details.turns;
   }
 
   /** Records the viewport a step established. */

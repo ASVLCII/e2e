@@ -6,7 +6,7 @@ import { BLOCKABLE_CODES } from '../agent/executor.ts';
 import { DEFAULT_OBSERVATION_BYTES, resolveLimits } from '../config/agent.ts';
 import type { ResolvedConfig, ResolvedLimits, ResolvedTarget } from '../config/resolve.ts';
 import type { AgentErrorCode, ConfiguredArtifactKind } from '../types.ts';
-import type { ErrorCategory, ErrorPhase, SerializedError } from '../internal/errors.ts';
+import type { ErrorCategory, ErrorDetails, ErrorPhase, SerializedError } from '../internal/errors.ts';
 import { resultId, timestamp } from '../internal/ids.ts';
 import { obj } from '../internal/objects.ts';
 import { packageVersion } from '../internal/package-version.ts';
@@ -15,6 +15,7 @@ import type { SkipInfo } from '../collect/select.ts';
 import type {
   ArtifactRecord,
   AttemptRecord,
+  FailureEvidence,
   ResultRecord,
   RunError,
   SerialAttemptRecord,
@@ -27,6 +28,7 @@ import type {
   StepMetrics,
   StepModelInfo,
   StepRecord,
+  StepTurn,
   VisionDegradation,
 } from '../run/steps.ts';
 
@@ -135,7 +137,10 @@ export interface ReportExplore {
 // Explicit `| undefined` marks fields JSON serialization drops when absent;
 // Ajv treats undefined-valued keys as missing.
 
-/** SerializedError minus the stack, which never enters the report. */
+/**
+ * SerializedError minus the stack, which never enters the report; in its
+ * place, the test line the failure unwound through, when the stack named one.
+ */
 export interface ReportError {
   category: ErrorCategory;
   code: string;
@@ -143,7 +148,13 @@ export interface ReportError {
   retryable: boolean;
   phase?: ErrorPhase | undefined;
   scopeId?: string | undefined;
+  /** Structured facts beside the message: an assertion's expected and observed, a locator's role and name. */
+  details?: ErrorDetails | undefined;
+  /** The line in the test file the failure unwound through. */
+  source?: ReportSource | undefined;
 }
+
+
 
 export interface ReportStep {
   id: string;
@@ -164,6 +175,8 @@ export interface ReportStep {
   metrics?: StepMetrics | undefined;
   cache?: StepCacheInfo | undefined;
   events: readonly StepEvent[];
+  /** The last model turns of an agent step, oldest first. */
+  turns?: readonly StepTurn[] | undefined;
   model?: StepModelInfo | undefined;
   /** The configured agent an agent step ran with, by name. */
   agent?: string | undefined;
@@ -185,6 +198,8 @@ interface ReportAttemptBase {
 
 export interface ReportAttempt extends ReportAttemptBase {
   steps: readonly ReportStep[];
+  /** What the runner saw when the failure landed; absent on a pass or when nothing could be captured. */
+  failure?: FailureEvidence | undefined;
 }
 
 export interface ReportSerialMember {
@@ -196,6 +211,8 @@ export interface ReportSerialMember {
   durationMs: number;
   steps: readonly ReportStep[];
   error?: ReportError | undefined;
+  /** What the runner saw when this member's failure landed. */
+  failure?: FailureEvidence | undefined;
   skip?: SkipInfo | undefined;
   secondaryErrors: readonly ReportError[];
 }
@@ -339,14 +356,14 @@ function relativeSource(
   return { file, line: Math.max(1, source.line), column: Math.max(1, source.column) };
 }
 
-/** Step source capture is not implemented yet. */
-const UNIMPLEMENTED_STEP_SOURCE: ReportSource = { file: 'unknown', line: 1, column: 1 };
+/** A step that named no line in the project: a fixture's own call, or a step minted outside one. */
+const UNKNOWN_STEP_SOURCE: ReportSource = { file: 'unknown', line: 1, column: 1 };
 
 function serializeStep(step: StepRecord): ReportStep {
-  const { error, ...rest } = step;
+  const { error, source, ...rest } = step;
   return {
     ...rest,
-    source: UNIMPLEMENTED_STEP_SOURCE,
+    source: source ?? UNKNOWN_STEP_SOURCE,
     error: error === undefined ? undefined : serializeErrorRecord(error),
   };
 }
@@ -373,7 +390,11 @@ function serializeAttemptBase(attempt: AttemptRecord | SerialAttemptRecord): Rep
 }
 
 function serializeAttempt(attempt: AttemptRecord): ReportAttempt {
-  return { ...serializeAttemptBase(attempt), steps: attempt.steps.map(serializeStep) };
+  return {
+    ...serializeAttemptBase(attempt),
+    ...(attempt.failure === undefined ? {} : { failure: attempt.failure }),
+    steps: attempt.steps.map(serializeStep),
+  };
 }
 
 function serializeSerialMember(member: SerialMemberRecord): ReportSerialMember {
@@ -386,6 +407,7 @@ function serializeSerialMember(member: SerialMemberRecord): ReportSerialMember {
     durationMs: member.durationMs,
     steps: member.status === 'skipped' ? [] : member.steps.map(serializeStep),
     error: member.error === undefined ? undefined : serializeErrorRecord(member.error),
+    ...(member.failure === undefined ? {} : { failure: member.failure }),
     skip: member.status === 'skipped' ? member.skip : undefined,
     secondaryErrors: member.secondaryErrors.map(serializeErrorRecord),
   };

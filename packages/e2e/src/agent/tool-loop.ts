@@ -11,6 +11,7 @@
  * - model-call accounting and a step transcript for `--debug`.
  */
 
+import type { StepTurn } from '../run/steps.ts';
 import type { LanguageModel, ModelMessage, StepResult, ToolSet } from 'ai';
 import { asSdkLanguageModel, type SdkLanguageModel } from '../config/agent.ts';
 import { loadAiSdk, type AiSdk } from './ai-sdk.ts';
@@ -57,6 +58,15 @@ const FORCED_CONCLUSION_TURNS = 2;
 
 /** Transcript ceiling per step; enough for every turn without unbounded logs. */
 const MAX_TRANSCRIPT_CHARS = 262_144;
+/** Per-turn clips: the model's prose, one tool call's arguments, one tool result. */
+const MAX_TURN_TEXT_CHARS = 1_000;
+const MAX_TURN_CALL_CHARS = 400;
+const MAX_TURN_RESULT_CHARS = 600;
+/** The report keeps the last turns of a step, each clipped again to this. */
+const MAX_REPORTED_TURNS = 12;
+const MAX_REPORTED_CALLS = 8;
+const MAX_REPORTED_CALL_CHARS = 200;
+const MAX_REPORTED_OUTCOME_CHARS = 600;
 
 /**
  * Models that refused a forced tool choice once. The loop asks every model
@@ -176,8 +186,11 @@ class LoopRun {
   private guardStop: string | undefined;
   private noticedGuardReason: string | undefined;
   private noticedLowClock = false;
-  private readonly transcript: string[] = [];
-  /** Model turns that ran; the transcript array mirrors it but is debug-only. */
+  /** Every turn that ran, oldest first: the debug transcript is rendered from it, the report keeps the tail. */
+  private readonly turns: StepTurn[] = [];
+  /** Loop notes from before the first turn. */
+  private readonly preamble: string[] = [];
+  /** Model turns that ran; `turns` mirrors it. */
   private turnsUsed = 0;
   private readonly maxTurns: number;
   /** Remaining step time under which the loop forces a verdict. */
@@ -339,7 +352,7 @@ class LoopRun {
     if (this.turnsUsed >= this.maxTurns || this.lastRequest === undefined) return undefined;
     if (this.lastStep === undefined || this.lastStep.toolCalls.length > 0) return undefined;
     this.turnOffset = this.turnsUsed;
-    this.transcript.push(`--- turn ${String(this.turnsUsed)} made no tool call: asking for one ---`);
+    this.note(`turn ${String(this.turnsUsed)} made no tool call: asking for one`);
     const reply = responseMessages.at(-1);
     return [
       ...this.lastRequest,
@@ -362,9 +375,7 @@ class LoopRun {
     this.toolChoice = 'auto';
     if (typeof this.model === 'object') FREE_TOOL_CHOICE_MODELS.add(this.model);
     this.turnOffset = this.turnsUsed;
-    this.transcript.push(
-      `--- the model rejected a forced tool choice before turn ${String(this.turnsUsed + 1)}: retrying with auto ---`,
-    );
+    this.note(`the model rejected a forced tool choice before turn ${String(this.turnsUsed + 1)}: retrying with auto`);
     return this.lastRequest;
   }
 
@@ -385,16 +396,12 @@ class LoopRun {
     // sending the same request again would only spend another call on it.
     if (after >= before) {
       this.overflowNote = ' and the step history had nothing left to shrink';
-      this.transcript.push(`--- context overflow before turn ${String(this.turnsUsed + 1)}: nothing to shrink ---`);
+      this.note(`context overflow before turn ${String(this.turnsUsed + 1)}: nothing to shrink`);
       return undefined;
     }
     this.overflowNote = ' again after the history was shrunk once';
     this.turnOffset = this.turnsUsed;
-    this.transcript.push(
-      `--- context overflow before turn ${String(this.turnsUsed + 1)}: history shrunk from ${String(before)} to ${String(
-        after,
-      )} chars, retrying once ---`,
-    );
+    this.note(`context overflow before turn ${String(this.turnsUsed + 1)}: history shrunk from ${String(before)} to ${String(after)} chars, retrying once`);
     return shrunk;
   }
 
@@ -551,24 +558,50 @@ class LoopRun {
     return parts.join('\n\n');
   }
 
-  /** Serializes one turn into the step transcript. */
+  /** Records one turn: what the model said and called, and what came back, each clipped. */
   private recordTurn(step: StepResult<ToolSet>): void {
     this.turnsUsed += 1;
-    const turn = this.turnsUsed;
-    const lines: string[] = [`--- turn ${turn} ---`];
-    if (step.text.trim() !== '') lines.push(`assistant: ${truncate(step.text, 1_000)}`);
-    for (const call of step.toolCalls) {
-      lines.push(`tool call: ${call.toolName}(${truncate(safeJson(call.input), 400)})`);
-    }
-    for (const result of step.toolResults) {
-      lines.push(`tool result [${result.toolName}]: ${truncate(describeOutput(result.output), 600)}`);
-    }
-    this.transcript.push(lines.join('\n'));
+    const text = step.text.trim();
+    this.turns.push({
+      index: this.turnsUsed,
+      calls: step.toolCalls.map((call) => `${call.toolName}(${truncate(safeJson(call.input), MAX_TURN_CALL_CHARS)})`),
+      outcome: [
+        ...(text === '' ? [] : [`assistant: ${truncate(text, MAX_TURN_TEXT_CHARS)}`]),
+        ...step.toolResults.map((result) => `[${result.toolName}] ${truncate(describeOutput(result.output), MAX_TURN_RESULT_CHARS)}`),
+      ].join('\n'),
+    });
   }
 
+  /**
+   * A loop event between turns (a reply without a tool call, an overflow
+   * retry) is written onto the turn it followed, so the report and the
+   * transcript both show it where it happened; before the first turn it opens
+   * the record.
+   */
+  private note(text: string): void {
+    const last = this.turns.at(-1);
+    if (last === undefined) {
+      this.preamble.push(`[loop] ${text}`);
+      return;
+    }
+    last.outcome = `${last.outcome}\n[loop] ${text}`;
+  }
+
+  /** Hands the step its turns: the tail for the report, and every turn as the debug transcript. */
   private attachTranscript(): void {
-    if (this.transcript.length === 0) return;
-    this.context.attachTranscript(truncate(this.transcript.join('\n'), MAX_TRANSCRIPT_CHARS));
+    if (this.turns.length === 0 && this.preamble.length === 0) return;
+    this.context.attachTurns(
+      this.turns.slice(-MAX_REPORTED_TURNS).map((turn) => ({
+        index: turn.index,
+        calls: turn.calls.slice(0, MAX_REPORTED_CALLS).map((call) => truncate(call, MAX_REPORTED_CALL_CHARS)),
+        outcome: truncate(turn.outcome, MAX_REPORTED_OUTCOME_CHARS),
+      })),
+    );
+    const transcript = [
+      ...this.preamble,
+      ...this.turns.map((turn) => [`--- turn ${turn.index} ---`, ...turn.calls.map((call) => `tool call: ${call}`), turn.outcome].join('\n')),
+    ];
+    this.context.attachTranscript(truncate(transcript.join('\n'), MAX_TRANSCRIPT_CHARS));
   }
 }
 

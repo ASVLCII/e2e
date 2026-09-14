@@ -1,6 +1,7 @@
 /** Runner-owned error taxonomy and exit-code mapping. */
 
 import { stripVTControlCharacters } from 'node:util';
+import { sourceLocation, type SourceLocation } from './source.ts';
 import {
   ENGINE_ERROR_CODES,
   EngineError,
@@ -77,6 +78,23 @@ export type ErrorPhase =
   | 'cleanup'
   | 'report';
 
+/**
+ * Structured facts of one failure, beside its prose message. An assertion
+ * carries what it expected and observed and how many nodes matched; a
+ * locator failure carries the locator as written, what it asked for, and
+ * how long it waited. Text fields are bounded when serialized.
+ */
+export interface ErrorDetails {
+  readonly locator?: string;
+  readonly expected?: string;
+  readonly observed?: string;
+  readonly matches?: number;
+  readonly role?: string;
+  readonly name?: string;
+  readonly testId?: string;
+  readonly waitedMs?: number;
+}
+
 export interface SerializedError {
   category: ErrorCategory;
   code: string;
@@ -84,6 +102,9 @@ export interface SerializedError {
   retryable: boolean;
   phase?: ErrorPhase;
   scopeId?: string;
+  details?: ErrorDetails;
+  /** The line in the test file the failure unwound through, when the stack named one. */
+  source?: SourceLocation;
   stack?: string;
 }
 
@@ -120,23 +141,28 @@ function isEngineErrorCode(value: unknown): value is EngineErrorCode {
 }
 
 /** Base class for every runner-classified error. */
+/** Options every runner error accepts. */
+export interface E2EErrorOptions {
+  retryable?: boolean;
+  cause?: unknown;
+  /** Structured facts of the failure; see `ErrorDetails`. */
+  details?: ErrorDetails;
+}
+
 export class E2EError extends Error {
   readonly category: ErrorCategory;
   readonly code: string;
   readonly retryable: boolean;
+  readonly details: ErrorDetails | undefined;
   readonly [E2E_ERROR_MARKER] = true;
 
-  constructor(
-    category: ErrorCategory,
-    code: string,
-    message: string,
-    options: { retryable?: boolean; cause?: unknown } = {},
-  ) {
+  constructor(category: ErrorCategory, code: string, message: string, options: E2EErrorOptions = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'E2EError';
     this.category = category;
     this.code = code;
     this.retryable = options.retryable ?? false;
+    this.details = options.details;
   }
 }
 
@@ -163,28 +189,28 @@ export function isForeignE2EError(value: unknown): value is Error & {
 }
 
 export class ConfigurationError extends E2EError {
-  constructor(code: string, message: string, options: { cause?: unknown } = {}) {
+  constructor(code: string, message: string, options: Omit<E2EErrorOptions, 'retryable'> = {}) {
     super('configuration', code, message, options);
     this.name = 'ConfigurationError';
   }
 }
 
 export class CollectionError extends ConfigurationError {
-  constructor(message: string, options: { cause?: unknown } = {}) {
+  constructor(message: string, options: Omit<E2EErrorOptions, 'retryable'> = {}) {
     super('COLLECTION_ERROR', message, options);
     this.name = 'CollectionError';
   }
 }
 
 export class InfrastructureError extends E2EError {
-  constructor(code: string, message: string, options: { cause?: unknown } = {}) {
+  constructor(code: string, message: string, options: Omit<E2EErrorOptions, 'retryable'> = {}) {
     super('infrastructure', code, message, options);
     this.name = 'InfrastructureError';
   }
 }
 
 export class TestError extends E2EError {
-  constructor(code: string, message: string, options: { retryable?: boolean; cause?: unknown } = {}) {
+  constructor(code: string, message: string, options: E2EErrorOptions = {}) {
     super('test', code, message, options);
     this.name = 'TestError';
   }
@@ -276,9 +302,11 @@ export function translateProvisioningError(cause: unknown, suffix = ''): E2EErro
 export function classifyError(value: unknown): E2EError {
   if (value instanceof E2EError) return value;
   if (isForeignE2EError(value)) {
+    const details = (value as { details?: unknown }).details;
     return new E2EError(value.category, value.code, value.message, {
       retryable: value.retryable,
       cause: value,
+      ...(isDetails(details) ? { details } : {}),
     });
   }
   if (asEngineError(value) !== undefined) {
@@ -295,19 +323,66 @@ const MAX_MESSAGE_BYTES = 8192;
 /** Serializes an error into the bounded report-1 error shape. */
 export function serializeError(
   error: E2EError,
-  extras: { phase?: ErrorPhase; scopeId?: string } = {},
+  extras: {
+    phase?: ErrorPhase;
+    scopeId?: string;
+    projectRoot?: string | undefined;
+    /**
+     * Replaces secret values in the message, the details, and the stack: an
+     * assertion that observed a secret on screen, or a message that quoted
+     * one, must not carry it into the report. Identity when omitted.
+     */
+    redact?: ((text: string) => string) | undefined;
+  } = {},
 ): SerializedError {
+  const redact = extras.redact ?? ((text: string): string => text);
   const serialized: SerializedError = {
     category: error.category,
     code: error.code,
-    message: truncateUtf8(sanitizeText(error.message), MAX_MESSAGE_BYTES),
+    message: truncateUtf8(sanitizeText(redact(error.message)), MAX_MESSAGE_BYTES),
     retryable: error.retryable,
   };
   if (extras.phase !== undefined) serialized.phase = extras.phase;
   if (extras.scopeId !== undefined) serialized.scopeId = extras.scopeId;
+  if (error.details !== undefined) {
+    const details = boundedDetails(error.details, redact);
+    if (details !== undefined) serialized.details = details;
+  }
   const stack = (error.cause instanceof Error ? error.cause.stack : undefined) ?? error.stack;
-  if (stack !== undefined) serialized.stack = truncateUtf8(sanitizeText(stack), 65536);
+  if (stack !== undefined) serialized.stack = truncateUtf8(sanitizeText(redact(stack)), 65536);
+  const source = sourceLocation(stack, extras.projectRoot);
+  if (source !== undefined) serialized.source = source;
   return serialized;
+}
+
+/** Bytes one detail text keeps. */
+const MAX_DETAIL_BYTES = 2048;
+const DETAIL_TEXT_KEYS = ['locator', 'expected', 'observed', 'role', 'name', 'testId'] as const;
+const DETAIL_NUMBER_KEYS = ['matches', 'waitedMs'] as const;
+
+/** Structural check for details on an error from another module copy: the known keys, of the known types. */
+function isDetails(value: unknown): value is ErrorDetails {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return Object.entries(record).every(
+    ([key, entry]) =>
+      ((DETAIL_TEXT_KEYS as readonly string[]).includes(key) && typeof entry === 'string') ||
+      ((DETAIL_NUMBER_KEYS as readonly string[]).includes(key) && typeof entry === 'number'),
+  );
+}
+
+/** Details as the report carries them: text redacted, sanitized, and bounded, empty text dropped, nothing when nothing is left. */
+function boundedDetails(details: ErrorDetails, redact: (text: string) => string): ErrorDetails | undefined {
+  const bounded: Record<string, string | number> = {};
+  for (const key of DETAIL_TEXT_KEYS) {
+    const text = details[key];
+    if (text !== undefined && text !== '') bounded[key] = truncateUtf8(sanitizeText(redact(text)), MAX_DETAIL_BYTES);
+  }
+  for (const key of DETAIL_NUMBER_KEYS) {
+    const count = details[key];
+    if (count !== undefined && Number.isFinite(count)) bounded[key] = count;
+  }
+  return Object.keys(bounded).length === 0 ? undefined : (bounded as ErrorDetails);
 }
 
 /** C0/C1 control characters except tab and newline. */

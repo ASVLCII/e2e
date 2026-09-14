@@ -1,8 +1,8 @@
 /** Immutable locator expression construction. */
 
 import type { LocatorExpression, SemanticQuery } from '../engine/surface.ts';
-import { toTextPattern } from '../internal/text.ts';
-import { TestError } from '../internal/errors.ts';
+import { toTextPattern, type TextPattern } from '../internal/text.ts';
+import { TestError, type ErrorDetails } from '../internal/errors.ts';
 import type { Role, RoleOptions, TextMatch, TextMatchOptions } from '../types.ts';
 
 /** Builds a role query expression. */
@@ -105,6 +105,37 @@ export function indexExpression(
     throw new TestError('INVALID_LOCATOR', `nth() index must be a nonnegative integer, got ${index}`);
   }
   return { kind: 'index', source, index };
+}
+
+/**
+ * What an expression asks for, as the facts a failure report keeps beside
+ * the rendered locator: the role and name of a role query, the text a label,
+ * placeholder, text, or value query looks for, or the test id. A filter or
+ * index answers for the query under it; a native selector or frame has no
+ * semantic hint to give.
+ */
+export function expressionHints(expression: LocatorExpression): Pick<ErrorDetails, 'role' | 'name' | 'testId'> {
+  switch (expression.kind) {
+    case 'query': {
+      const { query } = expression;
+      const value = patternText(query.value);
+      if (query.kind === 'role') {
+        return { role: value, ...(query.name === undefined ? {} : { name: patternText(query.name) }) };
+      }
+      if (query.kind === 'testId') return { testId: value };
+      return { name: value };
+    }
+    case 'filter':
+    case 'index':
+    case 'frame':
+      return expressionHints(expression.source);
+    case 'selector':
+      return {};
+  }
+}
+
+function patternText(pattern: TextPattern): string {
+  return pattern.kind === 'string' ? pattern.value : pattern.source;
 }
 
 /** Renders an expression for diagnostics. */

@@ -6,7 +6,7 @@
  * `markdown` reporter writes it beside the report.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -81,9 +81,11 @@ function attempt(
   });
 }
 
+/** A step as most fixtures need it; its source is unknown unless a test says otherwise, so the block's location stays the test's own. */
 function step(overrides: Partial<ReportStep> & Pick<ReportStep, 'index' | 'label'>): ReportStep {
-  return reportStep({ id: `s${overrides.index}`, kind: 'screen', api: 'screen.tap', durationMs: 900, ...overrides });
+  return reportStep({ id: `s${overrides.index}`, kind: 'screen', api: 'screen.tap', durationMs: 900, source: UNKNOWN_SOURCE, ...overrides });
 }
+const UNKNOWN_SOURCE = { file: 'unknown', line: 1, column: 1 };
 
 const metrics = (modelCalls: number) => ({ modelCalls, actionSteps: 3, observationBytes: 1, contextBytes: 1, ledgerBytes: 1 });
 
@@ -355,7 +357,7 @@ describe('renderMarkdownReport', () => {
     expect(body).not.toContain('**tests/f449.e2e.ts**');
   });
 
-  it('reads a serial member from its group: error, steps, and evidence from every group attempt', () => {
+  it('reads a serial member from its group: error, steps, failure evidence, and the artifacts of the attempt that failed', () => {
     const member = named({ title: 'step two', status: 'failed', serialGroupId: 'g1' });
     const group: ReportSerialGroup = {
       id: 'g1',
@@ -383,6 +385,7 @@ describe('renderMarkdownReport', () => {
               durationMs: 40,
               steps: [step({ index: 0, label: 'tap Next', status: 'failed' })],
               error: { category: 'test', code: 'ASSERTION_FAILED', message: 'nope', retryable: false },
+              failure: { url: 'http://app.test/wizard', candidates: ['#n3 button "Next step"'] },
               secondaryErrors: [],
             },
           ],
@@ -390,7 +393,10 @@ describe('renderMarkdownReport', () => {
       ],
     };
     const body = renderMarkdownReport(page({ status: 'failed', results: [member], serialGroups: [group] }));
-    expect(body).toContain('**ASSERTION_FAILED** nope  \nStep 1 of 1, `screen.tap` "tap Next", failed in 900ms  \nEvidence: screenshot, trace · `tests/example.e2e.ts:3`');
+    // The evidence is the failing group attempt's own, not an earlier attempt's trace.
+    expect(body).toContain(
+      '**ASSERTION_FAILED** nope  \nStep 1 of 1, `screen.tap` "tap Next", failed in 900ms  \nScreen: http://app.test/wizard · closest to the locator: `#n3 button "Next step"`  \nEvidence: screenshot · `tests/example.e2e.ts:3`',
+    );
     // A member whose group is missing renders what it has rather than an inspection of nothing.
     expect(renderMarkdownReport(page({ status: 'failed', results: [member] }))).toContain('**🔴 tests/example.e2e.ts › step two**  \n`tests/example.e2e.ts:3`');
   });
@@ -507,7 +513,7 @@ describe('renderMarkdownReport for an exploration', () => {
           '   Expected: The total reflects the cart',
           '   Actual: Total: $0.00',
           '   Steps: 1. Add two items 2. Open the cart',
-          '   Evidence: `.e2e/artifacts/web/explore/attempt-0/finding-0.png`',
+          '   Evidence: screenshot `.e2e/artifacts/web/explore/attempt-0/finding-0.png`',
         ].join('  \n'),
         ['2. **trivial warning** Newsletter label misspells Receive · `/checkout` · step 2', '   Expected: The total reflects the cart', '   Actual: Total: $0.00'].join('  \n'),
         '',
@@ -550,10 +556,13 @@ describe('renderMarkdownReport for an exploration', () => {
 });
 
 describe('renderMarkdownReport evidence paths', () => {
-  it('lists artifact paths under artifactsDir when there is no run page, capped, in kind order, and names kinds when no path was kept', () => {
+  it('lists one artifact path per kind under artifactsDir when there is no run page, in kind order, and names kinds when no path was kept', () => {
     const evidence = attempt({ status: 'failed', error: { code: 'E', message: 'm' }, artifacts: ['trace', 'screenshot', 'video', 'log', 'download'] });
     const body = renderMarkdownReport(page({ status: 'failed', results: [named({ title: 't', status: 'failed', attempts: [evidence] })] }), { artifactsDir: '.e2e/artifacts' });
-    expect(body).toContain('Evidence: `.e2e/artifacts/t/attempt-0/screenshot-1.bin`, `.e2e/artifacts/t/attempt-0/video-2.bin`, `.e2e/artifacts/t/attempt-0/trace-0.bin`, and 2 more · `tests/example.e2e.ts:3`');
+    // One artifact per kind of the attempt the block tells, named by kind; a log is not evidence unless the failure captured it.
+    expect(body).toContain(
+      'Evidence: screenshot `.e2e/artifacts/t/attempt-0/screenshot-1.bin`, video `.e2e/artifacts/t/attempt-0/video-2.bin`, trace `.e2e/artifacts/t/attempt-0/trace-0.bin`, download `.e2e/artifacts/t/attempt-0/download-4.bin` · `tests/example.e2e.ts:3`',
+    );
     const withheld = attempt({ status: 'failed', error: { code: 'E', message: 'm' }, artifacts: ['screenshot'] });
     withheld.artifacts = withheld.artifacts.map(({ path: _path, ...artifact }) => artifact);
     const named2 = renderMarkdownReport(page({ status: 'failed', results: [named({ title: 't', status: 'failed', attempts: [withheld] })] }), { artifactsDir: '.e2e/artifacts' });
@@ -586,10 +595,35 @@ describe('markdownReporter', () => {
     expect(rows).toEqual([{ label: 'Markdown', text: path.join('.e2e', 'summary.md') }]);
     const text = readFileSync(path.join(root, '.e2e', 'summary.md'), 'utf8');
     expect(text.startsWith('### 🔴 e2e explore: 1 issue\n')).toBe(true);
-    expect(text).toContain('   Evidence: `.e2e/artifacts/web/explore/attempt-0/finding-0.png`');
+    expect(text).toContain('   Evidence: screenshot `.e2e/artifacts/web/explore/attempt-0/finding-0.png`');
     // Artifacts at the project root itself list from `.`.
     await markdownReporter.onRunFinished!(finished(explored(), root, root), new AbortController().signal);
-    expect(readFileSync(path.join(root, '.e2e', 'summary.md'), 'utf8')).toContain('   Evidence: `web/explore/attempt-0/finding-0.png`');
+    expect(readFileSync(path.join(root, '.e2e', 'summary.md'), 'utf8')).toContain('   Evidence: screenshot `web/explore/attempt-0/finding-0.png`');
+  });
+
+  it('writes one page per failed test under failures/, links each block to its page, and clears what an earlier run left there', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'e2e-markdown-'));
+    dirs.push(root);
+    const stale = path.join(root, '.e2e', 'failures', 'stale.md');
+    mkdirSync(path.dirname(stale), { recursive: true });
+    writeFileSync(stale, 'old');
+    const document = page({ status: 'failed', results: [passing, failing] });
+    const rows = await markdownReporter.onRunFinished!(finished(document, root), new AbortController().signal);
+    expect(rows).toEqual([
+      { label: 'Markdown', text: path.join('.e2e', 'summary.md') },
+      { label: 'Failures', text: `${path.join('.e2e', 'failures')}/ (1 page)` },
+    ]);
+    const pages = readdirSync(path.join(root, '.e2e', 'failures'));
+    expect(pages).toHaveLength(1);
+    const [name] = pages;
+    // The file and title as one path segment, cut to length, then the result id's first characters.
+    expect(name).toMatch(/^tests_members\.e2e\.ts-members-an_email_invitation_is_accepted_by_the_invited_account_only-[A-Za-z0-9-]{1,8}\.md$/);
+    const summary = readFileSync(path.join(root, '.e2e', 'summary.md'), 'utf8');
+    expect(summary).toContain(`Details: \`.e2e/failures/${name}\``);
+    const text = readFileSync(path.join(root, '.e2e', 'failures', name!), 'utf8');
+    expect(text.startsWith('# ✗ members › an email invitation is accepted by the invited account only\n')).toBe(true);
+    expect(text).toContain('## Steps');
+    expect(text).toContain('- screenshot `.e2e/artifacts/t/attempt-0/screenshot-1.bin`');
   });
 
   it('writes nothing when the report itself was not written', async () => {

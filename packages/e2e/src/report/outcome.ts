@@ -6,14 +6,20 @@
  * (JUnit, markdown) share this one reading.
  */
 
+import type { FailureEvidence } from '../run/records.ts';
 import type { ReportError, ReportResult, ReportSerialGroup, ReportStep } from './build.ts';
 
 type ReportArtifact = ReportResult['attempts'][number]['artifacts'][number];
 
-/** One attempt as a reporter reads it: what stopped it, and the steps up to there. */
+/** One attempt as a reporter reads it: what stopped it, the steps up to there, and what it left behind. */
 export interface AttemptView {
+  readonly status: ReportResult['attempts'][number]['status'] | 'skipped';
   readonly error: ReportError | undefined;
   readonly steps: readonly ReportStep[];
+  /** What the runner saw when the failure landed, when it captured anything. */
+  readonly failure: FailureEvidence | undefined;
+  /** The attempt's own artifacts; for a serial member, the group attempt's. */
+  readonly artifacts: readonly ReportArtifact[];
 }
 
 export interface Outcome {
@@ -23,39 +29,53 @@ export interface Outcome {
   readonly final: AttemptView;
   /** The last attempt that did not pass before the final one, when there was one: what a flaky test hit. */
   readonly lastFailed: AttemptView | undefined;
+  /** Every attempt in order, so a reporter can say whether they failed alike. */
+  readonly attempts: readonly AttemptView[];
   /** Attempts that did not pass before the final one; what a flaky pass cost. */
   readonly failedAttempts: number;
-  /** The evidence over every attempt: a flaky test's failure screenshot belongs to the attempt that failed. */
-  readonly artifacts: readonly ReportArtifact[];
 }
 
+/** What a result that never ran an attempt reads as. */
+const NO_ATTEMPT: AttemptView = { status: 'skipped', error: undefined, steps: [], failure: undefined, artifacts: [] };
+
 export function outcome(result: ReportResult, groups: ReadonlyMap<string, ReportSerialGroup>): Outcome {
+  const views = attemptViews(result, groups);
+  const earlier = views.slice(0, -1);
+  return {
+    durationMs: durationOf(result, groups),
+    final: views.at(-1) ?? NO_ATTEMPT,
+    lastFailed: earlier.toReversed().find((attempt) => attempt.status !== 'passed'),
+    attempts: views,
+    failedAttempts: earlier.filter((attempt) => attempt.status !== 'passed').length,
+  };
+}
+
+/** The result's attempts as views; a serial member's from its group, keyed by test id. */
+function attemptViews(result: ReportResult, groups: ReadonlyMap<string, ReportSerialGroup>): AttemptView[] {
   if (result.serialGroupId === undefined) {
-    const attempts = result.attempts;
-    const earlier = attempts.slice(0, -1);
-    const lastFailed = earlier.toReversed().find((attempt) => attempt.status !== 'passed');
-    return {
-      durationMs: attempts.at(-1)?.durationMs ?? 0,
-      final: { error: attempts.at(-1)?.error, steps: attempts.at(-1)?.steps ?? [] },
-      lastFailed: lastFailed === undefined ? undefined : { error: lastFailed.error, steps: lastFailed.steps },
-      failedAttempts: earlier.filter((attempt) => attempt.status !== 'passed').length,
-      artifacts: attempts.flatMap((attempt) => attempt.artifacts),
-    };
+    return result.attempts.map((attempt) => ({
+      status: attempt.status,
+      error: attempt.error,
+      steps: attempt.steps,
+      failure: attempt.failure,
+      artifacts: attempt.artifacts,
+    }));
   }
   const attempts = groups.get(result.serialGroupId)?.attempts ?? [];
-  const earlier = attempts.slice(0, -1);
-  const memberOf = (attempt: ReportSerialGroup['attempts'][number] | undefined) =>
-    attempt?.members.find((candidate) => candidate.testId === result.testId);
-  const last = attempts.at(-1);
-  const member = memberOf(last);
-  const lastFailedAttempt = earlier.toReversed().find((attempt) => attempt.status !== 'passed');
-  const lastFailedMember = memberOf(lastFailedAttempt);
-  return {
-    durationMs: member?.durationMs ?? 0,
-    final: { error: member?.error ?? last?.error, steps: member?.steps ?? [] },
-    lastFailed:
-      lastFailedAttempt === undefined ? undefined : { error: lastFailedMember?.error ?? lastFailedAttempt.error, steps: lastFailedMember?.steps ?? [] },
-    failedAttempts: earlier.filter((attempt) => attempt.status !== 'passed').length,
-    artifacts: attempts.flatMap((attempt) => attempt.artifacts),
-  };
+  return attempts.map((attempt) => {
+    const member = attempt.members.find((candidate) => candidate.testId === result.testId);
+    return {
+      status: member?.status ?? attempt.status,
+      error: member?.error ?? attempt.error,
+      steps: member?.steps ?? [],
+      failure: member?.failure,
+      artifacts: attempt.artifacts,
+    };
+  });
+}
+
+function durationOf(result: ReportResult, groups: ReadonlyMap<string, ReportSerialGroup>): number {
+  if (result.serialGroupId === undefined) return result.attempts.at(-1)?.durationMs ?? 0;
+  const last = groups.get(result.serialGroupId)?.attempts.at(-1);
+  return last?.members.find((candidate) => candidate.testId === result.testId)?.durationMs ?? 0;
 }
