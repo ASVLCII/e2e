@@ -1,6 +1,6 @@
 {
   "name": "@e2edev/github",
-  "version": "0.2.0",
+  "version": "0.3.0-canary-20260914081513",
   "description": "GitHub reporter for e2e: one pull request comment per run, from GitHub Actions",
   "keywords": [
     "e2e",
@@ -50,7 +50,7 @@
     "test:unit": "vitest run tests/unit"
   },
   "peerDependencies": {
-    "e2e": ">=0.13.0 <1"
+    "e2e": "0.15.0-canary-20260914081513"
   },
   "devDependencies": {
     "e2e": "workspace:*",
