@@ -1,4 +1,5 @@
 /** Shared token and cost accounting for executor loops and judgment calls. */
+import { bound } from '../cache/trace.ts';
 import type { StepEvent, StepModelInfo } from '../run/steps.ts';
 
 type Provenance = Pick<StepModelInfo, 'provider' | 'model' | 'endpoint' | 'adapterVersion' | 'policyVersion'>;
@@ -91,4 +92,22 @@ export function tokenFields(usage: Usage = {}): Pick<StepEvent, 'inputTokens' | 
 /** Rejects counters that cannot be represented in the report schema. */
 function tokenCount(value: number | undefined): number | undefined {
   return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/** Longest reasoning excerpt a `model` step event carries; the AI trace keeps the full text. */
+export const MAX_REASONING_CHARS = 600;
+
+/**
+ * The `reasoning` field of one model event, absent when the turn produced
+ * none. Reasoning is redacted by construction (secrets never reach model
+ * input), but the attempt redactor runs over it anyway, the same defense in
+ * depth `detail` prose gets. An excerpt, not the transcript: the report
+ * schema caps the field at MAX_REASONING_CHARS.
+ */
+export function reasoningField(
+  text: string | undefined,
+  redact: (text: string) => string,
+): Pick<StepEvent, 'reasoning'> {
+  const trimmed = text?.trim() ?? '';
+  return trimmed === '' ? {} : { reasoning: bound(redact(trimmed), MAX_REASONING_CHARS) };
 }
