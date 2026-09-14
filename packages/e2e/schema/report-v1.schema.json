@@ -456,14 +456,13 @@
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "index", "platform", "environment", "testIdAttribute", "engine", "capabilities", "artifactCapabilities", "stateCapability"],
+      "required": ["id", "index", "platform", "environment", "engine", "capabilities", "artifactCapabilities", "stateCapability"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "index": { "type": "integer", "minimum": 0 },
         "platform": { "type": "string", "minLength": 1 },
         "baseOrigin": { "type": "string", "format": "uri" },
         "environment": { "enum": ["test", "staging", "production"] },
-        "testIdAttribute": { "type": "string", "minLength": 1 },
         "engine": {
           "type": "object",
           "additionalProperties": false,

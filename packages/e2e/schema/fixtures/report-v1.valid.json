@@ -29,7 +29,6 @@
         "platform": "web",
         "baseOrigin": "https://example.test",
         "environment": "test",
-        "testIdAttribute": "data-testid",
         "engine": {
           "name": "playwright",
           "version": "1.0.0",

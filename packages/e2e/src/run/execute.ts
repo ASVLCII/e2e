@@ -73,6 +73,8 @@ export interface TargetExecutorOptions {
   readonly headed: boolean;
   /** This worker's slot among the target's workers; see `EngineInitInfo.workerSlot`. */
   readonly workerSlot: number;
+  /** This worker's environment; see `EngineInitInfo.env`. */
+  readonly env: Readonly<Record<string, string | undefined>>;
   /**
    * Whether this executor runs in a process of its own that ends with its
    * work. Only then can an interrupted test body be abandoned mid-flight:
@@ -186,7 +188,7 @@ export class TargetExecutor implements SerialHost {
 
   /** Builds one engine operation context. */
   private op(attemptId: string, timeoutMs: number, signal: AbortSignal): OperationContext {
-    return { signal, timeoutMs, runId: this.options.runId, attemptId };
+    return { signal, timeoutMs, runId: this.options.runId, attemptId, origin: 'test' };
   }
 
   /** Run-level errors recorded so far, in order. */
@@ -218,8 +220,8 @@ export class TargetExecutor implements SerialHost {
             runId: this.options.runId,
             targetName: this.target.name,
             projectRoot: this.config.projectRoot,
-            app: obj({ baseUrl: this.target.app.base?.href, site: this.target.app.site }),
-            testIdAttribute: this.config.testIdAttribute,
+            app: obj({ site: this.target.app.site }),
+            env: this.options.env,
             headed: this.options.headed,
             workerSlot: this.options.workerSlot,
             signal,

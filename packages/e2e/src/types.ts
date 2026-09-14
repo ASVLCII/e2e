@@ -397,9 +397,15 @@ export interface App {
   readonly baseUrl: string | undefined;
   /** Opens the app: the declared URL, a path relative to it, or any absolute http(s) URL. */
   open(path?: string): Promise<void>;
-  /** Recreates the execution context while preserving persisted state. */
+  /**
+   * Recreates the execution context while preserving persisted state, then
+   * reopens the app at its base URL when the engine declares one.
+   */
   restart(): Promise<void>;
-  /** Clears persisted client state and relaunches. */
+  /**
+   * Clears persisted client state, recreates the execution context, then
+   * reopens the app at its base URL when the engine declares one.
+   */
   clearState(): Promise<void>;
   /** Navigates back once. */
   back(): Promise<void>;
@@ -915,9 +921,6 @@ export interface E2EConfig {
    * beside them and `--reporter` never removes it.
    */
   reporters?: readonly (BuiltinReporter | Reporter)[];
-  screen?: {
-    testIdAttribute?: string;
-  };
   /**
    * The agents by name. Each is either an options block or the agent itself:
    * `createAgent(...)` from `@e2edev/e2e/agent`, or any hand-rolled

@@ -11,6 +11,7 @@ import type { StepExecutor } from '../../src/agent/executor.ts';
 import type { SemanticNode } from '../../src/engine/surface.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 import { createProject } from '../helpers/run-project.ts';
+import { snapshot } from '../helpers/snapshot.ts';
 
 const builtRunnerModule = new URL('../../dist/run/runner.js', import.meta.url).href;
 const { run } = (await import(builtRunnerModule)) as typeof import('../../src/run/runner.ts');
@@ -73,6 +74,7 @@ function toyEngine(
 ) {
   const lifecycle: string[] = [];
   const fixtureCalls: string[] = [];
+  let initEnv: Record<string, string | undefined> = {};
   let count = 0;
   const nodes = (): SemanticNode[] => [
     { ref: { id: 'counter', revision: '' }, role: 'status', name: 'count', text: String(count) },
@@ -92,13 +94,17 @@ function toyEngine(
             // Long enough that a clock started after this hook is measurably
             // later than the notice it just logged.
             await new Promise((resolve) => setTimeout(resolve, 50));
+            // What prepare provisioned reaches the workers through the
+            // result's env; the run's own variables are never overwritten.
+            return { env: { TOY_POOL: 'sim-a,sim-b', TOY_CACHE: '/overwritten' } };
           },
         }),
     ...(options.withoutInit === true
       ? {}
       : {
-          async init() {
+          async init(info: { env: Readonly<Record<string, string | undefined>> }) {
             lifecycle.push('init');
+            initEnv = { TOY_POOL: info.env['TOY_POOL'], TOY_CACHE: info.env['TOY_CACHE'] };
           },
         }),
     ...(options.withIsolation !== true
@@ -116,8 +122,9 @@ function toyEngine(
       lifecycle.push('dispose');
     },
     async observe() {
-      return { nodes: nodes() };
+      return snapshot(nodes());
     },
+    actions: ['tap', 'fill', 'press', 'selectOption'],
     async perform(ref, action) {
       if (ref.id !== 'increment' || action.kind !== 'tap') {
         throw new Error(`cannot ${action.kind} node ${ref.id}`);
@@ -166,13 +173,13 @@ function toyEngine(
             async capture() {
               return { format: 'toy', version: 1, data: { count } };
             },
-            async restore(snapshot: { data: unknown }) {
-              count = (snapshot.data as { count: number }).count;
+            async restore(state: { data: unknown }) {
+              count = (state.data as { count: number }).count;
             },
           },
         }),
   });
-  return { engine, lifecycle, fixtureCalls, current: () => count };
+  return { initEnv: () => initEnv, engine, lifecycle, fixtureCalls, current: () => count };
 }
 
 /** Observes, taps until the counter reads the goal, verifies, concludes. */
@@ -386,6 +393,7 @@ test('second attempt also starts fresh', async ({ screen }) => {
     /** Event types in order of first appearance. */
     const order: string[] = [];
     let noticeAt = 0;
+    const env: NodeJS.ProcessEnv = { ...process.env, APP_URL: '', CI: '', TOY_CACHE: '/run/cache' };
     try {
       const outcome = await run({
         cwd: project.dir,
@@ -393,7 +401,7 @@ test('second attempt also starts fresh', async ({ screen }) => {
           targets: [{ name: 'toy-sim', platform: 'ios', engine: toy.engine }],
           cache: 'off',
         },
-        env: { ...process.env, APP_URL: '', CI: '', TOY_CACHE: '/run/cache' },
+        env,
         quiet: true,
         onEvent: (event) => {
           if (!order.includes(event.type)) order.push(event.type);
@@ -415,6 +423,9 @@ test('second attempt also starts fresh', async ({ screen }) => {
       expect(toy.lifecycle).toEqual(['prepare', 'init', 'dispose']);
       // The hook sees the run's environment, the one the workers start with.
       expect(notices).toEqual([{ target: 'toy-sim', message: 'provisioning toy device for /run/cache' }]);
+      // The result's env reached init as the worker's environment; the run's own value won.
+      expect(toy.initEnv()).toEqual({ TOY_POOL: 'sim-a,sim-b', TOY_CACHE: '/run/cache' });
+      expect(env['TOY_POOL']).toBeUndefined();
       // Collection and provisioning are setup steps between the header and
       // the plan; the notice narrates under the prepare step, which names the
       // engine and lasts at least the hook's own wait.

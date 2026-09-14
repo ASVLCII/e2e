@@ -609,6 +609,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             sessionStore: store,
             headed: options.headed ?? false,
             debug,
+            envFor: workerEnvFor(plans, env),
           })
         : childProcessSpawner({
             configPath: workerConfigPath,
@@ -623,7 +624,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             sessionKeyBase64: store.exportKeyForWorker(),
             debug: debug.enabled,
             aiTrace: aiTrace !== undefined,
-            env,
+            envFor: workerEnvFor(plans, env),
           });
 
     await debug.time('scheduler', () =>
@@ -753,14 +754,30 @@ function withPreparedWorkers(
   result: void | EnginePrepareResult,
 ): TargetWorkPlan {
   const workers = result?.workers;
-  if (workers === undefined) return plan;
-  if (!Number.isSafeInteger(workers) || workers < 1 || workers > Math.max(1, slots)) {
+  if (workers !== undefined && (!Number.isSafeInteger(workers) || workers < 1 || workers > Math.max(1, slots))) {
     throw new InfrastructureError(
       'ENGINE_FAILURE',
       `engine ${engineName} reported ${String(workers)} workers from prepare for target "${plan.target.name}"; it was asked to provision ${slots}`,
     );
   }
-  return { ...plan, workers };
+  return {
+    ...plan,
+    ...(workers === undefined ? {} : { workers }),
+    ...(result?.env === undefined ? {} : { env: result.env }),
+  };
+}
+
+/**
+ * The environment one target's workers run with: what its `prepare` handed
+ * back, under the run's own variables, which win on a clash. Other targets'
+ * additions never enter it.
+ */
+function workerEnvFor(plans: readonly TargetWorkPlan[], env: NodeJS.ProcessEnv): (targetName: string) => NodeJS.ProcessEnv {
+  const additions = new Map(plans.map((plan) => [plan.target.name, plan.env]));
+  return (targetName) => {
+    const added = additions.get(targetName);
+    return added === undefined ? env : { ...added, ...env };
+  };
 }
 
 function selectionFilters(options: ListOptions): SelectionFilters {

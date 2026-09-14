@@ -90,8 +90,8 @@ export class DevicePool {
    * device. A slot beyond the pool is a broken invariant: the runner caps the
    * target at the workers this engine declared or reported.
    */
-  device(targetName: string, slot: number): string | undefined {
-    const devices = this.configured ?? this.discovered.get(targetName) ?? this.fromEnvironment(process.env, targetName);
+  device(targetName: string, slot: number, env: Readonly<Record<string, string | undefined>>): string | undefined {
+    const devices = this.configured ?? this.discovered.get(targetName) ?? this.fromEnvironment(env, targetName);
     if (devices === undefined || devices.length === 0) return undefined;
     if (slot >= devices.length) {
       throw new EngineError(
@@ -137,10 +137,13 @@ export class DevicePool {
         info.log(`${label}: automation runner not warmed up (${message(cause)}); the first attempt starts it`);
       }
     }
-    return { workers: Math.max(1, Math.min(slots, devices.length)) };
+    return {
+      workers: Math.max(1, Math.min(slots, devices.length)),
+      env: { [poolVariable(info.targetName)]: JSON.stringify(devices) },
+    };
   }
 
-  /** Discovers the pool for a run: the booted devices, as many as the run has slots, handed to the workers in `info.env`. */
+  /** Discovers the pool for a run: the booted devices, as many as the run has slots; `prepare` hands them to the workers through its result's `env`. */
   private async discoverForRun(info: EnginePrepareInfo): Promise<readonly string[]> {
     const booted = await this.bootedDevices(info.targetName, info.signal);
     const chosen = booted.slice(0, Math.max(1, info.slots));
@@ -151,13 +154,12 @@ export class DevicePool {
       const names = chosen.map((device) => device.name).join(', ');
       info.log(`${booted.length} booted ${this.options.platform} device(s); driving ${devices.length}: ${names}`);
     }
-    info.env[poolVariable(info.targetName)] = JSON.stringify(devices);
     this.discovered.set(info.targetName, devices);
     return devices;
   }
 
   /** The pool `prepare` left for this target in the environment, if any. */
-  private fromEnvironment(env: NodeJS.ProcessEnv, targetName: string): readonly string[] | undefined {
+  private fromEnvironment(env: Readonly<Record<string, string | undefined>>, targetName: string): readonly string[] | undefined {
     const raw = env[poolVariable(targetName)];
     if (raw === undefined) return undefined;
     try {

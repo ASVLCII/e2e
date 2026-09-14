@@ -7,10 +7,11 @@ import { isDefaultAgent } from '../agent/default-agent.ts';
 import type { AgentCacheContext } from '../cache/context.ts';
 import type { WorkerModels } from './worker-models.ts';
 import type { EngineFixtureContext } from '../engine/index.ts';
-import type { TargetSession } from '../engine/surface.ts';
+import type { OperationContext, TargetSession } from '../engine/surface.ts';
 import { expectationBrand } from '../internal/brands.ts';
 import type { DebugTrace } from '../internal/debug.ts';
 import { ConfigurationError, errorMessage, InfrastructureError, TestError } from '../internal/errors.ts';
+import { Deadline } from '../internal/time.ts';
 import { didYouMean } from '../internal/suggest.ts';
 import { sessionSecrecy, type SessionSecrecy } from './secrecy.ts';
 import { unavailableCode } from '../secrets.ts';
@@ -311,7 +312,7 @@ function fixtureContext(
     targetName: environment.target.name,
     fixture: (name, surface, operations) => recorder.fixture(name, surface, operations),
     app: {
-      ...obj({ baseUrl: app.base?.href, site: app.site }),
+      ...obj({ site: app.site }),
       resolveUrl: (url) => {
         requireAppUrl(environment.target);
         return resolveNavigationUrl(url, app.base).url;
@@ -419,34 +420,44 @@ function unreachableApp(cause: unknown, url: string): InfrastructureError | unde
 function createApp(environment: AttemptEnvironment, engine: LocatorEngine, taint: SessionSecrecy['taint']): App {
   const { config, steps, target } = environment;
 
+  /** Opens one resolved URL; a refused connection is reported as the app being down. */
+  const openAt = async (resolved: string, timeoutMs: number): Promise<void> => {
+    try {
+      await engine.session.app.open(resolved, engine.operation(timeoutMs));
+    } catch (cause) {
+      throw unreachableApp(cause, resolved) ?? cause;
+    }
+  };
+
   /** One recorded navigation: resolved against the base URL, on the test budget. */
   const navigate = (api: string, label: string, url: string | undefined): Promise<void> =>
     steps.run('app', api, label, async () => {
       requireAppUrl(target);
-      const resolved =
-        url === undefined
-          ? target.app.base.href
-          : resolveNavigationUrl(url, target.app.base).url;
-      try {
-        await engine.session.app.open(resolved, engine.operation(config.timeout));
-      } catch (cause) {
-        throw unreachableApp(cause, resolved) ?? cause;
-      }
+      const resolved = url === undefined ? target.app.base.href : resolveNavigationUrl(url, target.app.base).url;
+      await openAt(resolved, config.timeout);
+    });
+
+  /**
+   * A steering hook ends at a fresh surface showing nothing, so the app is
+   * reopened at its base URL through the same path as `app.open()`, and an
+   * unreachable app after a restart is reported exactly as on first open.
+   * The hook and the reopen share one `config.timeout` budget. A target
+   * without an address, or whose engine cannot open one (a device relaunches
+   * its pinned app inside the hook), has nothing to reopen.
+   */
+  const steer = (api: string, hook: (operation: OperationContext) => Promise<void>): Promise<void> =>
+    steps.run('app', api, '', async () => {
+      const deadline = new Deadline(config.timeout);
+      await hook(engine.operation(deadline.remaining()));
+      if (target.app.base === undefined || !engine.session.verbs.has('navigate')) return;
+      await openAt(target.app.base.href, deadline.remaining());
     });
 
   return {
     baseUrl: target.app.base?.href,
     open: (openPath?: string) => navigate('app.open', openPath ?? '/', openPath),
-    async restart(): Promise<void> {
-      await steps.run('app', 'app.restart', '', async () => {
-        await engine.session.app.restart(engine.operation(config.timeout));
-      });
-    },
-    async clearState(): Promise<void> {
-      await steps.run('app', 'app.clearState', '', async () => {
-        await engine.session.app.clearState(engine.operation(config.timeout));
-      });
-    },
+    restart: () => steer('app.restart', (operation) => engine.session.app.restart(operation)),
+    clearState: () => steer('app.clearState', (operation) => engine.session.app.reset(operation)),
     async back(): Promise<void> {
       await steps.run('app', 'app.back', '', async () => {
         await engine.session.app.back(engine.operation());

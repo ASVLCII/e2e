@@ -93,7 +93,6 @@ export function reportTarget(overrides: Partial<ReportTarget> = {}): ReportTarge
     index: 0,
     platform: 'web',
     environment: 'local',
-    testIdAttribute: 'data-testid',
     engine: { name: 'playwright', version: '0.6.1', spiVersion: ENGINE_SPI_VERSION },
     capabilities: [],
     artifactCapabilities: [],

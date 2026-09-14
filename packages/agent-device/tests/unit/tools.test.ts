@@ -33,9 +33,9 @@ describe('agent tool pack', () => {
         targetName,
         projectRoot: '/project',
         app: {},
-        testIdAttribute: 'data-testid',
         headed: false,
         workerSlot: 0,
+        env: {},
         signal: new AbortController().signal,
       });
     await init(ios, 'ios');

@@ -155,6 +155,14 @@ describe('dispatchLocatorAction', () => {
     },
   );
 
+  it('presses a key as spelled: the harness has already checked the grammar', async () => {
+    const { locator, target } = stubLocator();
+    for (const key of ['Control+a', 'Shift+Tab', 'ControlOrMeta+Shift+ArrowLeft', '$', 'Shift++']) {
+      await dispatchLocatorAction(target, { kind: 'press', key }, 7, lookup);
+      expect(locator.press).toHaveBeenLastCalledWith(key, { timeout: 7 });
+    }
+  });
+
   it('scrolls a node with a wheel gesture sized by its own box: the agent node scroll', async () => {
     const { locator, target, wheel } = stubLocator({ x: 0, y: 0, width: 400, height: 300 });
     await dispatchLocatorAction(target, { kind: 'swipe', direction: 'down' }, 7, lookup);

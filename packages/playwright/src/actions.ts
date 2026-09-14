@@ -41,6 +41,8 @@ export async function dispatchLocatorAction(
       await locator.fill('', { timeout });
       return;
     case 'press':
+      // Playwright spells keys as the contract grammar does; the harness has
+      // already refused anything outside it, so the key is pressed as given.
       await locator.press(action.key, { timeout });
       return;
     case 'check':

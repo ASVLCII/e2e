@@ -250,7 +250,6 @@ export interface ReportTarget {
   /** Origin of the engine's declared app URL; absent for a surface without one. */
   baseOrigin?: string;
   environment: string;
-  testIdAttribute: string;
   engine: { name: string; version: string; spiVersion: EngineSpiVersion };
   capabilities: readonly string[];
   artifactCapabilities: readonly string[];
@@ -447,7 +446,6 @@ function serializeTarget(
       platform: target.platform,
       baseOrigin: target.app.base?.origin,
       environment: target.app.environment,
-      testIdAttribute: config.testIdAttribute,
     }),
     ...(provenance ?? describeTarget(target)),
   };

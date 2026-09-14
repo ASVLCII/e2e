@@ -1,6 +1,6 @@
 /** Host-side secret fill authorization. */
 
-import type { TargetSession, OperationContext, SemanticNode } from '../engine/surface.ts';
+import type { SemanticNode } from '../engine/surface.ts';
 import { unavailableCode } from '../secrets.ts';
 import type { Secret } from '../types.ts';
 import { AgentError, toAgentError } from './error.ts';
@@ -9,11 +9,9 @@ import type { AgentContext } from './invocation.ts';
 /**
  * The narrow surface a secret fill needs from its step machinery: the act
  * dispatch is its one caller today, and any future tier that fills secrets
- * satisfies the same three members rather than re-deriving the policy.
+ * satisfies the same member rather than re-deriving the policy.
  */
 interface SecretFillHost {
-  readonly session: TargetSession;
-  operation(): OperationContext;
   recordPolicy(name: string, decision: 'allowed' | 'denied', code?: string): void;
 }
 

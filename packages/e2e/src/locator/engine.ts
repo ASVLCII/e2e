@@ -10,10 +10,12 @@ import {
 } from '../engine/surface.ts';
 import {
   asEngineError,
+  ConfigurationError,
   E2EError,
   TestError,
   translateEngineError,
 } from '../internal/errors.ts';
+import { requireKey } from '../internal/keys.ts';
 import { describeExpression } from './expression.ts';
 import { Deadline, POLL_INTERVAL_MS, sleep } from '../internal/time.ts';
 import type { AttemptBudget } from '../run/budget.ts';
@@ -71,6 +73,24 @@ export class LocatorEngine {
       attemptId: this.options.attemptId,
       origin: 'test',
     };
+  }
+
+  /**
+   * Refuses an action the session would refuse, before the locator is
+   * resolved: an undeclared kind is `UNSUPPORTED_CAPABILITY`, a `press` key
+   * outside the grammar is `INVALID_ARGUMENT`. Waiting for a node the engine
+   * could never act on would report it as missing instead.
+   */
+  private checkAction(action: LocatorAction): void {
+    if (!this.session.actions.has(action.kind)) {
+      throw new ConfigurationError(
+        'UNSUPPORTED_CAPABILITY',
+        `the "${action.kind}" action is not available on this target: its engine declares ${
+          this.session.actions.size === 0 ? 'no actions' : [...this.session.actions].join(', ')
+        }`,
+      );
+    }
+    if (action.kind === 'press') requireKey(action.key);
   }
 
   /** One immediate engine resolve, retrying retryable frame misses within the deadline. */
@@ -184,6 +204,7 @@ export class LocatorEngine {
     action: LocatorAction | ((deadline: Deadline) => Promise<LocatorAction>),
     timeoutMs?: number,
   ): Promise<void> {
+    if (typeof action !== 'function') this.checkAction(action);
     const deadline = this.deadline(timeoutMs);
     for (;;) {
       const ref = await this.resolveExactlyOne(expression, deadline);

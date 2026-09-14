@@ -6,6 +6,10 @@
  * counter), and every translation between the contract's vocabulary and
  * agent-device's commands. Its device and session come from the target's
  * `DevicePool`, by worker slot. The runner owns everything else.
+ *
+ * Every observation is reported under one root of a stable id (`ROOT_ID`)
+ * wrapping the device's top-level elements; a `swipe` performed on that root
+ * scrolls the whole screen.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,6 +17,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   EngineError,
+  KEY_NAMES,
+  parseKey,
   raceAbort,
   withinCleanupBudget,
   type EngineAttemptContext,
@@ -22,28 +28,38 @@ import {
   type EngineSnapshot,
   type LocatorAction,
   type LocatorExpression,
-  type Momentum,
   type NodeRef,
   type ObservationPixels,
   type OperationContext,
   type VideoSegment,
-  type ScrollDirection,
   type SemanticNode,
   type ViewportPoint,
   ConfigurationError,
 } from '@e2edev/e2e/engine';
 import { runCommand, staleOr } from './errors.ts';
 import { resolveExpression } from './locate.ts';
-import { isWithin, projectSnapshot, screenTitle, type ProjectedNode, type ProjectedSnapshot, type RawNode } from './nodes.ts';
+import {
+  isWithin,
+  projectSnapshot,
+  ROOT_ID,
+  screenRoot,
+  screenTitle,
+  type ProjectedNode,
+  type ProjectedSnapshot,
+  type RawNode,
+  type Viewport,
+} from './nodes.ts';
 import type { AgentDeviceClient, AgentDeviceOptions, AgentDevicePlatform, ClientFactory } from './options.ts';
 import { maskPng } from './png.ts';
 import { DevicePool, deviceSelection } from './pool.ts';
 import {
   invalidState,
   notActionable,
+  logicalScreenSize,
   readPngSize,
   sanitizeFilename,
-  screenUrl,
+  screenLocation,
+  type RawScreenshotResult,
   swipeWithin,
   unsupported,
   type Rect,
@@ -190,7 +206,6 @@ function settleOptions(settle: AgentDeviceOptions['settle']): SettleOptions {
 
 export class AgentDeviceSurface {
   private client: AgentDeviceClient | undefined;
-  private testIdAttribute = 'data-testid';
   private attempt: Attempt | undefined;
   /** The device this worker drives, the pool's entry for its slot; undefined leaves the choice to agent-device. */
   private device: string | undefined;
@@ -222,6 +237,13 @@ export class AgentDeviceSurface {
   private latestIndex: readonly ProjectedNode[] | undefined;
   /** Budget a control that came with the last action gets to finish arriving; see DEFAULT_TRANSITION_MS. */
   private readonly transitionMs: number;
+  /**
+   * The screen's logical size as last learned from a snapshot with geometry
+   * or from the device itself, so a snapshot without geometry (an empty
+   * screen before any app is open, a sparse tree) still reports the viewport
+   * every observation must carry.
+   */
+  private knownViewport: Viewport | undefined;
 
   constructor(
     readonly options: AgentDeviceOptions,
@@ -290,9 +312,8 @@ export class AgentDeviceSurface {
   }
 
   async init(info: EngineInitInfo): Promise<void> {
-    this.testIdAttribute = info.testIdAttribute;
     this.projectRoot = info.projectRoot;
-    this.device = this.pool.device(info.targetName, info.workerSlot);
+    this.device = this.pool.device(info.targetName, info.workerSlot, info.env);
     this.client ??= this.createClient(this.pool.session(info.targetName, info.workerSlot));
     await this.command('boot', (client) => client.devices.boot(this.selection()), info.signal);
     if (this.options.appPath === undefined) return;
@@ -391,6 +412,7 @@ export class AgentDeviceSurface {
     this.located.clear();
     this.appIdentity = undefined;
     this.installedApp = undefined;
+    this.knownViewport = undefined;
     if (client === undefined) return;
     await withinCleanupBudget(client.sessions.close().catch(() => undefined), context);
   }
@@ -473,26 +495,55 @@ export class AgentDeviceSurface {
 
   private project(raw: RawSnapshot): ProjectedSnapshot {
     const projected = projectSnapshot(raw.nodes ?? [], {
-      testIdAttribute: this.testIdAttribute,
       mintId: () => {
         this.idCounter += 1;
         return `n${this.idCounter}`;
       },
     });
     this.latestIndex = projected.index;
+    if (projected.viewport !== undefined) this.knownViewport = projected.viewport;
     return projected;
+  }
+
+  /**
+   * The viewport of a snapshot: its own geometry, else the last one this
+   * session learned, else the device's logical screen size read off one
+   * screenshot. A device whose size cannot be learned fails the observation:
+   * the harness measures every rect and point against the viewport, so an
+   * invented one would misplace every tap.
+   */
+  private async viewportFor(projected: ProjectedSnapshot, operation: OperationContext): Promise<Viewport> {
+    const known = projected.viewport ?? this.knownViewport;
+    if (known !== undefined) return known;
+    const probed = await this.probeViewport(operation.signal);
+    if (probed === undefined) {
+      throw new EngineError(
+        'ENGINE_FAILURE',
+        'the device reported no screen geometry: the snapshot has no bounds and the screenshot no logical size, so the viewport is unknown',
+        { retryable: false },
+      );
+    }
+    this.knownViewport = probed;
+    return probed;
+  }
+
+  /** The device's logical screen size as its screenshot reports it; undefined when it reports none. */
+  private async probeViewport(signal: AbortSignal): Promise<Viewport | undefined> {
+    const result = await this.captureScreenshot(signal, async (shot) => shot);
+    return logicalScreenSize(result);
   }
 
   async observe(operation: OperationContext, options?: EngineObserveOptions): Promise<EngineSnapshot> {
     const raw = await this.snapshotOrEmpty(operation, this.options.snapshot === 'interactive');
     const projected = this.project(raw);
     this.generation = new Map(projected.index.map((entry) => [entry.id, this.bind(entry, projected.index)]));
-    const identity = raw.appBundleId ?? raw.appName ?? this.appIdentity;
-    const capture = options?.pixels === true ? await this.capturePixels(operation, projected) : undefined;
+    const viewport = await this.viewportFor(projected, operation);
+    const location = screenLocation(raw.appBundleId ?? raw.appName ?? this.appIdentity, screenTitle(projected));
+    const capture = options?.pixels === true ? await this.capturePixels(operation, projected, viewport) : undefined;
     return {
-      nodes: projected.roots,
-      ...(identity === undefined ? {} : { url: screenUrl(identity, screenTitle(projected)) }),
-      ...(projected.viewport === undefined ? {} : { viewport: projected.viewport }),
+      root: screenRoot(projected.roots, viewport),
+      viewport,
+      ...(location === undefined ? {} : { location }),
       ...(capture === undefined ? {} : { pixels: capture.pixels, maskedRegionCount: capture.masked }),
     };
   }
@@ -501,7 +552,7 @@ export class AgentDeviceSurface {
   async locate(expression: LocatorExpression, operation: OperationContext): Promise<readonly SemanticNode[]> {
     const raw = await this.snapshotOrEmpty(operation, false);
     const projected = this.project(raw);
-    const matches = resolveExpression(expression, projected.index, { testIdAttribute: this.testIdAttribute });
+    const matches = resolveExpression(expression, projected.index);
     for (const entry of matches) this.located.set(entry.id, this.bind(entry, projected.index));
     for (const oldest of this.located.keys()) {
       if (this.located.size <= MAX_LOCATED_REFS) break;
@@ -559,11 +610,10 @@ export class AgentDeviceSurface {
    * id, same name and text, and of those the one closest to where it was.
    */
   private refind(entry: NodeBinding, index: readonly ProjectedNode[]): ProjectedNode | undefined {
-    const testId = entry.node.attributes?.[this.testIdAttribute];
     const candidates = index.filter(
       (candidate) =>
         candidate.node.role === entry.node.role &&
-        candidate.node.attributes?.[this.testIdAttribute] === testId &&
+        candidate.node.testId === entry.node.testId &&
         candidate.node.name === entry.node.name &&
         candidate.node.text === entry.node.text,
     );
@@ -619,6 +669,15 @@ export class AgentDeviceSurface {
   }
 
   async perform(ref: NodeRef, action: LocatorAction, operation: OperationContext): Promise<void> {
+    // The observation root is the screen: a swipe on it scrolls the whole
+    // viewport, which is the one action a screen takes.
+    if (ref.id === ROOT_ID) {
+      if (action.kind !== 'swipe') throw notActionable(`the screen root takes swipe only, not ${action.kind}; act on a node`);
+      const before = this.latestIndex;
+      await this.command('swipe', (client) => client.interactions.scroll({ direction: action.direction }), operation.signal);
+      this.markAction(before);
+      return;
+    }
     const entry = this.resolveRef(ref);
     const label = `perform ${action.kind}`;
     const client = this.requireClient();
@@ -691,6 +750,7 @@ export class AgentDeviceSurface {
         case 'scrollIntoView':
         case 'selectOption':
         case 'setInputFiles':
+          // Not in DEVICE_ACTIONS (actions.ts), so the harness never sends them; kept exhaustive.
           throw unsupported(`agent-device cannot perform "${action.kind}" on a device surface`);
       }
     };
@@ -703,27 +763,33 @@ export class AgentDeviceSurface {
   }
 
   /**
-   * Keys on a touch surface: Enter submits through the soft keyboard, a
-   * single character is typed into the focused field; there is no key event
-   * bus to send `Escape` or `Tab` to.
+   * Keys on a touch surface, in the contract's key grammar: `Enter` submits
+   * through the soft keyboard, `Space` and any single character are typed
+   * into the focused field. agent-device exposes no key event bus, so
+   * modifiers and the other named keys (`Escape`, `Tab`, `Backspace`, the
+   * arrows) have nothing to land on and are refused.
    */
   private async pressKey(client: AgentDeviceClient, entry: NodeBinding, key: string, settle: SettleOptions): Promise<unknown> {
-    if (key === 'Enter' || key === 'Return') {
+    const parsed = parseKey(key);
+    if (parsed === undefined) {
+      throw unsupported(
+        `"${key}" is not a key: press takes one key in the form [Modifier+]...Key, a named key (${KEY_NAMES.join(', ')}) or one character`,
+      );
+    }
+    if (parsed.modifiers.length > 0) {
+      throw unsupported(`agent-device cannot hold ${parsed.modifiers.join('+')} on a device surface; press the key alone`);
+    }
+    if (parsed.key.kind === 'named' && parsed.key.name === 'Enter') {
       return client.command.keyboard({ action: 'enter' });
     }
-    if ([...key].length === 1) {
+    if (parsed.key.kind === 'char' || parsed.key.name === 'Space') {
+      const text = parsed.key.kind === 'char' ? parsed.key.char : ' ';
       if (entry.node.role === 'textbox' && entry.node.states?.focused !== true) {
         await client.interactions.press({ ...this.actionTarget(entry), ...settle });
       }
-      return client.interactions.type({ text: key });
+      return client.interactions.type({ text });
     }
-    throw unsupported(`agent-device cannot press "${key}" on a device surface; only Enter and single characters are supported`);
-  }
-
-  async swipe(direction: ScrollDirection, _momentum: Momentum | undefined, operation: OperationContext): Promise<void> {
-    const before = this.latestIndex;
-    await this.command('swipe', (client) => client.interactions.scroll({ direction }), operation.signal);
-    this.markAction(before);
+    throw unsupported(`agent-device cannot press ${parsed.key.name} on a device surface; only Enter, Space, and single characters reach the soft keyboard`);
   }
 
   /**
@@ -755,7 +821,8 @@ export class AgentDeviceSurface {
     await this.openApp(app, true, operation.signal);
   }
 
-  async clearState(operation: OperationContext): Promise<void> {
+  /** Clears the pinned app's persisted state and relaunches it: the device equivalent of a fresh context. */
+  async reset(operation: OperationContext): Promise<void> {
     const app = this.pinnedApp;
     if (app === undefined) throw unsupported('app.clearState needs the engine option `app` or `appPath`');
     await this.command(
@@ -764,13 +831,6 @@ export class AgentDeviceSurface {
       operation.signal,
     );
     await this.openApp(app, true, operation.signal);
-  }
-
-  /** The path anchor: `app://<app>/<screen title>`; see `screenUrl`. */
-  async url(operation: OperationContext): Promise<string> {
-    const raw = await this.snapshot(operation, false);
-    const projected = projectSnapshot(raw.nodes ?? [], { testIdAttribute: this.testIdAttribute, mintId: () => 'anchor' });
-    return screenUrl(raw.appBundleId ?? raw.appName ?? this.appIdentity, screenTitle(projected));
   }
 
   /**
@@ -793,13 +853,24 @@ export class AgentDeviceSurface {
   }
 
   /** Raw device pixels; cleanup follows the capture even when its caller abandons it. */
-  private async rawScreenshot(signal?: AbortSignal): Promise<Uint8Array> {
+  private rawScreenshot(signal?: AbortSignal): Promise<Uint8Array> {
+    return this.captureScreenshot(signal, async (shot, file) => new Uint8Array(readFileSync(shot.path ?? file)));
+  }
+
+  /**
+   * One screenshot into a temp directory that is removed once `read` has
+   * taken what it needs from the response or the file, even when the caller
+   * abandons the capture.
+   */
+  private captureScreenshot<T>(
+    signal: AbortSignal | undefined,
+    read: (shot: RawScreenshotResult, file: string) => Promise<T>,
+  ): Promise<T> {
     return this.command('screenshot', async (client) => {
       const directory = mkdtempSync(path.join(tmpdir(), 'e2e-agent-device-'));
       const file = path.join(directory, 'screenshot.png');
       try {
-        const shot = await client.capture.screenshot({ path: file });
-        return new Uint8Array(readFileSync(shot.path ?? file));
+        return await read((await client.capture.screenshot({ path: file })) as RawScreenshotResult, file);
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }
@@ -818,10 +889,11 @@ export class AgentDeviceSurface {
       timeoutMs: 30_000,
       runId: '',
       attemptId: '',
+      origin: 'test',
     };
     const projected = this.project(await this.snapshotOrEmpty(operation, false));
     const data = await this.rawScreenshot(signal);
-    const masked = redactSecure(data, projected);
+    const masked = redactSecure(data, projected, projected.viewport ?? this.knownViewport);
     if (masked === undefined) {
       throw new EngineError('ENGINE_FAILURE', 'a secure field on screen could not be masked; screenshot withheld', {
         retryable: false,
@@ -837,6 +909,7 @@ export class AgentDeviceSurface {
   private async capturePixels(
     operation: OperationContext,
     projected: ProjectedSnapshot,
+    viewport: Viewport,
   ): Promise<{ pixels: ObservationPixels; masked: number } | undefined> {
     let raw: Uint8Array;
     try {
@@ -844,12 +917,11 @@ export class AgentDeviceSurface {
     } catch {
       return undefined;
     }
-    const redacted = redactSecure(raw, projected);
+    const redacted = redactSecure(raw, projected, viewport);
     if (redacted === undefined) return undefined;
     const size = readPngSize(redacted.data);
     if (size === undefined) return undefined;
-    const viewport = projected.viewport;
-    const scale = viewport !== undefined && viewport.width > 0 ? size.width / viewport.width : 1;
+    const scale = viewport.width > 0 ? size.width / viewport.width : 1;
     return {
       pixels: { data: redacted.data, mediaType: 'image/png', width: size.width, height: size.height, scale },
       masked: redacted.masked,
@@ -865,12 +937,15 @@ export class AgentDeviceSurface {
  * not prove redacted. Bounds are in logical points; the image may be at
  * device scale, so they are scaled by the image-to-viewport ratio.
  */
-function redactSecure(data: Uint8Array, projected: ProjectedSnapshot): { data: Uint8Array; masked: number } | undefined {
+function redactSecure(
+  data: Uint8Array,
+  projected: ProjectedSnapshot,
+  viewport: Viewport | undefined,
+): { data: Uint8Array; masked: number } | undefined {
   const secure = projected.index.filter((entry) => entry.node.states?.secure === true);
   if (secure.length === 0) return { data, masked: 0 };
   const size = readPngSize(data);
   if (size === undefined) return undefined;
-  const viewport = projected.viewport;
   const scale = viewport !== undefined && viewport.width > 0 ? size.width / viewport.width : 1;
   const rects: Rect[] = [];
   for (const entry of secure) {
