@@ -29,7 +29,6 @@ import { acceptAnyJson, JUDGMENT_SCHEMA, validateJudgmentResponse } from './prot
 import { EXTRACT_REQUEST, JUDGMENT_REQUEST } from './prompts.ts';
 import { deriveJsonSchema } from './model/schema.ts';
 
-const MIN_STEP_TIMEOUT_MS = 30_000;
 const DEFAULT_WAIT_INTERVAL_MS = 3_000;
 
 /**
@@ -52,17 +51,9 @@ const ASSERT_KEYS = ['timeout', 'screenshot', 'vision', 'agent'] as const;
 
 /** Builds the agent fixture for one attempt. */
 export function createAgentFixture(runtime: AgentContext): Agent {
-  /**
-   * Default budget for polling, judgment, and extraction steps: the action
-   * timeout expresses the suite's model-latency headroom in one place, with a
-   * 30 s floor. Tests then rarely need per-call
-   * timeouts.
-   */
-  const stepTimeout = Math.max(MIN_STEP_TIMEOUT_MS, runtime.config.actionTimeout);
-
   /** A per-call `vision` value always wins over the agent's default. */
-  const resolveVision = (requested: VisionMode | undefined, agent: string | undefined): VisionMode => {
-    if (requested === undefined) return runtime.select(agent).config.vision;
+  const resolveVision = (requested: VisionMode | undefined, fallback: VisionMode): VisionMode => {
+    if (requested === undefined) return fallback;
     if (!isVisionMode(requested)) {
       throw new TestError('INVALID_ARGUMENT', "vision must be true, false, or 'only'");
     }
@@ -118,18 +109,15 @@ export function createAgentFixture(runtime: AgentContext): Agent {
     waitFor(condition, options) {
       rejectUnknownOptions('agent.waitFor', options, WAIT_FOR_KEYS);
       const intervalMs = validateInterval(options?.interval);
+      const { config } = runtime.select(options?.agent);
       return step(
         {
           api: 'agent.waitFor',
           agent: options?.agent,
           task: 'judge whether a condition holds',
-          timeoutMs: resolveTimeout(options?.timeout, stepTimeout),
-          maxModelCalls: resolveBoundedBudget(
-            options?.maxModelCalls,
-            runtime.select(options?.agent).config.maxModelCalls,
-            'maxModelCalls',
-          ),
-          vision: resolveVision(options?.vision, options?.agent),
+          timeoutMs: resolveTimeout(options?.timeout, config.timeout),
+          maxModelCalls: resolveBoundedBudget(options?.maxModelCalls, config.maxModelCalls, 'maxModelCalls'),
+          vision: resolveVision(options?.vision, config.vision),
         },
         condition,
         async (invocation) => {
@@ -157,14 +145,15 @@ export function createAgentFixture(runtime: AgentContext): Agent {
       rejectUnknownOptions('agent.extract', options, EXTRACT_KEYS);
       requireStandardSchema(options?.schema);
       const schema = options.schema;
+      const { config } = runtime.select(options.agent);
       return step(
         {
           api: 'agent.extract',
           agent: options.agent,
           task: 'extract structured data from the observation',
-          timeoutMs: resolveTimeout(options.timeout, stepTimeout),
+          timeoutMs: resolveTimeout(options.timeout, config.timeout),
           maxModelCalls: EXTRACT_MODEL_CALLS,
-          vision: resolveVision(options.vision, options.agent),
+          vision: resolveVision(options.vision, config.vision),
         },
         instruction,
         async (invocation) => {
@@ -211,7 +200,8 @@ export function createAgentFixture(runtime: AgentContext): Agent {
       // brains swaps all the thinking. The built-in path keeps the optimized
       // judgment tier below: one call, plus one repair round for a response
       // that missed the grammar, vision-capable.
-      if (runtime.select(options?.agent).customExecutor) {
+      const { config, customExecutor } = runtime.select(options?.agent);
+      if (customExecutor) {
         return runAssertStep(runtime, assertion, options);
       }
       return step(
@@ -219,9 +209,9 @@ export function createAgentFixture(runtime: AgentContext): Agent {
           api: 'agent.assert',
           agent: options?.agent,
           task: 'judge whether an assertion holds',
-          timeoutMs: resolveTimeout(options?.timeout, stepTimeout),
+          timeoutMs: resolveTimeout(options?.timeout, config.timeout),
           maxModelCalls: ASSERT_MODEL_CALLS,
-          vision: resolveVision(options?.vision, options?.agent),
+          vision: resolveVision(options?.vision, config.vision),
         },
         assertion,
         async (invocation) => {
