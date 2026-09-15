@@ -28,7 +28,6 @@ interface Segment {
 
 export class VideoRecorder {
   private readonly viewport: { readonly width: number; readonly height: number };
-  private artifactsDir = '';
   /** Set by `arm`, cleared by `stop`; pages the attempt opens in between start segments. */
   private armed = false;
   private current: Segment | null = null;
@@ -39,18 +38,11 @@ export class VideoRecorder {
   /** The first segment whose stop failed and left no file; `stop` reports it. */
   private lost: { readonly relative: string; readonly cause: unknown } | undefined;
 
-  constructor(viewport: { readonly width: number; readonly height: number }) {
+  constructor(
+    viewport: { readonly width: number; readonly height: number },
+    private readonly artifactsDir: string,
+  ) {
     this.viewport = viewport;
-  }
-
-  /** Forgets the previous attempt's recording; this attempt's files land under `artifactsDir`. */
-  reset(artifactsDir: string): void {
-    this.artifactsDir = artifactsDir;
-    this.armed = false;
-    this.current = null;
-    this.finished = [];
-    this.count = 0;
-    this.lost = undefined;
   }
 
   /** True between `arm` and `stop`: a page the attempt opens then starts a segment. */

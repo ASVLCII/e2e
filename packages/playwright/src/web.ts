@@ -31,7 +31,7 @@ import {
   type TextPattern,
 } from 'e2e/engine';
 import type { DialogHandler } from './dialogs.ts';
-import { message as causeMessage } from './support.ts';
+import { message as causeMessage, translatePwError } from './support.ts';
 import { compileEvaluation } from './evaluation.ts';
 import { routePatternMatches, routePatternsEqual, toRoutePattern } from './route-pattern.ts';
 import type { PlaywrightSurface } from './surface.ts';
@@ -186,7 +186,11 @@ export interface Web extends Expectable<WebExpectation> {
     /** Types plain text. */
     type(text: string): Promise<void>;
   };
-  /** Viewport-level pointer. */
+  /**
+   * Direct pointer input from test code, independent of agent observations.
+   * After CDP recovery, test code can read current geometry with `evaluate`
+   * before starting a pointer sequence.
+   */
   readonly mouse: {
     /** Moves the pointer. */
     move(x: number, y: number): Promise<void>;
@@ -207,6 +211,7 @@ interface StoredRoute {
 
 /** Builds the `web` fixture for one attempt over the shared surface. */
 export function createWebFixture(surface: PlaywrightSurface, context: EngineFixtureContext): Web {
+  const latch = surface.latch;
   const routes: StoredRoute[] = [];
 
   /**
@@ -226,7 +231,7 @@ export function createWebFixture(surface: PlaywrightSurface, context: EngineFixt
     run: (operation: OperationContext) => Promise<void>,
   ): Promise<void> => {
     const operation = context.operation(options?.timeout ?? context.timeouts.test);
-    return surface.guard(operation, 'navigation', () => run(operation));
+    return surface.guard(operation, 'navigation', run);
   };
 
   /** An assertion-style budget: the given timeout or the assertion timeout, clamped to the test. */
@@ -335,7 +340,7 @@ export function createWebFixture(surface: PlaywrightSurface, context: EngineFixt
             );
           }
         } catch (cause) {
-          surface.latch.latch(
+          latch.latch(
             cause instanceof Error
               ? cause
               : new TestError('ACTION_FAILED', `route handler failed: ${causeMessage(cause)}`),
@@ -363,10 +368,10 @@ export function createWebFixture(surface: PlaywrightSurface, context: EngineFixt
     waitForResponse(pattern, options) {
       const wirePattern = toRoutePattern(pattern);
       const operation = context.operation(options?.timeout);
-      return surface.guard(operation, 'waitForResponse', async () => {
+      return surface.guard(operation, 'waitForResponse', async (currentOperation) => {
         const response = await surface.requirePage().waitForResponse(
           (candidate) => routePatternMatches(wirePattern, candidate.url()),
-          { timeout: operation.timeoutMs },
+          { timeout: currentOperation.timeoutMs },
         );
         const body = await response.body().catch(() => Buffer.alloc(0));
         const decoder = new TextDecoder();
@@ -432,24 +437,28 @@ export function createWebFixture(surface: PlaywrightSurface, context: EngineFixt
     },
     async waitForDownload(trigger, options) {
       const operation = context.operation(options?.timeout);
-      // The waiter is armed synchronously, before the trigger, and never
-      // awaited through an async wrapper: an `async` guard would flatten the
-      // returned promise and wait for the download before the trigger ran.
-      const waiter: Promise<Download> = surface
-        .requirePage()
-        .waitForEvent('download', { timeout: operation.timeoutMs });
-      // A rejected waiter nobody awaits (the trigger failed first) must not
-      // become an unhandled rejection.
-      waiter.catch(() => undefined);
-      // The trigger is test code: its own errors keep their own classification.
-      await trigger();
-      return surface.guard(operation, 'download', async () => {
+      let triggerFailure: { cause: unknown } | undefined;
+      return surface.guard(operation, 'download', async (currentOperation) => {
+        const waiter: Promise<Download> = surface.requirePage()
+          .waitForEvent('download', { timeout: currentOperation.timeoutMs });
+        // The trigger may fail before the waiter settles; absorb its later rejection.
+        waiter.catch(() => undefined);
+        try {
+          await trigger();
+        } catch (cause) {
+          triggerFailure = { cause };
+          throw cause;
+        }
         const download = await waiter;
         const suggestedFilename = download.suggestedFilename();
         const { relative, absolute } = surface.artifactPath('downloads', suggestedFilename, '');
         await download.saveAs(absolute);
         context.attachArtifact('download', relative);
         return { path: relative, suggestedFilename };
+      }, (cause, label) => {
+        // The trigger is test code, so its errors keep their original classification.
+        if (triggerFailure !== undefined && Object.is(cause, triggerFailure.cause)) throw cause;
+        return translatePwError(cause, label);
       });
     },
     keyboard: {

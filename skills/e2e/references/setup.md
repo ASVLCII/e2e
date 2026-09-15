@@ -121,9 +121,26 @@ process, and identity. `playwright()` accepts:
 | `identity` | Stable app identity for cache and session keys when the origin changes per deploy (preview URLs). |
 | `browser` | `'chromium'` (default), `'firefox'`, `'webkit'`. |
 | `viewport` | `{ width, height }`, default 1280x720. |
-| `connect` | `{ cdpEndpoint }` to attach to a remote Chromium over CDP instead of launching. |
+| `connect` | `{ cdpEndpoint }` attaches to a remote Chromium over CDP. Adding `reconnectEndpoint` uses a dedicated persistent default context, provisions a fresh browser per attempt, and reconnects only to the original browser and page. |
 | `headers` | Request headers sent to the app's site only (a Vercel `x-vercel-protection-bypass`, ngrok's `ngrok-skip-browser-warning`). Reaches every path onto the page, `agent.act` included; turns the browser HTTP cache off and blocks service workers. |
 | `basicAuth` | `{ username, password }` answering a `401` challenge. |
+
+CDP recovery never repeats a dispatched operation. Endpoint resolution, attachment,
+and dispatch spend one operation budget. Exhaustion raises `OPERATION_TIMEOUT`;
+caller cancellation raises `CANCELLED`. A read started before recovery cannot
+satisfy its requirement for a fresh observation. The host owns remote browser
+cleanup. Persistent recovery requires the default context's CDP identity.
+If navigation while disconnected loses a frame's closed shadow DOM tracking
+hook, recovery fails with `ENGINE_FAILURE`; the engine cannot prove pixel
+masking for existing closed roots in that document.
+Observation-derived `tapAt` calls, observation-root swipes, and focused engine
+keyboard input need a fresh engine observation after reconnect. Deterministic
+`web.mouse` and `web.keyboard` calls use test-supplied input without an agent
+observation; test code can read current geometry and focus with `web.evaluate`.
+Persistent recovery does not support `headers`, `basicAuth`, context reset,
+or session state capture and restore. Without `reconnectEndpoint`, contexts
+remain isolated and a dropped connection is reacquired only at the next attempt
+start.
 
 Two browsers are two targets sharing one app declaration:
 

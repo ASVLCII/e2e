@@ -37,9 +37,7 @@ describe('VideoRecorder', () => {
   let dir: string;
   const recorder = () => {
     dir = mkdtempSync(path.join(tmpdir(), 'e2e-video-unit-'));
-    const instance = new VideoRecorder(VIEWPORT);
-    instance.reset(dir);
-    return instance;
+    return new VideoRecorder(VIEWPORT, dir);
   };
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
