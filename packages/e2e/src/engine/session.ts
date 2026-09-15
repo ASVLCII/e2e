@@ -18,6 +18,7 @@ import {
   E2EError,
   errorMessage,
   isForeignE2EError,
+  TestError,
 } from '../internal/errors.ts';
 import { requireKey } from '../internal/keys.ts';
 import type { EngineHandle } from './index.ts';
@@ -207,24 +208,43 @@ export function createEngineSession(options: EngineSessionOptions): TargetSessio
     async observe(operation, observeOptions) {
       const snapshot = await observeRaw(
         operation,
-        observeOptions?.pixels === true ? { pixels: true } : {},
+        {
+          ...(observeOptions?.pixels === true ? { pixels: true } : {}),
+          ...(observeOptions?.pixelFallback === true ? { pixelFallback: true } : {}),
+        },
       );
-      revision += 1;
-      const minted = `${OBSERVE_REVISION_PREFIX}${revision}`;
-      const tree = stampRevision(snapshot.root, minted);
-      root = tree.ref;
-      return {
+      const minted = `${OBSERVE_REVISION_PREFIX}${revision + 1}`;
+      const metadata = {
+        root: { ...snapshot.root.ref, revision: minted },
         revision: minted,
         capturedAt: new Date().toISOString(),
         ...(snapshot.location === undefined ? {} : { location: snapshot.location }),
-        ...(snapshot.pixels === undefined ? {} : { pixels: snapshot.pixels }),
-        tree,
-        ...(snapshot.truncated === true ? { truncated: true } : {}),
         viewport: snapshot.viewport,
         redaction: {
           secureNodeCount: countSecure(snapshot.root),
           maskedRegionCount: snapshot.maskedRegionCount ?? 0,
         },
+      };
+      if (snapshot.treeUnavailable === true) {
+        if (observeOptions?.pixelFallback !== true || snapshot.pixels === undefined) {
+          throw new TestError('UNSUPPORTED_CAPABILITY', 'unavailable semantics require permitted fallback pixels');
+        }
+        if (Object.keys(snapshot.root).some((key) => key !== 'ref')) {
+          throw new EngineError('INVALID_STATE', 'an unavailable semantic tree must contain only the stable root reference', { retryable: false });
+        }
+        located.clear();
+        revision += 1;
+        root = metadata.root;
+        return { ...metadata, kind: 'pixels', pixels: snapshot.pixels };
+      }
+      revision += 1;
+      root = metadata.root;
+      return {
+        ...metadata,
+        kind: 'semantic',
+        tree: stampRevision(snapshot.root, minted),
+        truncated: snapshot.truncated === true,
+        ...(snapshot.pixels === undefined ? {} : { pixels: snapshot.pixels }),
       };
     },
     async locate(expression, operation) {
@@ -266,7 +286,7 @@ export function createEngineSession(options: EngineSessionOptions): TargetSessio
     },
     async swipe(direction, momentum, operation) {
       if (!actions.has('swipe')) unsupported('swipe gestures');
-      const target = root ?? (await session.observe(operation)).tree.ref;
+      const target = root ?? (await session.observe(operation)).root;
       await performRaw(target, { kind: 'swipe', direction, ...(momentum === undefined ? {} : { momentum }) }, operation);
     },
     tapAt: guard('point taps', engine?.tapAt),

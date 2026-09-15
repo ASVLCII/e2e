@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { assert, describe, expect, it } from 'vitest';
 import {
   defineEngine,
   isEngineHandle,
@@ -249,6 +249,7 @@ describe('createEngineSession', () => {
     const first = await session.observe(OP);
     const second = await session.observe(OP);
     expect(first.revision).not.toBe(second.revision);
+    assert(second.kind === 'semantic');
     expect(second.tree.children?.[0]?.ref.revision).toBe(second.revision);
     expect(second.redaction).toEqual({ secureNodeCount: 0, maskedRegionCount: 0 });
   });
@@ -399,6 +400,30 @@ describe('createEngineSession', () => {
 });
 
 describe('createEngineSession pixels-only observation', () => {
+  it('requires explicit fallback permission and discards stale semantic content', async () => {
+    let raw: EngineSnapshot = {
+      root: { ref: { id: 'root', revision: '' } },
+      viewport: { width: 2, height: 2, scale: 1 },
+      treeUnavailable: true,
+      pixels: { data: new Uint8Array(8), mediaType: 'image/png', width: 2, height: 2, scale: 1 },
+    };
+    const received: unknown[] = [];
+    const session = createEngineSession({
+      engine: defineEngine(observingEngine({ observe: async (_operation, options) => { received.push(options); return raw; } })),
+      targetName: 'toy',
+    });
+    await expect(session.observe(OP)).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    const captured = await session.observe(OP, { pixelFallback: true });
+    expect(received.at(-1)).toEqual({ pixelFallback: true });
+    expect(captured.kind).toBe('pixels');
+    expect(captured).not.toHaveProperty('tree');
+    expect(captured.root.revision).toBe(captured.revision);
+    raw = { ...raw, root: { ...raw.root, children: [node('stale', 'Old control')] } };
+    await expect(session.observe(OP, { pixelFallback: true })).rejects.toMatchObject({ code: 'INVALID_STATE' });
+    raw = { root: raw.root, viewport: raw.viewport, treeUnavailable: true };
+    await expect(session.observe(OP, { pixelFallback: true })).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+  });
+
   it('accepts a snapshot with no nodes and pixels: a vision-only body is observable', async () => {
     const pixels = { data: new Uint8Array(8), mediaType: 'image/png' as const, width: 4, height: 2, scale: 1 };
     const session = createEngineSession({
@@ -411,6 +436,7 @@ describe('createEngineSession pixels-only observation', () => {
       targetName: 'desktop',
     });
     const observation = await session.observe(OP, { pixels: true });
+    assert(observation.kind === 'semantic');
     expect(observation.tree.role).toBe('root');
     expect(observation.tree.children ?? []).toHaveLength(0);
     expect(observation.pixels).toBe(pixels);

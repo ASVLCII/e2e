@@ -409,17 +409,15 @@ class ActDispatch {
 
   /** The cache session's narrow view of this step. */
   private cacheHost(): StepCacheHost {
+    const feed = this.feed;
     return {
-      observe: async () => screenOf(await this.feed.observeLatest()),
-      observeSettled: async () => screenOf(await this.feed.observeSettled()),
+      get traceEligible() { return feed.traceEligible; },
+      observe: async () => screenOf(await this.feed.probe(false)),
+      observeSettled: async () => screenOf(await this.feed.probe(true)),
       actions: this.dispatcher.actions,
       signal: this.accounting.signal,
       remainingMs: () => this.accounting.remainingMs(),
       redact: this.runtime.redact,
-      currentPath: (nodes) => {
-        const latest = this.feed.latest;
-        return this.feed.currentPath(nodes !== undefined && nodes === latest?.nodes ? latest : undefined);
-      },
       replaying: (active) => {
         this.runtime.steps.replaying(active);
         this.accounting.replaying(active);
@@ -476,5 +474,11 @@ class ActDispatch {
 
 /** The replay engine's view of a capture: the nodes, and the viewport a recorded point is checked against. */
 function screenOf(observation: AgentObservation): ObservedScreen {
-  return { nodes: observation.nodes, viewport: { width: observation.viewport.width, height: observation.viewport.height } };
+  const metadata = {
+    viewport: { width: observation.viewport.width, height: observation.viewport.height },
+    ...(observation.path === undefined ? {} : { path: observation.path }),
+  };
+  return observation.kind === 'semantic'
+    ? { ...metadata, kind: 'semantic', nodes: observation.nodes }
+    : { ...metadata, kind: 'pixels' };
 }

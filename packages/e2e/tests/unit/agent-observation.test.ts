@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { assert, describe, expect, it } from 'vitest';
 import type { Observation, SemanticNode } from '../../src/engine/surface.ts';
 import { interactiveNodeCount, observationShape, prepareObservation, settleObservation } from '../../src/agent/observation.ts';
 import { createRedactor } from '../../src/internal/redact.ts';
@@ -7,8 +7,11 @@ function node(id: string, extra: Partial<SemanticNode> = {}): SemanticNode {
   return { ref: { id, revision: 'r1' }, ...extra };
 }
 
-function observation(tree: SemanticNode, pixels?: Observation['pixels']): Observation {
+function observation(tree: SemanticNode, pixels?: Observation['pixels']): Extract<Observation, { kind: 'semantic' }> {
   return {
+    kind: 'semantic',
+    root: tree.ref,
+    truncated: false,
     revision: 'r1',
     capturedAt: '2026-01-01T00:00:00.000Z',
     tree,
@@ -21,6 +24,39 @@ function observation(tree: SemanticNode, pixels?: Observation['pixels']): Observ
 const NO_REDACT = (text: string): string => text;
 
 describe('prepareObservation', () => {
+  it('keeps unavailable semantics separate from an empty tree and requires permitted masked evidence', () => {
+    const pixels = { data: new Uint8Array(4), mediaType: 'image/png' as const, width: 2, height: 2, scale: 1 };
+    const unavailable: Observation = {
+      kind: 'pixels', root: node('root').ref, revision: 'r1', capturedAt: '',
+      viewport: { width: 2, height: 2, scale: 1 }, pixels,
+      redaction: { secureNodeCount: 1, maskedRegionCount: 0 },
+    };
+    const prepare = (raw: Observation, pixelsAllowed = true) => prepareObservation(raw, { redact: NO_REDACT, maxBytes: 4_096, pixelsAllowed });
+    expect(() => prepare(unavailable)).toThrow(/proven-masked screenshot/);
+    const proven = { ...unavailable, redaction: { secureNodeCount: 1, maskedRegionCount: 1 } };
+    const prepared = prepare(proven);
+    expect(prepared.kind).toBe('pixels');
+    expect(prepared.text).toContain('semantic capture unavailable');
+    expect(prepared.text).toContain('previous node ids are no longer valid');
+    expect(prepared.text).toContain('never infer absence');
+    expect(prepared).not.toHaveProperty('nodes');
+    expect(prepared).not.toHaveProperty('tree');
+    expect(() => prepare(proven, false)).toThrow(/permitted/);
+    const empty = prepare(observation(node('root')));
+    expect(empty.kind).toBe('semantic');
+    expect(empty.text).not.toContain('unavailable');
+  });
+
+  it('returns evidence without a comparable shape without repeating capture', async () => {
+    let captures = 0;
+    const result = await settleObservation(
+      async () => { captures += 1; return { kind: 'pixels' }; },
+      () => undefined,
+      { remainingMs: () => 10_000, signal: new AbortController().signal },
+    );
+    expect(result.kind).toBe('pixels');
+    expect(captures).toBe(1);
+  });
   it('withholds pixels whose masking the engine cannot prove and keeps the tree', () => {
     const pixels = { data: new Uint8Array(4), mediaType: 'image/png' as const, width: 2, height: 2, scale: 1 };
     const prepared = prepareObservation(observation(node('root'), pixels), {
@@ -29,6 +65,7 @@ describe('prepareObservation', () => {
     });
     // One secure node, zero masked regions: the image is not provably redacted.
     expect(prepared.pixels).toBeUndefined();
+    assert(prepared.kind === 'semantic');
     expect(prepared.pixelsWithheld).toBe('MASKING_UNPROVEN');
     expect(prepared.text).toBe('#root');
   });
@@ -52,6 +89,7 @@ describe('prepareObservation', () => {
       ' #n3 button "Buy" [disabled]',
     ]);
     expect(prepared.revision).toBe('r1');
+    assert(prepared.kind === 'semantic');
     expect([...prepared.nodes.keys()]).toEqual(['n1', 'n2', 'n3']);
     expect(prepared.bytes).toBe(prepared.text.length);
   });
@@ -100,6 +138,7 @@ describe('prepareObservation', () => {
       redact: NO_REDACT,
       maxBytes: 256,
     });
+    assert(prepared.kind === 'semantic');
     expect(prepared.truncated).toBe(true);
     expect(prepared.text.startsWith('#n1 document')).toBe(true);
     expect(prepared.text).toContain('[observation truncated');
@@ -112,6 +151,7 @@ describe('prepareObservation', () => {
       { ...observation(tree), truncated: true },
       { redact: NO_REDACT, maxBytes: 4_096 },
     );
+    assert(prepared.kind === 'semantic');
     expect(prepared.truncated).toBe(true);
     expect(prepared.text.split('\n')).toEqual([
       '#n1 document',
@@ -130,6 +170,7 @@ describe('prepareObservation', () => {
       { ...observation(node('n1', { role: 'document', children })), truncated: true },
       { redact: NO_REDACT, maxBytes: 256 },
     );
+    assert(prepared.kind === 'semantic');
     expect(prepared.truncated).toBe(true);
     expect(prepared.bytes).toBeLessThanOrEqual(256);
     expect(prepared.text.endsWith('[observation truncated at the resolved observation byte limit]')).toBe(true);
@@ -188,14 +229,15 @@ describe('observation byte budget', () => {
         { redact: NO_REDACT, maxBytes },
       );
       expect(prepared.bytes).toBeLessThanOrEqual(maxBytes);
-      expect(prepared.truncated).toBe(true);
+      assert(prepared.kind === 'semantic');
+    expect(prepared.truncated).toBe(true);
       expect(prepared.text).toContain('[observation truncated');
     }
   });
 });
 
 describe('observationShape', () => {
-  const shapeOf = (text: string): string =>
+  const shapeOf = (text: string): string | undefined =>
     observationShape({ text } as unknown as Parameters<typeof observationShape>[0]);
 
   it('ignores the per-observation node ids', () => {

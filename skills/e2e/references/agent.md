@@ -141,6 +141,18 @@ overlay, a broken layout, a chart), because the tree would otherwise answer
 first. Pixels show the viewport only and are withheld once a secret was
 filled in the attempt.
 
+When semantic capture fails, an engine with independent screenshot masking
+may return fresh pixels and an explicit unavailable-tree warning. `act`
+receives the image and warning on every such observation; judgments require
+`vision: true` or `'only'`. No fallback is allowed after a secret fill. Do not
+infer that a control is absent from an unavailable tree, or reuse old node ids.
+When the tree recovers, its next presentation includes the whole tree.
+Such a step cannot record or finish from a trace cache entry, even after
+recovery. A completed cache capture may supply the executor's first look
+once, provided no action or later capture intervened. The Playwright
+engine supports timeout recovery; the device engine fails closed because its
+masks depend on the accessibility capture.
+
 ## Write instructions the model can execute
 
 - One goal per `act`. The order of goals is the test's; the path inside a
@@ -182,8 +194,8 @@ stay stable while an element exists, or the whole screen again when most of
 it changed, and is read after the action's effect landed. Never raw HTML,
 cookies, headers, environment
 values, or a `Secret`'s value; password fields arrive masked. Pixels reach a
-model only through `vision` on a judgment or the act loop's `screenshot` and
-pixel mode, masked, and only while no secret has been filled. Nothing the model
+model through `vision` on a judgment or the act loop's observations and
+screenshot tools. They are masked and withheld after a secret has been filled. Nothing the model
 returns runs as code or selectors: the runner validates and authorizes every
 tool call before it executes.
 
