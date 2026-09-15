@@ -123,11 +123,25 @@ export type AgentParams = Readonly<Record<string, AgentParam>>;
  * away rather than failing the call when it cannot be proven redacted. `'only'`
  * has nothing to degrade to, so it fails with `POLICY_DENIED` instead of
  * answering the wrong question from the tree.
+ *
+ * On `act` the same three values say how much pixel evidence is pushed to
+ * the model. At `false`, the default, the model pulls pixels itself with
+ * `screenshot` when the tree lacks what it needs, and every verb takes a
+ * point in that screenshot in place of a node id. `true` attaches a
+ * screenshot to every turn. `'only'` does that and withholds the tree, so
+ * every verb is addressed by point; it refuses a step that declares a
+ * secret, because a fill would taint the only evidence.
  */
 export type VisionMode = boolean | 'only';
 
 export interface VisionOption {
-  /** What the judge is shown; defaults to the agent's `vision`, `false`. */
+  /**
+   * How much pixel evidence is pushed to the model; defaults to the agent's
+   * `vision`, `false`. On a judgment: the tree, the tree with a masked
+   * screenshot, or the screenshot alone. On `act`: pixels when the model asks
+   * with `screenshot`, a screenshot on every turn, or pixels alone with the
+   * tree withheld.
+   */
   vision?: VisionMode;
 }
 
@@ -163,11 +177,11 @@ export interface ExtractOptions<Schema extends StandardSchemaV1> extends VisionO
 }
 
 /**
- * One `act` call: the values the instruction refers to and the step's
- * budgets. Structured output and vision are judgment-tier options:
- * `extract` takes `schema`; `assert`, `waitFor`, and `extract` take `vision`.
+ * One `act` call: the values the instruction refers to, the step's budgets,
+ * and what the executor sees. Structured output is a judgment-tier option:
+ * `extract` takes `schema`.
  */
-export interface ActOptions extends AgentOption {
+export interface ActOptions extends VisionOption, AgentOption {
   /**
    * JSON-safe values the instruction refers to, at most 64 KiB and 32 levels
    * deep. A `Secret` reaches the model by name only; the runner fills it.
@@ -904,7 +918,7 @@ export interface AgentConfig {
   maxObservationBytes?: number;
   /** Trusted project context prepended to agent prompts, at most `limits.maxAgentContextBytes`. */
   context?: string;
-  /** Project-wide default for the per-call `vision` option. */
+  /** Project-wide default for the per-call `vision` option; `false` unless set. */
   vision?: VisionMode;
   /** Provider options every model call carries, e.g. a reasoning effort. */
   providerOptions?: ProviderOptions;

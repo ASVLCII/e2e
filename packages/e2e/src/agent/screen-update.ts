@@ -18,6 +18,7 @@
  */
 
 import type { ExecutorObservation, ExecutorPixels } from './executor.ts';
+import { interactiveNodeCount } from './observation.ts';
 import type { VisionDegradation } from '../run/steps.ts';
 
 /** A diff past this many lines goes out as the full screen instead. */
@@ -71,10 +72,23 @@ export function isScreenOutput(value: unknown): value is Exclude<ScreenOutput, s
   return typeof value === 'object' && value !== null && 'text' in value && 'pixels' in value;
 }
 
+export interface ScreenPresenterOptions {
+  /**
+   * True for a `vision: 'only'` step: the observations carry no tree, so a
+   * screen is its screenshot and a location, never a node listing or a diff.
+   */
+  readonly treeWithheld?: boolean | undefined;
+}
+
 /** Renders one step's screens for the model and remembers what it has seen. */
 export class ScreenPresenter {
   private shown: ShownScreen | undefined;
   private screenshot: ShownScreenshot | undefined;
+  private readonly treeWithheld: boolean;
+
+  constructor(options: ScreenPresenterOptions = {}) {
+    this.treeWithheld = options.treeWithheld === true;
+  }
 
   /** True once a screenshot went to the model in this step. */
   get showingPixels(): boolean {
@@ -89,6 +103,7 @@ export class ScreenPresenter {
   /** The step's first screen, whole. */
   initial(observation: ExecutorObservation): string {
     this.shown = indexScreen(observation);
+    if (this.treeWithheld) return `Current screen (revision ${observation.revision}${describeLocation(observation)}).`;
     return renderFull(observation);
   }
 
@@ -101,6 +116,10 @@ export class ScreenPresenter {
     const next = indexScreen(observation);
     this.shown = next;
     const lead = options.lead === undefined ? '' : `${options.lead}\n\n`;
+    // Without a tree there is nothing to diff: the screenshot is the update.
+    if (this.treeWithheld) {
+      return `${lead}Screen now (revision ${observation.revision}${describeLocation(observation)}).`;
+    }
     if (previous === undefined) return `${lead}${renderFull(observation)}`;
     const diff = diffScreens(previous, next);
     const changes = diff.length;
@@ -128,16 +147,18 @@ export class ScreenPresenter {
 
   /**
    * A later screen as the model reads it: the changes since the screen it
-   * holds and, once the step is showing pixels, the screenshot too. In pixel
-   * mode an unchanged tree is not a failed action: what the action did may be
-   * drawn, not listed, so the screenshot is the evidence and no action is
-   * blamed for leaving the tree alone.
+   * holds and, once the step is showing pixels, the screenshot too. On a
+   * screen the tree cannot describe (nothing interactive listed) an unchanged
+   * tree is not a failed action: what the action did may be drawn, not
+   * listed, so the screenshot is the evidence and no action is blamed. On a
+   * screen the tree does describe, an unchanged tree after an action still
+   * means the control had no visible effect, pixels or not.
    */
   present(observation: ExecutorObservation, options: ScreenUpdateOptions = {}): ScreenOutput {
     this.attach(observation);
     const text = this.update(observation, {
       lead: options.lead,
-      expectChange: this.showingPixels ? false : options.expectChange,
+      expectChange: this.showingPixels && interactiveNodeCount(observation) === 0 ? false : options.expectChange,
     });
     return this.withScreenshot(observation, text);
   }
@@ -161,11 +182,11 @@ export class ScreenPresenter {
   }
 }
 
-/** The line under a screenshot: its pixel size and the coordinate space `tap_at` reads. */
+/** The line under a screenshot: its pixel size and the coordinate space the point verbs read. */
 function screenshotNote(pixels: Pick<ExecutorPixels, 'width' | 'height' | 'scale'>): string {
   return `Screenshot attached: ${String(pixels.width)} by ${String(pixels.height)} pixels${
     pixels.scale === 1 ? '' : ` (${String(pixels.scale)} per CSS pixel)`
-  }. tap_at takes coordinates in this image: x from the left edge, y from the top edge.`;
+  }. Point coordinates (tap_at and the other _at verbs) are pixels of this image: x from the left edge, y from the top edge.`;
 }
 
 /** Why pixels did not reach the model, and what to do instead. */

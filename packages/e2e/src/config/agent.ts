@@ -60,7 +60,7 @@ export interface ResolvedAgentConfig {
   readonly timeout: number;
   readonly maxObservationBytes: number;
   readonly context: string | undefined;
-  /** Default for the per-call `vision` option; a per-call value always wins. */
+  /** Default for the per-call `vision` option, `false` unless configured; a per-call value always wins. */
   readonly vision: VisionMode;
   /**
    * Provider options sent with every model call, judgments included. This is

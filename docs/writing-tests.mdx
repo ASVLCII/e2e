@@ -77,9 +77,9 @@ await agent.assert('the dashboard shows a trial badge');
 ```
 
 `assert` looks once. To wait for something to become true, poll with
-`waitFor`. In tree-only mode, unchanged observations skip the next judgment.
-Vision polling judges every interval because pixels can change while the
-tree stays the same.
+`waitFor`. An unchanged observation skips the next judgment; with pixels
+sent, the screenshot counts too, so a redraw the tree cannot see is a
+change and a still screen costs nothing.
 
 ```ts
 await agent.waitFor('the export finishes and a download link appears', {
@@ -119,6 +119,14 @@ screenshot alone.
 ```ts
 await agent.assert('the chart trends upward', { vision: true });
 await agent.assert('the search form is not covered by a banner', { vision: 'only' });
+```
+
+`act` takes the same option. With `vision: 'only'` the model drives the flow
+from screenshots alone, tapping and typing at points, for a canvas, a game,
+or a check that the render itself works:
+
+```ts
+await agent.act('enter the code 3141 on the drawn keypad and press OK', { vision: 'only' });
 ```
 
 Images cost input tokens on every call. The [agent reference](/reference/agent#vision)
