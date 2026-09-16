@@ -77,6 +77,122 @@ test.afterEach(() => log('afterEach:file-late'));
   );
 
   it(
+    'skips the running test from its body with test.skip(condition, reason), keeping the steps that ran',
+    async () => {
+      const file = `import { test } from 'e2e';
+
+test('single organization', async ({ app }) => {
+  await app.open();
+  const organizations = 1;
+  test.skip(organizations < 2, 'the demo tenant has a single organization');
+  throw new Error('unreachable after a skip');
+});
+
+test('condition false runs on', async () => {
+  test.skip(false, 'never');
+});
+
+test('bare skip', async () => {
+  test.skip();
+});
+
+test.setup('sign in', { sessions: ['admin'] }, async ({ session }) => {
+  test.skip(true, 'a setup may not skip');
+  await session.save('admin');
+});
+
+test('consumer', { session: 'admin' }, async () => {});
+`;
+      const { outcome, project } = await runProject({ 'tests/runtime-skip.e2e.ts': file }, { appUrl: app.url });
+      const conditional = resultByTitle(outcome, 'single organization');
+      expect(conditional.status).toBe('skipped');
+      expect(conditional.skip).toEqual({ cause: 'explicit', reason: 'the demo tenant has a single organization' });
+      expect(conditional.attempts).toHaveLength(1);
+      expect(conditional.attempts[0]?.status).toBe('skipped');
+      expect(conditional.attempts[0]?.steps.map((step) => step.api)).toEqual(['app.open']);
+      expect(resultByTitle(outcome, 'condition false runs on').status).toBe('passed');
+      expect(resultByTitle(outcome, 'bare skip').skip).toEqual({ cause: 'explicit', reason: 'skipped' });
+      const setup = resultByTitle(outcome, 'sign in');
+      expect(setup.status).toBe('failed');
+      expect(setup.attempts[0]?.error?.code).toBe('INVALID_ARGUMENT');
+      expect(resultByTitle(outcome, 'consumer').skip?.cause).toBe('setup-failed');
+      // The skipped tests do not fail the run; the setup does.
+      expect(outcome.exitCode).toBe(1);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    'keeps the suite realm across a runtime skip and keeps a skipped serial member skipped',
+    async () => {
+      const file = `import { appendFileSync } from 'node:fs';
+import { test } from 'e2e';
+
+const log = (entry: string) => appendFileSync(process.env.HOOK_LOG!, entry + '\\n');
+
+test.beforeAll(() => log('beforeAll:file'));
+test.afterAll(() => log('afterAll:file'));
+
+test('skips first', async () => {
+  test.skip(true, 'not applicable here');
+});
+
+test('runs second', async () => {
+  log('body:second');
+});
+
+test.describe('wizard', { serial: true }, () => {
+  test('step 1 skips', async () => {
+    test.skip('nothing to set up');
+  });
+  test('step 2 runs', async () => {
+    log('body:step2');
+  });
+});
+`;
+      const logPath = path.join('/tmp', `e2e-skiprealm-${Date.now()}.log`);
+      process.env['HOOK_LOG'] = logPath;
+      const { outcome, project } = await runProject({ 'tests/skip-realm.e2e.ts': file }, { appUrl: app.url });
+      expect(resultByTitle(outcome, 'skips first').status).toBe('skipped');
+      expect(resultByTitle(outcome, 'runs second').status).toBe('passed');
+      const step1 = resultByTitle(outcome, 'step 1 skips');
+      expect(step1.status).toBe('skipped');
+      expect(step1.skip).toEqual({ cause: 'explicit', reason: 'nothing to set up' });
+      expect(resultByTitle(outcome, 'step 2 runs').status).toBe('passed');
+      expect(outcome.exitCode).toBe(0);
+      // One realm for the ordinary tests, one for the group: the skip closed neither early.
+      expect(readFileSync(logPath, 'utf8').trim().split('\n')).toEqual([
+        'beforeAll:file',
+        'body:second',
+        'afterAll:file',
+        'beforeAll:file',
+        'body:step2',
+        'afterAll:file',
+      ]);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    'rejects test.skip(condition) outside a test body at collection',
+    async () => {
+      const file = `import { test } from 'e2e';
+
+test.skip(true, 'not here');
+test('never registered', async () => {});
+`;
+      const { outcome, project } = await runProject({ 'tests/skip-outside.e2e.ts': file }, { appUrl: app.url });
+      expect(outcome.exitCode).toBe(2);
+      expect(outcome.report.run.errors.map((error) => error.code)).toEqual(['COLLECTION_ERROR']);
+      expect(outcome.report.run.errors[0]?.message).toMatch(/must be called inside a test body/);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
     'skips scope tests when beforeAll fails and reports hook-failed',
     async () => {
       const file = `import { test } from 'e2e';
@@ -577,11 +693,17 @@ test('other', { tags: ['smoke'] }, async () => {});
         'tests/agent/nested/two.e2e.ts': file('agent two'),
         'tests/other/three.e2e.ts': file('other three'),
       };
-      const titles = (outcome: RunOutcome) => outcome.results.map((result) => result.test.title).toSorted();
+      // Every discovered file is collected; the ones no positional named are
+      // report-only unselected results, as tag-filtered tests are.
+      const titles = (outcome: RunOutcome) =>
+        outcome.results.filter((result) => result.selected).map((result) => result.test.title).toSorted();
+      const unselected = (outcome: RunOutcome) =>
+        outcome.results.filter((result) => !result.selected).map((result) => result.test.title).toSorted();
 
       const directory = await runProject(files, { appUrl: app.url, runOptions: { files: ['tests/agent'] } });
       expect(directory.outcome.exitCode).toBe(0);
       expect(titles(directory.outcome)).toEqual(['agent one', 'agent two']);
+      expect(unselected(directory.outcome)).toEqual(['other three', 'top']);
       directory.project.cleanup();
 
       const glob = await runProject(files, {

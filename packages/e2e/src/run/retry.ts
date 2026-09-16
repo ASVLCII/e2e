@@ -1,11 +1,11 @@
 /** Shared retry policy for ordinary tests, setup tests, and serial groups. */
 
 import type { SerializedError } from '../internal/errors.ts';
-import type { ResultStatus } from './records.ts';
+import type { AttemptStatus, ResultStatus } from './records.ts';
 
 /** The status-and-error slice of an attempt the retry policy inspects. */
 export interface RetryAttempt {
-  readonly status: 'passed' | 'failed' | 'timed-out' | 'interrupted';
+  readonly status: AttemptStatus;
   readonly error?: SerializedError | undefined;
 }
 
@@ -37,6 +37,8 @@ export async function runWithRetries(
     attemptCount += 1;
     if (attempt.status === 'passed') return attemptCount > 1 ? 'flaky' : 'passed';
     if (attempt.status === 'interrupted') return 'interrupted';
+    // A body that skipped itself has decided; a retry would only ask again.
+    if (attempt.status === 'skipped') return 'skipped';
     finalStatus = attempt.status;
     if (!isRetryEligible(attempt)) break;
   }

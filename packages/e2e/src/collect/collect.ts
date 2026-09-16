@@ -39,6 +39,13 @@ export interface TestIdentity {
 export interface CollectedTest extends RegisteredTest, TestIdentity {
   /** Outermost serial group, when the test is a serial-group member. */
   readonly serialRoot: GroupNode | undefined;
+  /**
+   * Whether the positionals selected this test's file (always, with none).
+   * An unselected ordinary test is reported as unselected; an unselected
+   * setup test still runs when a selected test consumes its session, which
+   * is why the file was collected at all.
+   */
+  readonly selected: boolean;
 }
 
 /** Narrows a collected test to its reportable, serializable identity. */
@@ -61,13 +68,19 @@ export interface CollectedFile {
   readonly absolutePath: string;
   readonly registration: ModuleRegistration;
   readonly tests: readonly CollectedTest[];
+  /** Whether the positionals selected this file; every test in it carries the same flag. */
+  readonly selected: boolean;
 }
 
 export interface Collection {
+  /**
+   * Every file the config globs discovered, collected. Positionals mark
+   * files `selected` rather than dropping the rest: a setup test that
+   * produces a session a selected test consumes runs wherever it lives, so
+   * `e2e run login.e2e.ts` works without also naming `auth.setup.e2e.ts`.
+   */
   readonly files: readonly CollectedFile[];
   readonly tests: readonly CollectedTest[];
-  /** Every file the config globs matched, before positionals narrowed it. */
-  readonly discovered: readonly string[];
   /**
    * Files that look like tests but match no config glob, gathered only when
    * the globs matched nothing: a `login.test.ts` beside an empty `tests/**`
@@ -131,7 +144,7 @@ function serialSourceId(file: string, group: GroupNode): string {
   return `serial::${testId(file, groupTitles(group))}`;
 }
 
-function toCollectedTests(file: string, registration: ModuleRegistration): CollectedTest[] {
+function toCollectedTests(file: string, registration: ModuleRegistration, selected: boolean): CollectedTest[] {
   const seenTitlePaths = new Set<string>();
   return registration.tests.map((registered) => {
     const encoded = testId(file, registered.titlePath);
@@ -148,6 +161,7 @@ function toCollectedTests(file: string, registration: ModuleRegistration): Colle
       id: registered.kind === 'setup' ? setupTestId(file, registered.titlePath) : encoded,
       serialRoot,
       serialId: serialRoot === undefined ? undefined : serialSourceId(file, serialRoot),
+      selected,
     };
   });
 }
@@ -281,13 +295,15 @@ export function collectFromRegistration(
   projectRoot: string,
   filePath: string,
   registration: ModuleRegistration,
+  selected = true,
 ): CollectedFile {
   const file = relativeToRoot(projectRoot, filePath);
   return {
     file,
     absolutePath: path.resolve(projectRoot, file),
     registration,
-    tests: toCollectedTests(file, registration),
+    tests: toCollectedTests(file, registration, selected),
+    selected,
   };
 }
 
@@ -306,25 +322,29 @@ export function collectInMemory(
   return {
     files: [collected],
     tests: collected.tests,
-    discovered: [collected.file],
     nearMisses: [],
     unmatchedPositionals: [],
   };
 }
 
 /**
- * Runs collection: resolves globs, sorts matched files by code point, narrows
- * them by any positional arguments, and imports each module once in the
- * collection realm.
+ * Runs collection: resolves globs, sorts matched files by code point, imports
+ * each module once in the collection realm, and records which files any
+ * positional arguments selected. Every discovered file is imported even when
+ * positionals name a few, because selection needs the whole picture: the
+ * setup test a selected test's session depends on may live in a file no
+ * positional named. A collection error anywhere in the suite is therefore an
+ * error for every run, as it is for a runner that loads the suite whole.
  */
 export async function collect(
   config: ResolvedConfig,
   positionals: readonly string[] = [],
 ): Promise<Collection> {
   const discovered = discoverFiles(config.projectRoot, config.tests);
-  const { files: matched, unmatched } = selectPositionals(config.projectRoot, discovered, positionals);
+  const { files: selectedFiles, unmatched } = selectPositionals(config.projectRoot, discovered, positionals);
+  const selected = new Set(selectedFiles);
   const files: CollectedFile[] = [];
-  for (const file of matched) {
+  for (const file of discovered) {
     const absolutePath = path.join(config.projectRoot, file);
     let registration: ModuleRegistration;
     try {
@@ -336,12 +356,11 @@ export async function collect(
         { cause },
       );
     }
-    files.push(collectFromRegistration(config.projectRoot, absolutePath, registration));
+    files.push(collectFromRegistration(config.projectRoot, absolutePath, registration, selected.has(file)));
   }
   return {
     files,
     tests: files.flatMap((file) => file.tests),
-    discovered,
     nearMisses: discovered.length === 0 ? findNearMissTestFiles(config.projectRoot, config.tests) : [],
     unmatchedPositionals: unmatched,
   };

@@ -18,14 +18,8 @@ import type { AttemptContext, ClosingRecord } from './execute.ts';
 import type { ArtifactSink } from './fixtures.ts';
 import type { StepRecord } from './steps.ts';
 import { findRegistered, type Realm, RealmManager } from './realm.ts';
-import type {
-  AttemptRecord,
-  ResultRecord,
-  ResultStatus,
-  SerialAttemptRecord,
-  SerialGroupRecord,
-  SerialMemberRecord,
-} from './records.ts';
+import type { AttemptRecord, ResultRecord, ResultStatus, SerialAttemptRecord, SerialGroupRecord, SerialMemberRecord, FailedStatus } from './records.ts';
+import { isFailedStatus } from './records.ts';
 import { runWithRetries } from './retry.ts';
 import { INTERRUPTED_BEFORE_START, pairResult } from './units.ts';
 
@@ -147,14 +141,16 @@ export async function runSerialUnit(
     const memberRecord = memberFinalStatus.get(member.test.id);
     let status: ResultStatus;
     let skip: SkipInfo | undefined;
-    if (group.status === 'passed' || group.status === 'flaky') {
+    // A member that skipped itself stays skipped whatever the group did: a
+    // passing group says the rest of the flow held, not that this member ran.
+    if (memberRecord?.status === 'skipped') {
+      status = 'skipped';
+      skip = memberRecord.skip;
+    } else if (group.status === 'passed' || group.status === 'flaky') {
       status = group.status;
     } else if (memberRecord === undefined) {
       status = 'skipped';
       skip = { cause: 'serial-predecessor-failed', reason: 'group attempt did not reach this member' };
-    } else if (memberRecord.status === 'skipped') {
-      status = 'skipped';
-      skip = memberRecord.skip;
     } else {
       status = memberRecord.status;
     }
@@ -304,10 +300,12 @@ async function runSerialAttempt(
       steps: memberAttempt.steps,
       ...(memberAttempt.error !== undefined ? { error: memberAttempt.error } : {}),
       ...(memberAttempt.failure !== undefined ? { failure: memberAttempt.failure } : {}),
+      ...(memberAttempt.skip !== undefined ? { skip: memberAttempt.skip } : {}),
       secondaryErrors: memberAttempt.secondaryErrors,
     });
     record.artifacts.push(...memberAttempt.artifacts);
-    if (memberAttempt.status !== 'passed') skipRemaining = predecessorFailed(memberIndex);
+    // A member that skipped itself decided nothing about the shared state; the rest run on.
+    if (isFailedStatus(memberAttempt.status)) skipRemaining = predecessorFailed(memberIndex);
     // Nested scopes close when their last member is done, as for ordinary
     // tests. A failed afterAll discards the suite instance, and the group
     // attempt is that instance: remaining members skip, as after a failed
@@ -341,12 +339,8 @@ async function runSerialAttempt(
   return record;
 }
 
-type FailedMemberStatus = Exclude<SerialMemberRecord['status'], 'passed' | 'skipped'>;
-
-function isFailedMember(
-  member: SerialMemberRecord,
-): member is SerialMemberRecord & { status: FailedMemberStatus } {
-  return member.status !== 'passed' && member.status !== 'skipped';
+function isFailedMember(member: SerialMemberRecord): member is SerialMemberRecord & { status: FailedStatus } {
+  return isFailedStatus(member.status);
 }
 
 function predecessorFailed(memberIndex: number): SkipInfo {

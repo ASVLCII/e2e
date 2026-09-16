@@ -7,6 +7,7 @@ import { testCaseBrand } from '../internal/brands.ts';
 import { CollectionError } from '../internal/errors.ts';
 import { validateTitle } from '../internal/ids.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
+import { parseSkipCall, skipRunningTest } from '../internal/skip.ts';
 import type {
   DescribeOptions,
   FixtureFn,
@@ -469,8 +470,13 @@ function createTestAPI(chain: readonly FixtureDefinition[]): TestAPI {
   };
 
   const api: TestAPI = Object.assign(testFunction, {
-    skip(title: string, fn: TestFn): TestCase {
-      return requireCollector('test.skip()').registerTest('test', 'skip', title, { skip: true }, [], fn, chain);
+    skip(first?: string | boolean, second?: TestFn | string): TestCase | undefined {
+      const call = parseSkipCall(first, second);
+      if (call.kind === 'register') {
+        return requireCollector('test.skip()').registerTest('test', 'skip', call.title, { skip: true }, [], call.fn as TestFn, chain);
+      }
+      skipRunningTest(call.condition, call.reason);
+      return undefined;
     },
     only(title: string, fn: TestFn): TestCase {
       return requireCollector('test.only()').registerTest('test', 'only', title, { only: true }, [], fn, chain);
