@@ -31,12 +31,15 @@ import {
   type NodeRef,
   type ObservationPixels,
   type OperationContext,
+  type PointerAction,
   type VideoSegment,
   type SemanticNode,
   type ViewportPoint,
+  type ViewportSize,
   ConfigurationError,
 } from 'e2e/engine';
 import { runCommand, staleOr } from './errors.ts';
+import { pointerInteraction } from './actions.ts';
 import { resolveExpression } from './locate.ts';
 import {
   isWithin,
@@ -47,7 +50,6 @@ import {
   type ProjectedNode,
   type ProjectedSnapshot,
   type RawNode,
-  type Viewport,
 } from './nodes.ts';
 import type { AgentDeviceClient, AgentDeviceOptions, AgentDevicePlatform, ClientFactory } from './options.ts';
 import { maskPng } from './png.ts';
@@ -243,7 +245,7 @@ export class AgentDeviceSurface {
    * screen before any app is open, a sparse tree) still reports the viewport
    * every observation must carry.
    */
-  private knownViewport: Viewport | undefined;
+  private knownViewport: ViewportSize | undefined;
 
   constructor(
     readonly options: AgentDeviceOptions,
@@ -512,7 +514,7 @@ export class AgentDeviceSurface {
    * the harness measures every rect and point against the viewport, so an
    * invented one would misplace every tap.
    */
-  private async viewportFor(projected: ProjectedSnapshot, operation: OperationContext): Promise<Viewport> {
+  private async viewportFor(projected: ProjectedSnapshot, operation: OperationContext): Promise<ViewportSize> {
     const known = projected.viewport ?? this.knownViewport;
     if (known !== undefined) return known;
     const probed = await this.probeViewport(operation.signal);
@@ -528,7 +530,7 @@ export class AgentDeviceSurface {
   }
 
   /** The device's logical screen size as its screenshot reports it; undefined when it reports none. */
-  private async probeViewport(signal: AbortSignal): Promise<Viewport | undefined> {
+  private async probeViewport(signal: AbortSignal): Promise<ViewportSize | undefined> {
     const result = await this.captureScreenshot(signal, async (shot) => shot);
     return logicalScreenSize(result);
   }
@@ -793,18 +795,14 @@ export class AgentDeviceSurface {
   }
 
   /**
-   * A tap at one screen point in logical pixels, the space every node's
-   * bounds are in, with no element resolved behind it. `settle` waits for the
-   * UI to go quiet, as the node taps do.
+   * One pointer action at a screen point in logical pixels, the space every
+   * node's bounds are in, with no element resolved behind it. `settle` waits
+   * for the UI to go quiet, as the node taps do.
    */
-  async tapAt(point: ViewportPoint, operation: OperationContext): Promise<void> {
+  async performAt(point: ViewportPoint, action: PointerAction, operation: OperationContext): Promise<void> {
     const settle = operation.origin === 'test' ? {} : this.settleOptions;
     const before = this.latestIndex;
-    await this.command(
-      'tapAt',
-      (client) => client.interactions.press({ x: point.x, y: point.y, ...settle }),
-      operation.signal,
-    );
+    await this.command(`${action.kind} at point`, (client) => pointerInteraction(client, point, action, settle), operation.signal);
     this.markAction(before);
   }
 
@@ -958,7 +956,7 @@ export class AgentDeviceSurface {
   private async capturePixels(
     operation: OperationContext,
     projected: ProjectedSnapshot,
-    viewport: Viewport,
+    viewport: ViewportSize,
   ): Promise<{ pixels: ObservationPixels; masked: number } | undefined> {
     let raw: Uint8Array;
     try {
@@ -989,7 +987,7 @@ export class AgentDeviceSurface {
 function redactSecure(
   data: Uint8Array,
   projected: ProjectedSnapshot,
-  viewport: Viewport | undefined,
+  viewport: ViewportSize | undefined,
 ): { data: Uint8Array; masked: number } | undefined {
   const secure = projected.index.filter((entry) => entry.node.states?.secure === true);
   if (secure.length === 0) return { data, masked: 0 };

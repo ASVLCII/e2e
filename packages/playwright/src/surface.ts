@@ -27,12 +27,14 @@ import {
   type LocatorExpression,
   type NodeRef,
   type OperationContext,
+  type PointerAction,
   type SemanticNode,
   type VideoSegment,
   type ViewportPoint,
+  type ViewportSize,
 } from 'e2e/engine';
 import { matchesText } from 'e2e/engine';
-import { classifyActionError, dispatchLocatorAction } from './actions.ts';
+import { classifyActionError, dispatchLocatorAction, dispatchPointerAction } from './actions.ts';
 import { BrowserConnection, connectCdp, type BrowserName } from './browser-connection.ts';
 import { AttemptSession, type StorageState } from './attempt-session.ts';
 import { DialogRouter } from './dialogs.ts';
@@ -137,7 +139,7 @@ export interface PlaywrightOptions extends EngineAppDeclaration {
   /** Browser to launch; defaults to chromium. */
   readonly browser?: BrowserName;
   /** Initial viewport of every attempt's page; default 1280 by 720. */
-  readonly viewport?: { readonly width: number; readonly height: number };
+  readonly viewport?: ViewportSize;
   /**
    * Attach to a remote browser over CDP instead of launching locally. Requires
    * the chromium browser (the default). Wired by a hosted-browser engine.
@@ -188,7 +190,7 @@ export class PlaywrightSurface {
   private readonly connect: PlaywrightConnectOptions | undefined;
   private session: AttemptSession | undefined;
   private readonly usedContexts = new Set<string>();
-  private readonly viewport: { readonly width: number; readonly height: number };
+  private readonly viewport: ViewportSize;
   /** Injected request headers, names lowercased so they replace the browser's own of the same name. */
   private readonly headers: Readonly<Record<string, string>> | undefined;
   private readonly basicAuth: PlaywrightBasicAuth | undefined;
@@ -559,15 +561,11 @@ export class PlaywrightSurface {
     );
   }
 
-  /**
-   * A click at one viewport point in CSS pixels, with nothing resolved behind
-   * it: no actionability wait, because there is no element to wait on, and the
-   * page decides what the click lands on, as it does for a person.
-   */
-  tapAt(point: ViewportPoint, operation: OperationContext): Promise<void> {
-    return this.guard(operation, 'tapAt', () => {
+  /** One pointer action at a viewport point in CSS pixels, with nothing resolved behind it; see `dispatchPointerAction`. */
+  performAt(point: ViewportPoint, action: PointerAction, operation: OperationContext): Promise<void> {
+    return this.guard(operation, `${action.kind} at point`, () => {
       this.requireSession().requireObservation();
-      return this.requirePage().mouse.click(point.x, point.y);
+      return dispatchPointerAction(this.requirePage(), point, action);
     });
   }
 

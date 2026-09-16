@@ -1,7 +1,7 @@
 /** Shared error translation, filename, and swipe helpers for the Playwright engine. */
 
-import type { ElementHandle, Locator as PwLocator, Page } from 'playwright';
-import { EngineError, type Momentum, type ScrollDirection } from 'e2e/engine';
+import type { ElementHandle, Locator as PwLocator, Mouse, Page } from 'playwright';
+import { EngineError, type Momentum, type ScrollDirection, type ViewportPoint } from 'e2e/engine';
 import { ConfigurationError, InfrastructureError, TestError } from 'e2e/engine';
 
 export const DEFAULT_VIEWPORT = { width: 1280, height: 720 } as const;
@@ -324,6 +324,15 @@ export function performViewportSwipe(
   );
   const [deltaX, deltaY] = wheelDelta(direction, distance);
   return page.mouse.wheel(deltaX, deltaY);
+}
+
+/** A pointer drag from one viewport point to another, with an intermediate move so drag handlers see motion. */
+export async function performPointDrag(mouse: Mouse, from: ViewportPoint, to: ViewportPoint): Promise<void> {
+  await mouse.move(from.x, from.y);
+  await mouse.down();
+  await mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2);
+  await mouse.move(to.x, to.y);
+  await mouse.up();
 }
 
 export async function performElementSwipe(

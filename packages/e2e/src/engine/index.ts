@@ -36,7 +36,7 @@ export { raceAbort } from './timing.ts';
 export { Deadline, pollCondition, withTimeout, withinCleanupBudget, type PollConditionOptions } from '../internal/time.ts';
 export { sameSite, siteOf, urlMatches } from '../internal/urls.ts';
 export { obj, type WithoutUndefined } from '../internal/objects.ts';
-import type { CommandConfig, Expectable, Locator, Platform, Screen, ServiceConfig } from '../types.ts';
+import type { CommandConfig, Expectable, Locator, Screen, ServiceConfig } from '../types.ts';
 import type {
   EngineSpiVersion,
   LocatorAction,
@@ -45,8 +45,11 @@ import type {
   NodeRef,
   ObservationPixels,
   OperationContext,
+  PointerAction,
+  PointerActionKind,
   SemanticNode,
   ViewportPoint,
+  ViewportSize,
 } from './contract.ts';
 
 export type * from './contract.ts';
@@ -59,28 +62,19 @@ export {
   LOCATOR_ACTION_KINDS,
   OBSERVED_NAME_LIMIT,
   OBSERVED_TEXT_LIMIT,
+  POINTER_ACTION_KINDS,
   RETRYABLE_ENGINE_ERROR_CODES,
   parseKey,
 } from './contract.ts';
-export type {
-  CommandConfig,
-  ServiceConfig,
-  Expectable,
-  JsonValue,
-  Locator,
-  Momentum,
-  Platform,
-  Screen,
-  ScrollDirection,
-  SelectOption,
-} from '../types.ts';
+export type { CommandConfig, ServiceConfig, Expectable, JsonValue, Locator, Screen } from '../types.ts';
 
 /**
  * Capability names: the closed harness capabilities plus one name per
  * contributed fixture. `actions` is `perform`; `location` is `locate`; both
  * require observation, because their refs live in the observation's id space.
- * `pointer` is `tapAt`, a tap addressed by a viewport point rather than a
- * node, and requires observation because the point is read off its pixels.
+ * `pointer` is `performAt`, an action addressed by a viewport point rather
+ * than a node, and requires observation because the point is read off its
+ * pixels.
  */
 export type EngineCapability =
   | 'observation'
@@ -531,7 +525,7 @@ export interface EngineSnapshot {
    */
   readonly root: SemanticNode;
   /** The viewport `SemanticNode.rect` and `ViewportPoint` are measured in. */
-  readonly viewport: { readonly width: number; readonly height: number; readonly scale: number };
+  readonly viewport: ViewportSize;
   /**
    * True when `root` leaves out nodes that are on the surface: the engine
    * stopped reading at a node cap or a depth limit, or could not enter a
@@ -569,12 +563,12 @@ export interface Engine {
    */
   readonly spiVersion: EngineSpiVersion;
   /**
-   * Platform this engine drives. The harness recognizes `web`, `ios`, and
-   * `android` for platform-scoped tool packs and reporting; any other label
-   * is the engine's own and treated as unknown. A target inherits it; a
-   * target that names a platform of its own must agree with it.
+   * Platform label this engine drives (`web`, `ios`, `android`, or a label of
+   * the engine's own). Tests filter on it through `platforms` and tool packs
+   * are scoped by it; the harness attaches no meaning to any value. A target
+   * inherits it; a target that names a platform of its own must agree with it.
    */
-  readonly platform?: Platform;
+  readonly platform?: string;
   /**
    * The most workers this engine can serve at once for one target: one per
    * surface it drives concurrently (a device pool's size; 1 for a single
@@ -620,14 +614,23 @@ export interface Engine {
     context: OperationContext,
   ): Promise<readonly SemanticNode[]>;
   /**
-   * capability: pointer - requires observation. Taps one viewport point, in
-   * the CSS pixels of `SemanticNode.rect`, with no node behind it: the
-   * agent's `tap_at` verb lands here when the point the model named in a
-   * screenshot sits on nothing the tree lists (a shape on a canvas, a pin on
-   * a map, a control in a system sheet). Dispatch the pointer at the point as
-   * given; the harness has already clamped it to the viewport.
+   * capability: pointer - requires observation. Performs one pointer action
+   * at a viewport point, in the CSS pixels of `SemanticNode.rect`, with no
+   * node behind it: the agent's `tap_at` verb lands here when the point the
+   * model named in a screenshot sits on nothing the tree lists (a shape on a
+   * canvas, a pin on a map, a control in a system sheet). Dispatch the
+   * pointer at the point as given; the harness has already clamped it to the
+   * viewport. Throw `UNSUPPORTED_CAPABILITY` for a declared kind the surface
+   * cannot deliver at this particular point.
    */
-  tapAt?(point: ViewportPoint, context: OperationContext): Promise<void>;
+  performAt?(point: ViewportPoint, action: PointerAction, context: OperationContext): Promise<void>;
+  /**
+   * The pointer action kinds `performAt` honors, required with it. The
+   * harness routes a point-addressed action to the engine only for a kind
+   * listed here; an undeclared kind fails with `UNSUPPORTED_CAPABILITY`
+   * before reaching the engine.
+   */
+  readonly pointerActions?: readonly PointerActionKind[];
   /** capability: keyboard - requires observation. Input to whatever holds focus; see `EngineKeyboard`. */
   readonly keyboard?: EngineKeyboard;
   /**
