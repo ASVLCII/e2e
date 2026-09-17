@@ -256,6 +256,8 @@ export interface ReportResult {
    * with its own `id`.
    */
   agent: string;
+  /** The tags the test declares; `[]` when none. */
+  tags: readonly string[];
   serialGroupId?: string | undefined;
   status: ResultRecord['status'];
   skip?: SkipInfo | undefined;
@@ -451,6 +453,7 @@ function serializeResult(config: ResolvedConfig | undefined, result: ResultRecor
     targetId: result.target.name,
     platform: result.target.platform,
     agent: result.agent,
+    tags: result.test.tags,
     serialGroupId: result.serialGroupId,
     status: result.status,
     skip: result.status === 'skipped' ? result.skip : undefined,

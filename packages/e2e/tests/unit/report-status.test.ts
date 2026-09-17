@@ -41,6 +41,7 @@ function failedResult(error: SerializedError): ResultRecord {
       titlePath: ['suite', 'case'],
       declarationIndex: 0,
       sessions: [],
+      tags: [],
       source: undefined,
       file: 'tests/case.e2e.ts',
       id: 'tests/case.e2e.ts::suite::case',
@@ -92,6 +93,18 @@ function build(overrides: Partial<BuildReportOptions>): ReturnType<typeof buildR
   assertValidReport(document);
   return document;
 }
+
+describe('result tags', () => {
+  it('carries the tags a test declares, an empty list when it declares none', () => {
+    const plain = failedResult(productFailure);
+    const tagged: ResultRecord = {
+      ...plain,
+      test: { ...plain.test, title: 'tagged', titlePath: ['suite', 'tagged'], id: 'tests/case.e2e.ts::suite::tagged', declarationIndex: 1, tags: ['smoke', 'billing'] },
+    };
+    const document = build({ results: [plain, tagged] });
+    expect(document.run.results.map((result) => result.tags)).toEqual([[], ['smoke', 'billing']]);
+  });
+});
 
 describe('run status derivation', () => {
   it('is blocked when every failing result carries a blockable code', () => {

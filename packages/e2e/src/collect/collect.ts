@@ -29,6 +29,8 @@ export interface TestIdentity {
   readonly titlePath: readonly string[];
   readonly declarationIndex: number;
   readonly sessions: readonly string[];
+  /** The tags the test declares, outermost describe first, each once; what `--tag` selects on. */
+  readonly tags: readonly string[];
   readonly source: SourceLocation | undefined;
   /** Normalized project-root-relative file path with `/` separators. */
   readonly file: string;
@@ -56,6 +58,7 @@ export function testIdentity(test: CollectedTest): TestIdentity {
     titlePath: test.titlePath,
     declarationIndex: test.declarationIndex,
     sessions: test.sessions,
+    tags: test.tags,
     source: test.source,
     file: test.file,
     id: test.id,

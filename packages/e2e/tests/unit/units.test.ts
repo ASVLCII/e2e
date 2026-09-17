@@ -41,6 +41,7 @@ function makeTest(
     declarationIndex,
     options: {},
     sessions: [],
+    tags: [],
     fn: () => undefined,
     fixtures: [],
     group: undefined,
@@ -58,7 +59,6 @@ function makeTest(
 const defaultOptions: ResolvedTestOptions = {
   timeout: 30_000,
   retries: 0,
-  tags: [],
   platforms: undefined,
   requires: [],
   session: undefined,
