@@ -9,7 +9,8 @@ import { canonicalDigest, sha256Hex } from '../internal/ids.ts';
 import { didYouMean } from '../internal/suggest.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
-import { boundedInt, positiveInt } from './validate.ts';
+import { compileGlob } from '../internal/globs.ts';
+import { boundedInt, describeValue, positiveInt } from './validate.ts';
 import type {
   ArtifactStore,
   ArtifactsConfig,
@@ -680,10 +681,32 @@ function resolvePlatform(target: Target, where: string): string {
   return platform;
 }
 
-function normalizeTests(tests: E2EConfig['tests']): readonly string[] {
+/**
+ * The `tests` globs, checked and compiled when the config resolves. A wrong
+ * type used to be a raw TypeError reported as a test failure (at config load
+ * for `tests: 5`, at collection for `tests: [1]`), and a malformed glob was
+ * `INVALID_GLOB` only once a run or `e2e list` collected, so `explore`,
+ * `mcp`, and `cache` accepted a config no run could use.
+ */
+function normalizeTests(tests: unknown): readonly string[] {
   const list = tests === undefined ? ['tests/**/*.e2e.ts'] : typeof tests === 'string' ? [tests] : tests;
+  if (!Array.isArray(list)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `tests must be a glob or a list of globs relative to the project root, got ${describeValue(list)}`,
+    );
+  }
   if (list.length === 0) {
     throw new ConfigurationError('INVALID_CONFIG', 'tests must not be empty');
+  }
+  for (const glob of list) {
+    if (typeof glob !== 'string' || glob === '') {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `tests must be a glob or a list of globs relative to the project root, got ${describeValue(glob)} in the list`,
+      );
+    }
+    compileGlob(glob);
   }
   return [...new Set(list)];
 }

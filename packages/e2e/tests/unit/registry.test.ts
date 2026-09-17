@@ -25,6 +25,34 @@ describe('registration', () => {
     expect(registration.tests).toHaveLength(1);
   });
 
+  it('rejects tags that are not a list of distinct names --tag can spell back', async () => {
+    const register = (tags: unknown) =>
+      collectModule(async () => {
+        test('x', { tags } as never, noop);
+      });
+    await expect(register('smoke')).rejects.toThrow(
+      "test options: tags must be a list of tag names, e.g. tags: ['smoke'], got \"smoke\"",
+    );
+    await expect(register({ smoke: true })).rejects.toThrow(/tags must be a list of tag names, .* got an object/);
+    const rule = 'every tag must be a non-blank string with no comma and no leading or trailing whitespace';
+    for (const [tag, shown] of [[1, '1'], ['', '""'], [' smoke', '" smoke"'], ['a,b', '"a,b"'], [undefined, 'undefined']] as const) {
+      await expect(register([tag])).rejects.toThrow(`test options: ${rule}, got ${shown}`);
+    }
+    await expect(register(['smoke', 'smoke'])).rejects.toThrow('test options: tags lists "smoke" twice');
+    await expect(
+      collectModule(async () => {
+        test.describe('group', { tags: ['a,b'] }, () => {
+          test('x', noop);
+        });
+      }),
+    ).rejects.toThrow(`describe options: ${rule}`);
+    // Inner spaces are legal: `--tag 'Login Form'` spells this back.
+    const registration = await collectModule(async () => {
+      test('x', { tags: ['smoke', 'Login Form', 'billing:refunds', 'v2.0'] }, noop);
+    });
+    expect(registration.tests[0]!.options.tags).toEqual(['smoke', 'Login Form', 'billing:refunds', 'v2.0']);
+  });
+
   it('rejects registration outside collection', () => {
     expect(() => test('orphan', noop)).toThrow(/collected by the e2e runner/);
   });

@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { testCaseBrand } from '../internal/brands.ts';
+import { describeValue } from '../config/validate.ts';
 import { CollectionError } from '../internal/errors.ts';
 import { validateTitle } from '../internal/ids.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
@@ -251,6 +252,40 @@ function validateCommonOptions(options: TestOptions | DescribeOptions, label: st
     }
   }
   if (options.agent !== undefined) validateAgentOption(options.agent, label);
+  if (options.tags !== undefined) validateTagsOption(options.tags, label);
+}
+
+/**
+ * `tags` lists distinct tag names, checked here beside `timeout`, `retries`,
+ * and `agent`. Unchecked, the mistake is silent: a bare string is iterable,
+ * so `tags: 'smoke'` would register the tags `s`, `m`, `o`, `k`, `e` and
+ * `--tag smoke` would never select the test.
+ */
+function validateTagsOption(tags: unknown, label: string): void {
+  if (!Array.isArray(tags)) {
+    throw new CollectionError(
+      `${label}: tags must be a list of tag names, e.g. tags: ['smoke'], got ${describeValue(tags)}`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const tag of tags) {
+    if (!isTagName(tag)) {
+      throw new CollectionError(
+        `${label}: every tag must be a non-blank string with no comma and no leading or trailing whitespace, got ${describeValue(tag)}`,
+      );
+    }
+    if (seen.has(tag)) throw new CollectionError(`${label}: tags lists ${JSON.stringify(tag)} twice`);
+    seen.add(tag);
+  }
+}
+
+/**
+ * A tag name is whatever `--tag` can spell back: the flag splits its values
+ * on commas and trims them, so a name holds no comma and no leading or
+ * trailing whitespace. Inner spaces are fine (`'Login Form'`, quoted).
+ */
+function isTagName(tag: unknown): tag is string {
+  return typeof tag === 'string' && tag !== '' && tag.trim() === tag && !tag.includes(',');
 }
 
 /** `agent` names one configured agent, or lists several distinct ones to run the test once each. */
