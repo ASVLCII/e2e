@@ -123,14 +123,34 @@ describe('e2e run argument parsing', () => {
     expect(lastRunOptions().agent).toBeUndefined();
   });
 
-  it('splits comma-separated targets and trims whitespace', async () => {
-    await invoke('run', '--target', 'chromium, firefox , ,webkit');
-    expect(lastRunOptions().targetIds).toEqual(['chromium', 'firefox', 'webkit']);
+  it('splits comma-separated targets, trims whitespace, and accumulates repeats once each', async () => {
+    await invoke('run', '--target', 'chromium, firefox , ,webkit', '--target', 'chromium,edge');
+    expect(lastRunOptions().targetIds).toEqual(['chromium', 'firefox', 'webkit', 'edge']);
   });
 
-  it('accumulates repeated --tag flags', async () => {
-    await invoke('run', '--tag', 'smoke', '--tag', 'auth');
-    expect(lastRunOptions().tags).toEqual(['smoke', 'auth']);
+  it('accumulates repeated --tag flags and splits comma-separated tags', async () => {
+    await invoke('run', '--tag', 'smoke', '--tag', 'auth, billing');
+    expect(lastRunOptions().tags).toEqual(['smoke', 'auth', 'billing']);
+  });
+
+  it('rejects an empty --tag, --target, or --agent value with exit code 2 and never runs', async () => {
+    const cases = [
+      ['--tag <tags>', ''],
+      ['--tag <tags>', ' , '],
+      ['--target <ids>', ''],
+      ['--agent <names>', ' '],
+    ] as const;
+    for (const [option, value] of cases) {
+      const flag = option.split(' ')[0]!;
+      stderrSpy.mockClear();
+      process.exitCode = undefined;
+      await invoke('run', flag, value);
+      expect(process.exitCode).toBe(2);
+      expect(written(stderrSpy)).toBe(
+        `error: option '${option}' argument '${value}' is invalid. must name at least one ${flag.slice(2)}\n(add --help for usage)\n`,
+      );
+    }
+    expect(runMock).not.toHaveBeenCalled();
   });
 
   it('accepts --tag-mode all', async () => {
@@ -328,6 +348,17 @@ describe('e2e list', () => {
     expect(listMock).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
     expect(written(stderrSpy)).toContain("option '--reporter <id>' argument 'junit' is invalid");
+  });
+
+  it('splits comma-separated --tag and --target values and rejects an empty one, like run', async () => {
+    await invoke('list', '--tag', 'smoke,auth', '--tag', 'smoke', '--target', 'web,webkit');
+    expect(lastListOptions()).toMatchObject({ tags: ['smoke', 'auth'], targetIds: ['web', 'webkit'] });
+    listMock.mockClear();
+    process.exitCode = undefined;
+    await invoke('list', '--tag', '');
+    expect(listMock).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+    expect(written(stderrSpy)).toContain("option '--tag <tags>' argument '' is invalid. must name at least one tag");
   });
 
   it('prints a collection failure as code and message with its exit code', async () => {

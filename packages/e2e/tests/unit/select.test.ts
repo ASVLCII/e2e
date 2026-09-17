@@ -233,6 +233,48 @@ describe('select', () => {
     expect(runnable[0]!.test.title).toBe('smoke+billing');
   });
 
+  it('names the tag filter against the tags the suite declares', async () => {
+    const col = await collection(() => {
+      test('smoke', { tags: ['smoke'] }, noop);
+      test('billing', { tags: ['billing'] }, noop);
+    });
+    expect(() => select(col, config(), { tags: ['smok'] })).toThrow(
+      '2 tests were collected but none is runnable: 2 carry none of the tags smok (did you mean smoke?); pass --pass-with-no-tests to allow this',
+    );
+    expect(() => select(col, config(), { tags: ['smoke', 'billing'], tagMode: 'all' })).toThrow(
+      '2 tests were collected but none is runnable: 2 do not carry all of the tags smoke, billing; pass --pass-with-no-tests to allow this',
+    );
+    expect(() => select(col, config(), { tags: ['nightly', 'biling'], tagMode: 'all' })).toThrow(
+      '2 do not carry all of the tags nightly (no test declares it), biling (did you mean billing?); pass',
+    );
+  });
+
+  it('blames the tag filter only for the tests it filtered', async () => {
+    const narrowed = await collectionOf(
+      [
+        { file: 'tests/a.e2e.ts', body: () => { test('a', { tags: ['smoke'] }, noop); } },
+        { file: 'tests/b.e2e.ts', body: () => { test('b', noop); } },
+      ],
+      ['tests/b.e2e.ts'],
+    );
+    expect(() => select(narrowed, config(), { tags: ['smoke'] })).toThrow(
+      '2 tests were collected but none is runnable: 1 file not selected by a positional argument, 1 carry none of the tags smoke; pass --pass-with-no-tests to allow this',
+    );
+    const focused = await collection(() => {
+      test.only('debug', noop);
+      test('pays', { tags: ['billing'] }, noop);
+    });
+    expect(() => select(focused, config(), { tags: ['billing'] })).toThrow(
+      '2 tests were collected but none is runnable: 1 carry none of the tags billing, 1 not focused by .only; pass --pass-with-no-tests to allow this',
+    );
+    const untagged = await collection(() => {
+      test('plain', noop);
+    });
+    expect(() => select(untagged, config(), { tags: ['smoke'] })).toThrow(
+      '1 tests were collected but none is runnable: 1 carry none of the tags smoke (no test declares it); pass --pass-with-no-tests to allow this',
+    );
+  });
+
   it('filters targets by platforms option', async () => {
     const col = await collection(() => {
       test('mobile only', { platforms: ['ios'] }, noop);
@@ -366,7 +408,7 @@ describe('select', () => {
       test('mobile only', { platforms: ['ios'] }, noop);
     });
     expect(() => select(tagged, config(), { tags: ['billing'] })).toThrow(
-      '2 tests were collected but none is runnable: 2 carry none of the tags billing; pass --pass-with-no-tests to allow this',
+      '2 tests were collected but none is runnable: 2 carry none of the tags billing (no test declares it); pass --pass-with-no-tests to allow this',
     );
   });
 

@@ -7,6 +7,7 @@ import picocolors from 'picocolors';
 import { detectPackageManager, execCommand, runScriptCommand } from '../internal/package-manager.ts';
 import { packageVersion } from '../internal/package-version.ts';
 import { classifyError, exitCodeForCategory } from '../internal/errors.ts';
+import type { TagMode } from '../collect/select.ts';
 import { list, run, type ListedPair, type RunOutcome } from '../run/runner.ts';
 import { explore, STEP_BOUNDS, TIMEOUT_BOUNDS } from '../explore/index.ts';
 import { BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
@@ -44,6 +45,19 @@ function parseList(value: string): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter((item) => item !== '');
+}
+
+/**
+ * Names, comma-separated or repeated, each once. An empty value is a usage
+ * error rather than an empty list: `--tag "$TAGS"` with the variable unset
+ * must not select every test, and `--target ''` must not select every target.
+ */
+function parseNames(noun: string): (value: string, previous?: string[]) => string[] {
+  return (value, previous = []) => {
+    const names = parseList(value);
+    if (names.length === 0) throw new InvalidArgumentError(`must name at least one ${noun}`);
+    return [...new Set([...previous, ...names])];
+  };
 }
 
 /** An integer inside a closed range, for the explore budgets. */
@@ -94,8 +108,7 @@ function parseReporters(value: string): Reporter[] {
   });
 }
 
-const TAG_MODES = ['any', 'all'] as const;
-type TagMode = (typeof TAG_MODES)[number];
+const TAG_MODES = ['any', 'all'] as const satisfies readonly TagMode[];
 
 const LIST_REPORTERS = ['list', 'json'] as const;
 type ListReporter = (typeof LIST_REPORTERS)[number];
@@ -309,19 +322,20 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .argument('[files...]', FILES_DESCRIPTION)
     .optionsGroup('Selection:')
     .option('--config <path>', 'config file (default: the nearest e2e.config.ts)')
-    .option('--target <ids>', 'comma-separated target names (default: all targets)', parseList)
-    .option('--tag <tag>', 'only tests with this tag; repeat to combine', (value: string, previous: string[] = []) => [
-      ...previous,
-      value,
-    ])
-    .addOption(new Option('--tag-mode <mode>', 'how repeated tags combine').choices(TAG_MODES).default('any'))
+    .option('--target <ids>', 'target names, comma-separated or repeated (default: all targets)', parseNames('target'))
+    .option(
+      '--tag <tags>',
+      'only tests carrying these tags, comma-separated or repeated: any of them, or every one with --tag-mode all',
+      parseNames('tag'),
+    )
+    .addOption(new Option('--tag-mode <mode>', 'how several tags combine').choices(TAG_MODES).default('any'))
     .option('--pass-with-no-tests', 'exit 0 on an empty selection instead of NO_TESTS')
     .optionsGroup('Execution:')
     .option('--headed', 'show the UI while tests run, when the engine supports it')
     .option(
       '--agent <names>',
       'the configured agent unpinned tests run with (default: agents.default); comma-separated or repeated names run each such test once per agent',
-      (value: string, previous: string[] = []) => [...previous, ...parseList(value)],
+      parseNames('agent'),
     )
     .option('--workers <n>', 'parallel workers (default: from the config)', parseNonNegativeInt)
     .option('--retries <n>', 'retries per failing test (default: from the config)', parseNonNegativeInt)
@@ -340,6 +354,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           'e2e run',
           'e2e run tests/signup.e2e.ts --headed',
           "e2e run 'tests/**/*.smoke.e2e.ts' --target web --tag smoke",
+          'e2e run --tag smoke,billing --tag-mode all',
           'e2e run --reporter list,junit --workers 4 --retries 2',
           'e2e run --agent ux tests/onboarding.e2e.ts',
           'e2e run --agent buyer,admin tests/checkout.e2e.ts',
@@ -496,12 +511,13 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .argument('[files...]', FILES_DESCRIPTION)
     .optionsGroup('Selection:')
     .option('--config <path>', 'config file (default: the nearest e2e.config.ts)')
-    .option('--target <ids>', 'comma-separated target names (default: all targets)', parseList)
-    .option('--tag <tag>', 'only tests with this tag; repeat to combine', (value: string, previous: string[] = []) => [
-      ...previous,
-      value,
-    ])
-    .addOption(new Option('--tag-mode <mode>', 'how repeated tags combine').choices(TAG_MODES).default('any'))
+    .option('--target <ids>', 'target names, comma-separated or repeated (default: all targets)', parseNames('target'))
+    .option(
+      '--tag <tags>',
+      'only tests carrying these tags, comma-separated or repeated: any of them, or every one with --tag-mode all',
+      parseNames('tag'),
+    )
+    .addOption(new Option('--tag-mode <mode>', 'how several tags combine').choices(TAG_MODES).default('any'))
     .option('--pass-with-no-tests', 'exit 0 on an empty selection instead of NO_TESTS')
     .optionsGroup('Output:')
     .addOption(
