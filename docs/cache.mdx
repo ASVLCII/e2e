@@ -71,8 +71,29 @@ A recording replays only for the exact step it was made for. The key holds:
   and the app identity, which is `identity` when set, else the URL's origin
   and base path, plus `environment`
 - the instruction text, trimmed and normalized. Rewording it is a new key
-- the `params` values, with a `Secret` reduced to its name and purpose
+- the `params` values, with a `Secret` reduced to its name and purpose and
+  a `unique()` value reduced to its place in the params
 - which repeat of the same instruction it is within the test
+
+A value that is different on every run, a timestamped company name or a
+fresh email, would miss on every run. Wrap it in `unique()`: the model sees
+the string as given, and the recording keeps a placeholder wherever the
+value appeared, in the typed text, in the names of the controls that were
+tapped, and in the end anchors. The next run fills the placeholder with its
+own value, so the same flow replays and the anchors check that this run's
+company appeared.
+
+```ts
+import { unique } from 'e2e';
+
+const name = `E2E ${Date.now()} Company`;
+await agent.act('create a company named {name}', { params: { name: unique(name) } });
+await expect(screen.getByRole('heading', { name })).toBeVisible();
+```
+
+Mark values the flow types or looks for, not choices that steer it. Two
+calls whose `unique()` values differ share one recording, so a plan name
+that decides which button gets tapped stays a plain param.
 
 Everything else can change without touching the key: the model, the agent,
 the rest of the config, the code around the step. An e2e release that
