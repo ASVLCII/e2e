@@ -1,6 +1,6 @@
 {
   "name": "@e2edev/oauth",
-  "version": "0.0.0",
+  "version": "0.1.0-canary-20260917213813",
   "description": "Sign in to a personal ChatGPT, GitHub Copilot, or SuperGrok subscription and use it as an AI SDK model",
   "keywords": [
     "e2e",
