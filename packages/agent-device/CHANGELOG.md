@@ -1,5 +1,37 @@
 # @e2edev/agent-device
 
+## 0.8.0-canary-20260917081546
+
+### Minor Changes
+
+- [#314](https://github.com/tester-army/e2e/pull/314) [`0b513d9`](https://github.com/tester-army/e2e/commit/0b513d989e7086bd3998fd0d105dbea0fdd5d004) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Declares the `keyboard` capability: `keyboard.type` types into the focused field through the device's text input, `keyboard.press` sends Enter, Space, or a character to it, and `keyboard.dismiss` hides the soft keyboard. Replacing the focused field's value without a node is refused; fill a listed field by id to replace it.
+
+- [#324](https://github.com/tester-army/e2e/pull/324) [`7fcb925`](https://github.com/tester-army/e2e/commit/7fcb925d76f41f1a8558abaa57a60de4ff365868) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Declares `tap`, `doubleTap`, and `longPress` as pointer actions at a bare screen point (`performAt` with `pointerActions`), replacing `tapAt`. A role query with `pressed` or `level` matches nothing on a device tree that reports neither, rather than everything.
+
+### Patch Changes
+
+- [#317](https://github.com/tester-army/e2e/pull/317) [`2e593df`](https://github.com/tester-army/e2e/commit/2e593dfb46dc71bc1785cb0ce80c35e34c0f1a90) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Recover semantic-capture timeouts with fresh, independently masked screenshots.
+  The engine contract distinguishes unavailable semantics from a valid empty
+  tree. Judgments obey their vision options, and every capture respects secret
+  taint. The runner retires stale references and disables trace reuse for
+  affected steps. Playwright supports
+  the fallback; device captures still fail closed when accessibility data
+  cannot establish screenshot masks.
+  
+  Playwright bounds the complete semantic capture and reserves node IDs before
+  the reader starts. An abandoned capture cannot reuse IDs or publish late
+  references. Pixel-only evidence resets the agent's semantic screen comparison
+  and stops cache probes without discarding the recovered screenshot.
+  
+  Reports accept judgment steps that fail before a model call without inventing
+  an observation revision or verdict explanation.
+
+- [#306](https://github.com/tester-army/e2e/pull/306) [`17283c8`](https://github.com/tester-army/e2e/commit/17283c86dabad63631064d817196ae728c3a6136) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Built against the engine contract that adds `EngineSnapshot.truncated`. The
+  device engine reads the whole accessibility tree it is handed, so its
+  snapshots never set the flag.
+- Updated dependencies [[`0a4b7f4`](https://github.com/tester-army/e2e/commit/0a4b7f4fe9f3b316907ce896d21153a918f853e8), [`0b513d9`](https://github.com/tester-army/e2e/commit/0b513d989e7086bd3998fd0d105dbea0fdd5d004), [`1c9cc16`](https://github.com/tester-army/e2e/commit/1c9cc16697cb82c0a6db924f6c0f389886b2a468), [`9c835ba`](https://github.com/tester-army/e2e/commit/9c835ba64e866a8e87c1bcddc04376939edca74c), [`7fcb925`](https://github.com/tester-army/e2e/commit/7fcb925d76f41f1a8558abaa57a60de4ff365868), [`9249de2`](https://github.com/tester-army/e2e/commit/9249de20eea96fccc5b24e3747f36708eaf8edb8), [`2e593df`](https://github.com/tester-army/e2e/commit/2e593dfb46dc71bc1785cb0ce80c35e34c0f1a90), [`3524a59`](https://github.com/tester-army/e2e/commit/3524a59290da01a1adf28d83272eb5ecf0219c40), [`6016083`](https://github.com/tester-army/e2e/commit/60160830154972d31e81b10ddc90f6c63776a470), [`4c76360`](https://github.com/tester-army/e2e/commit/4c76360cb65b20c5193240b0e5a0489bd7e0c558), [`17283c8`](https://github.com/tester-army/e2e/commit/17283c86dabad63631064d817196ae728c3a6136), [`d3afa6b`](https://github.com/tester-army/e2e/commit/d3afa6bacb9a407d0bd85c9f8abb2135b1d8a2ac)]:
+  - e2e@0.15.0-canary-20260917081546
+
 ## 0.8.0-canary-20260914134810
 
 ### Patch Changes

@@ -1,5 +1,79 @@
 # e2e
 
+## 0.15.0-canary-20260917081546
+
+### Minor Changes
+
+- [#323](https://github.com/tester-army/e2e/pull/323) [`0a4b7f4`](https://github.com/tester-army/e2e/commit/0a4b7f4fe9f3b316907ce896d21153a918f853e8) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Breaking: `agent.act` takes no `vision` option and `agents.<name>.vision` is gone. The act model always works from the semantic tree and asks for pixels itself: it calls `screenshot` when the tree lacks what it needs, and from then on every action result carries a fresh screenshot and the point verbs (`tap_at`, `type_at`, `press_at`, `select_at`) act at points in it. There is no pixels-only mode and no screenshot-on-every-turn mode; the model decides, not the config. `vision` on `act` fails with `UNSUPPORTED_CAPABILITY`, and `agents.<name>.vision` is an unknown config key. `vision` stays on the judgments (`assert`, `waitFor`, `extract`) with `false` as the only default.
+  
+  For executors: `ctx.vision` is removed from `StepExecutorContext`; `observe({ pixels: true })` is the one way to ask for pixels, and a custom executor's `agent.assert` rejects `vision` like it rejects `screenshot`.
+
+- [#314](https://github.com/tester-army/e2e/pull/314) [`0b513d9`](https://github.com/tester-army/e2e/commit/0b513d989e7086bd3998fd0d105dbea0fdd5d004) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The built-in agent's default vocabulary gains the point-addressed fallback verbs next to `screenshot` and `tap_at`: `type_at`, `press_at`, and `select_at`, each taking a point in the latest screenshot for a target the tree does not list. Every point is hit-tested against the tree the runner still holds, so a listed control is acted on by id underneath, recorded with a descriptor and replayed from the trace cache like any other action. The rules tell the model to act by id whenever the screen lists the target and to take a screenshot before naming a point; before any screenshot the point verbs answer with that reminder and spend nothing. Once a secret has been filled in the attempt, all five pixel verbs leave the vocabulary together. `waitFor` skips judgments while the screen is unchanged, comparing the pixels along with the tree when they are sent.
+  
+  For executors: `ctx.actions.hitTest(point)` resolves a point onto the listed control and node under it without acting.
+  
+  Engines gain a `keyboard` capability (`keyboard.type`, `keyboard.press`, optional `keyboard.dismiss`): input to whatever holds focus, with no node behind it. The agent's `type` and `press` accept no target on such an engine, `type_at` and `press_at` fall back to tapping the point and typing through the keyboard when the tree lists nothing there, and `dismiss_keyboard` is offered where the engine can hide an on-screen keyboard. That is how a field drawn on a canvas, or one a platform flattens out of its accessibility tree, gets its text. Executors get `ctx.actions.typeText`, `pressKey`, and `dismissKeyboard`; the trace cache records and replays them as free actions.
+
+- [#303](https://github.com/tester-army/e2e/pull/303) [`1c9cc16`](https://github.com/tester-army/e2e/commit/1c9cc16697cb82c0a6db924f6c0f389886b2a468) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `agents.<name>.timeout` is the judgment budget: the deadline of one `assert`, `waitFor`, or `extract` call, 30 s by default. Until now that deadline was `max(30000, actionTimeout)`, so a project with a slow judge had to inflate the engine's per-operation budget to buy the model time, and every navigation and actionability wait inherited the inflated number. `actionTimeout` bounds engine operations only. A suite that raised `actionTimeout` for the judge should move the value to the agent; one that raised it for a slow page keeps it.
+
+- [#324](https://github.com/tester-army/e2e/pull/324) [`7fcb925`](https://github.com/tester-army/e2e/commit/7fcb925d76f41f1a8558abaa57a60de4ff365868) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Breaking: the engine contract's pointer side is a vocabulary, not one verb, and the vocabulary is finished before the contract locks.
+  
+  - `Engine.tapAt(point)` is `Engine.performAt(point, action)` with a required `pointerActions` list, mirroring `perform` and `actions`. `PointerAction` is the pointer subset of the action kinds: `tap`, `doubleTap`, `secondaryTap`, `longPress`, `hover`, `dragTo` (to a second point), and `swipe` (from the point). The harness routes a point action only for a declared kind; the agent's `tap_at` verb needs the `tap` kind in `actions` or `pointerActions`. `POINTER_ACTION_KINDS`, `PointerAction`, and `PointerActionKind` are exported from `e2e/engine`.
+  - `secondaryTap` joins the action kinds and `Locator.secondaryTap()` performs it: a right click, a two-finger tap.
+  - `SemanticNode.states` gains `pressed` and `SemanticNode` gains `level`; `getByRole` takes `pressed` and `level`, so a toggle button and a heading level are queries on every engine.
+  - `EngineSnapshot.viewport` is `{ width, height }`: the `scale` it carried meant nothing (every engine reported 1 and nothing read it); `ObservationPixels.scale` remains the image-to-CSS ratio.
+  - `ScrollDirection`, `Momentum`, and `SelectOption` are defined by the contract (`e2e/engine`) and re-exported by `e2e`, so the SPI owns its own vocabulary.
+  - The `Platform` type is gone: a platform is a `string` label (`web`, `ios`, `android`, or an engine's own) on `Engine.platform`, `Target.platform`, the `platform` fixture, and `platforms`. Nothing in the harness branched on the three names, so the type only pretended to.
+  
+  `spiVersion` stays `1`.
+
+- [#317](https://github.com/tester-army/e2e/pull/317) [`2e593df`](https://github.com/tester-army/e2e/commit/2e593dfb46dc71bc1785cb0ce80c35e34c0f1a90) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Recover semantic-capture timeouts with fresh, independently masked screenshots.
+  The engine contract distinguishes unavailable semantics from a valid empty
+  tree. Judgments obey their vision options, and every capture respects secret
+  taint. The runner retires stale references and disables trace reuse for
+  affected steps. Playwright supports
+  the fallback; device captures still fail closed when accessibility data
+  cannot establish screenshot masks.
+  
+  Playwright bounds the complete semantic capture and reserves node IDs before
+  the reader starts. An abandoned capture cannot reuse IDs or publish late
+  references. Pixel-only evidence resets the agent's semantic screen comparison
+  and stops cache probes without discarding the recovered screenshot.
+  
+  Reports accept judgment steps that fail before a model call without inventing
+  an observation revision or verdict explanation.
+
+- [#311](https://github.com/tester-army/e2e/pull/311) [`3524a59`](https://github.com/tester-army/e2e/commit/3524a59290da01a1adf28d83272eb5ecf0219c40) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The live line under a running agent step now says what the step waits on.
+  `Observing` while the screen is being read, `Acting` while an action lands,
+  `Thinking` only while the model has the turn, `Replaying` while the trace
+  cache runs recorded actions. On a device a snapshot or a tap takes seconds,
+  and those read as model time before. Step progress carries the new signal as
+  `{ phase: 'activity', activity: 'observe' | 'action' | 'model' }`, announced
+  as each phase begins; the `event` that follows ends it.
+
+- [#310](https://github.com/tester-army/e2e/pull/310) [`4c76360`](https://github.com/tester-army/e2e/commit/4c76360cb65b20c5193240b0e5a0489bd7e0c558) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The markdown page (`renderMarkdownReport`, the `markdown` reporter's `summary.md`, the pull request comment) is laid out for the reader who skims it. A green run is the headline, the folds, and one line of small print: the file table is gone, and each file's counts, agent work, and time sit on its heading inside the folded test list. Flaky tests no longer get a full block in the open; they are folded under one summary, since the run is green and the headline already counts them. A failure block is short paragraphs instead of five lines glued with hard breaks: the title; one lead naming the error and the step it happened at; what the error and the agent said, quoted; the facts as a list (expected, observed, whether every attempt failed alike, the last turns one per line, the screen); and the source link with the evidence. It names the file once, in the source link; a locator step's label reads as code and an agent step's as the sentence the author wrote; the steps before the failed one are not retold, since the lead says where in the flow it was and the trace has the rest; an assertion whose message only says its api failed quotes nothing; and a loopback screen URL shows as its path, since nobody reading the page can open it. The footer is one line with the version, duration, targets, and the run artifacts link. `MarkdownReportOptions.title` names the page in its headline (`e2e regression: 77 passed`) so two pages on one pull request read apart.
+
+- [#306](https://github.com/tester-army/e2e/pull/306) [`17283c8`](https://github.com/tester-army/e2e/commit/17283c86dabad63631064d817196ae728c3a6136) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `EngineSnapshot` gains an optional `truncated` flag for an engine whose tree
+  leaves out nodes that are on the surface. The runner merges it with its own
+  byte-budget cut: the model sees a marker at the end of the listing and is told
+  nodes past it are on screen but not listed, a truncated screen is never
+  reported unchanged between observations, and the failure evidence header
+  marks the listing truncated whichever limit cut it.
+
+- [#325](https://github.com/tester-army/e2e/pull/325) [`d3afa6b`](https://github.com/tester-army/e2e/commit/d3afa6bacb9a407d0bd85c9f8abb2135b1d8a2ac) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Three fixes from a real suite's first day:
+  
+  - `e2e run login.e2e.ts` now runs the setup test that produces the session `login.e2e.ts` consumes, wherever that setup lives. Every discovered file is collected; positionals narrow which tests run, and tests in the other files are report-only unselected results. A collection error in any file fails the run, whichever files were named.
+  - `test.skip(condition, reason)` inside a test body skips the running test for a fact only the app can tell. The steps that ran stay in the report, teardown runs, no retry is spent, and the result is `skipped` with the reason. A setup test cannot skip (`INVALID_ARGUMENT`); outside a body the form is `COLLECTION_ERROR`. Report schema: a skipped attempt may carry steps and a `skip` reason.
+  - `expect(actual, message)` opens a value failure with the caller's label. `toBeGreaterThanOrEqual`, `toBeLessThanOrEqual`, and `toBeCloseTo(expected, digits = 2)` join the value matchers and `expect.poll`.
+
+### Patch Changes
+
+- [#308](https://github.com/tester-army/e2e/pull/308) [`9c835ba`](https://github.com/tester-army/e2e/commit/9c835ba64e866a8e87c1bcddc04376939edca74c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The CLI links to the docs at https://docs.e2e.army in `--help`, the `e2e init` cache hint, and the telemetry notice. The Mintlify preview address it linked before is gone.
+
+- [#315](https://github.com/tester-army/e2e/pull/315) [`9249de2`](https://github.com/tester-army/e2e/commit/9249de20eea96fccc5b24e3747f36708eaf8edb8) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Keep exploration blocked when every charter was blocked and no issue was reported. Preserve the first blocker's error code and explanation instead of reporting a successful run.
+
+- [#316](https://github.com/tester-army/e2e/pull/316) [`6016083`](https://github.com/tester-army/e2e/commit/60160830154972d31e81b10ddc90f6c63776a470) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Include report attempt and step identity on every live step phase so reporters can distinguish retries and nested steps. End phases also carry the redacted step error and explanation, including blocked and cancelled outcomes.
+
 ## 0.15.0-canary-20260914134810
 
 ### Minor Changes

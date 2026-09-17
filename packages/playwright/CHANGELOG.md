@@ -1,5 +1,62 @@
 # @e2edev/playwright
 
+## 0.11.0-canary-20260917081546
+
+### Minor Changes
+
+- [#309](https://github.com/tester-army/e2e/pull/309) [`edaa1f2`](https://github.com/tester-army/e2e/commit/edaa1f2bf71a72fc63a59e3af1cb04ee9adfd849) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `web.frameLocator` returns a `FrameScreen`: a `Screen` scoped to the frame
+  that keeps the two web-only escape hatches. `locator(selector)` reaches a
+  control inside the frame that has no accessible name, label, placeholder, or
+  test id, and `frameLocator(selector)` steps into a frame nested in it. Both
+  compile through the same frame chain as every query in that scope, so
+  actionability, settle, and `expect` retries apply unchanged. An empty
+  selector at any level throws `INVALID_LOCATOR`. The portable `Screen` is
+  untouched; role and label queries remain the first choice wherever the
+  control has a name.
+
+- [#317](https://github.com/tester-army/e2e/pull/317) [`2e593df`](https://github.com/tester-army/e2e/commit/2e593dfb46dc71bc1785cb0ce80c35e34c0f1a90) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Recover semantic-capture timeouts with fresh, independently masked screenshots.
+  The engine contract distinguishes unavailable semantics from a valid empty
+  tree. Judgments obey their vision options, and every capture respects secret
+  taint. The runner retires stale references and disables trace reuse for
+  affected steps. Playwright supports
+  the fallback; device captures still fail closed when accessibility data
+  cannot establish screenshot masks.
+  
+  Playwright bounds the complete semantic capture and reserves node IDs before
+  the reader starts. An abandoned capture cannot reuse IDs or publish late
+  references. Pixel-only evidence resets the agent's semantic screen comparison
+  and stops cache probes without discarding the recovered screenshot.
+  
+  Reports accept judgment steps that fail before a model call without inventing
+  an observation revision or verdict explanation.
+
+- [#306](https://github.com/tester-army/e2e/pull/306) [`17283c8`](https://github.com/tester-army/e2e/commit/17283c86dabad63631064d817196ae728c3a6136) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An unlabeled text control is now named by its placeholder, in the order
+  HTML-AAM gives: `aria-label`, `aria-labelledby`, the associated label,
+  `title`, then `placeholder` and `aria-placeholder`, for text-like inputs and
+  textareas. A bare search box observes as `textbox "Search"` instead of an
+  anonymous `textbox`, and `placeholder` joins the attributes an observation
+  carries, so a cached action recorded against such a field relocates by its
+  placeholder on replay. An observation that hit the node cap, or could not
+  enter a child frame within it, now reports `truncated` on the snapshot instead
+  of ending quietly.
+
+- [#314](https://github.com/tester-army/e2e/pull/314) [`0b513d9`](https://github.com/tester-army/e2e/commit/0b513d989e7086bd3998fd0d105dbea0fdd5d004) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Declares the `keyboard` capability: `keyboard.type` types into whatever has focus through Playwright's keyboard, clearing first with select-all and delete when asked to replace, and refuses with `NOT_ACTIONABLE` when nothing that takes keystrokes has focus in any frame (the body, a button, a link, a select, a non-text input), so keystrokes never vanish into the page; a text field, a contenteditable host, a canvas, or any other element the app made focusable takes them. `keyboard.press` sends one key to the focused element.
+
+- [#324](https://github.com/tester-army/e2e/pull/324) [`7fcb925`](https://github.com/tester-army/e2e/commit/7fcb925d76f41f1a8558abaa57a60de4ff365868) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Declares every pointer action at a bare point (`performAt` with the full `POINTER_ACTION_KINDS`): a click, double click, right click, held click, hover, drag between two points, and a wheel gesture from a point. `secondaryTap` on a node is a right click. Nodes report `pressed` from `aria-pressed` and `level` for headings (`aria-level`, else the `h1` through `h6` digit), and a role query passes `pressed` and `level` through to the browser.
+
+- [#318](https://github.com/tester-army/e2e/pull/318) [`4bd7e64`](https://github.com/tester-army/e2e/commit/4bd7e644e0846d69d1525f4eebc3c100dce7138e) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Add opt-in CDP transport recovery through `connect.reconnectEndpoint`. A dedicated persistent browser preserves the original page and context across disconnects, verifies their CDP identities, and invalidates stale references. Every attempt provisions a fresh browser, and dispatched operations are never repeated.
+  
+  Recovery and dispatch share one operation budget, with timeout exhaustion distinguished from caller cancellation. Reads from an earlier connection cannot publish stale observations, and each attempt owns its connection and recordings through cleanup.
+  
+  Observation-backed pointer and keyboard input requires fresh evidence after reconnect. Cancelled typing cannot continue its remaining keystrokes after a delayed focus read or key delivery.
+  
+  CDP attachment installs secure-field masks before exposing the context. Recovery refuses documents that lost closed shadow DOM tracking while disconnected, preventing unmasked pixels from those documents.
+
+### Patch Changes
+
+- Updated dependencies [[`0a4b7f4`](https://github.com/tester-army/e2e/commit/0a4b7f4fe9f3b316907ce896d21153a918f853e8), [`0b513d9`](https://github.com/tester-army/e2e/commit/0b513d989e7086bd3998fd0d105dbea0fdd5d004), [`1c9cc16`](https://github.com/tester-army/e2e/commit/1c9cc16697cb82c0a6db924f6c0f389886b2a468), [`9c835ba`](https://github.com/tester-army/e2e/commit/9c835ba64e866a8e87c1bcddc04376939edca74c), [`7fcb925`](https://github.com/tester-army/e2e/commit/7fcb925d76f41f1a8558abaa57a60de4ff365868), [`9249de2`](https://github.com/tester-army/e2e/commit/9249de20eea96fccc5b24e3747f36708eaf8edb8), [`2e593df`](https://github.com/tester-army/e2e/commit/2e593dfb46dc71bc1785cb0ce80c35e34c0f1a90), [`3524a59`](https://github.com/tester-army/e2e/commit/3524a59290da01a1adf28d83272eb5ecf0219c40), [`6016083`](https://github.com/tester-army/e2e/commit/60160830154972d31e81b10ddc90f6c63776a470), [`4c76360`](https://github.com/tester-army/e2e/commit/4c76360cb65b20c5193240b0e5a0489bd7e0c558), [`17283c8`](https://github.com/tester-army/e2e/commit/17283c86dabad63631064d817196ae728c3a6136), [`d3afa6b`](https://github.com/tester-army/e2e/commit/d3afa6bacb9a407d0bd85c9f8abb2135b1d8a2ac)]:
+  - e2e@0.15.0-canary-20260917081546
+
 ## 0.11.0-canary-20260914134810
 
 ### Patch Changes
