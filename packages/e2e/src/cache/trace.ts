@@ -372,6 +372,7 @@ function readActionTrace(document: unknown): ActionTrace | undefined {
   };
 }
 
+
 function readRecordedAction(document: unknown): RecordedAction | undefined {
   if (typeof document !== 'object' || document === null || Array.isArray(document)) {
     return undefined;
@@ -584,15 +585,8 @@ export function mapTraceText(trace: ActionTrace, map: TraceTextMap): ActionTrace
   if (summary === undefined || (trace.startPath !== undefined && startPath === undefined) || (trace.endPath !== undefined && endPath === undefined)) {
     return undefined;
   }
-  let endAnchors: TraceTargetDescriptor[] | undefined;
-  if (trace.endAnchors !== undefined) {
-    endAnchors = [];
-    for (const anchor of trace.endAnchors) {
-      const mapped = mapDescriptorText(anchor, map);
-      if (mapped === undefined) return undefined;
-      endAnchors.push(mapped);
-    }
-  }
+  const endAnchors = trace.endAnchors === undefined ? undefined : mapDescriptors(trace.endAnchors, map);
+  if (trace.endAnchors !== undefined && endAnchors === undefined) return undefined;
   return {
     ...trace,
     actions,
@@ -601,6 +595,16 @@ export function mapTraceText(trace: ActionTrace, map: TraceTextMap): ActionTrace
     ...(endPath === undefined ? {} : { endPath }),
     ...(endAnchors === undefined ? {} : { endAnchors }),
   };
+}
+
+function mapDescriptors(descriptors: readonly TraceTargetDescriptor[], map: TraceTextMap): TraceTargetDescriptor[] | undefined {
+  const out: TraceTargetDescriptor[] = [];
+  for (const descriptor of descriptors) {
+    const mapped = mapDescriptorText(descriptor, map);
+    if (mapped === undefined) return undefined;
+    out.push(mapped);
+  }
+  return out;
 }
 
 function readDescriptor(document: unknown): TraceTargetDescriptor | undefined {

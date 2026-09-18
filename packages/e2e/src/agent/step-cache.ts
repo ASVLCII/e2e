@@ -8,18 +8,14 @@
  *
  * In read-write mode, settled captures before and after the step provide the
  * baseline and end anchors. Read-only mode needs only a raw starting capture
- * for the path precondition. The initial capture can also serve the executor
+ * for the route precondition. The initial capture can also serve the executor
  * when replay performed no action.
  */
 
-import { describeAnchors } from '../cache/anchors.ts';
+import { anchorsPresent, describeAnchors } from '../cache/anchors.ts';
 import type { AgentCacheContext } from '../cache/context.ts';
-import {
-  decideTraceReplay,
-  opensWithNavigate,
-  samePathShape,
-  type TraceReplayMissReason,
-} from '../cache/decide.ts';
+import { decideTraceReplay, opensWithNavigate, type TraceReplayMissReason } from '../cache/decide.ts';
+import { compareRoutes, routeOf } from '../cache/route.ts';
 import { instructionDigest } from '../cache/identity.ts';
 import { TraceRecorder } from '../cache/recorder.ts';
 import { expandTrace, templateParams, templateTrace, type ParamTemplate } from '../cache/template.ts';
@@ -296,27 +292,49 @@ export class StepTraceSession {
   }
 
   /**
-   * The trace's postcondition against the live screen: the recorded end path
-   * (pathname only, when the live location is known, and up to the ids the
-   * app mints per record) and every recorded end anchor present again.
+   * The trace's postcondition against the live screen: the recorded end
+   * route (when the live location is known) and every recorded end anchor
+   * present again. A route the path leaves undecided is the recorded screen
+   * only if the anchors are already on it, which then needs no second look.
    */
   private async endStateMatches(trace: ActionTrace): Promise<boolean> {
     if (!this.host.traceEligible) return false;
-    const initial = await this.endScreen(trace.endPath);
-    if (initial === undefined) return false;
+    const arrived = await this.endScreen(trace);
+    if (arrived === undefined) return false;
+    if (arrived.anchorsSeen) return true;
     return (await verifyAnchors(this.host, trace.endAnchors ?? [], {
-      initial,
+      initial: arrived.screen,
       ...(trace.endWaitMs === undefined ? {} : { waitMs: trace.endWaitMs }),
     })) && this.host.traceEligible;
   }
 
-  /** Captures the semantic end state once its path matches, retaining it for anchor verification. */
-  private async endScreen(endPath: string | undefined): Promise<Extract<ObservedScreen, { kind: 'semantic' }> | undefined> {
+  /**
+   * Captures the semantic end state once its route matches the recording,
+   * polling while a navigation the last action started commits. Reports
+   * whether the anchors were what settled the route, so the caller does not
+   * verify them again. A route still undecided when the poll runs out is
+   * handed on with the anchors unseen: the caller's anchor wait, sized by
+   * the recording, is the one that decides it, as for a route that matched.
+   */
+  private async endScreen(
+    trace: ActionTrace,
+  ): Promise<{ readonly screen: Extract<ObservedScreen, { kind: 'semantic' }>; readonly anchorsSeen: boolean } | undefined> {
     const startedMs = Date.now();
+    const recorded = trace.endPath === undefined ? undefined : routeOf(trace.endPath);
+    const anchors = trace.endAnchors ?? [];
     for (let attempt = 0; ; attempt += 1) {
       const observation = await probeScreen(this.host, false);
       if (observation?.kind !== 'semantic' || !this.host.traceEligible) return undefined;
-      if (endPath === undefined || observation.path === undefined || samePathShape(endPath, observation.path)) return observation;
+      if (recorded === undefined || observation.path === undefined) return { screen: observation, anchorsSeen: false };
+      const verdict = compareRoutes(recorded, routeOf(observation.path));
+      if (verdict === 'same') return { screen: observation, anchorsSeen: false };
+      // A path the runner cannot recognize as the recorded route is the
+      // recorded screen only if the recorded effect is visibly on it; with
+      // no anchors recorded there is nothing to see, and it is another screen.
+      const undecided = verdict === 'undecided' && anchors.length > 0;
+      if (undecided && anchorsPresent(anchors, observation.nodes, { redact: this.options.redact })) {
+        return { screen: observation, anchorsSeen: true };
+      }
       const delay = END_PATH_DELAYS_MS[attempt];
       if (
         delay === undefined ||
@@ -324,7 +342,7 @@ export class StepTraceSession {
         this.host.remainingMs() <= delay ||
         this.host.signal.aborted
       ) {
-        return undefined;
+        return undecided ? { screen: observation, anchorsSeen: false } : undefined;
       }
       await sleep(delay, this.host.signal);
     }
