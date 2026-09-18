@@ -155,14 +155,32 @@ describe('templateTrace and expandTrace', () => {
     expect(templateTrace(odd, [])).toBeUndefined();
   });
 
-  it('refuses to template when two marked params share a value, since the text cannot say which one it spelled', () => {
+  it('refuses to template when two marked params share a spelling, since the text cannot say which one it spelled', () => {
     const shared = [...name('Acme Corp'), { pointer: '/slug', value: 'Acme Corp' }];
     expect(templateTrace(trace('Acme Corp'), shared)).toBeUndefined();
+    // One value is the other's encoded form.
+    const aliased = [...name('Acme Corp'), { pointer: '/slug', value: 'Acme%20Corp' }];
+    expect(templateTrace(trace('Acme Corp'), aliased)).toBeUndefined();
   });
 
-  it('templates the location paths too, so a value in the URL follows the run', () => {
-    const moved: ActionTrace = { ...trace('Acme Corp'), endPath: '/companies?q=Acme%20Corp&name=Acme Corp' };
-    const recorded = templateTrace(moved, name('Acme Corp'))!;
-    expect(recorded.endPath).toBe('/companies?q=Acme%20Corp&name={{param:/name}}');
+  it('spells the form encoding as a form submission does, and skips the encodings of a value that has none', () => {
+    expect(templateText("?q=Ada%27s+%28new%29+shop%7E%21", [{ pointer: '/q', value: "Ada's (new) shop~!" }])).toBe('?q={{param:/q|form}}');
+    // An unpaired surrogate cannot be percent-encoded; the value itself still templates and staging does not throw.
+    const odd = 'bad \ud800 value';
+    expect(templateText(`typed ${odd}`, [{ pointer: '/v', value: odd }])).toBe('typed {{param:/v}}');
+    expect(expandText('{{param:/v|uri}}', values([{ pointer: '/v', value: odd }]))).toBeUndefined();
+  });
+
+  it('templates the location paths too, in every spelling a URL gives the value, so a value in the URL follows the run', () => {
+    const moved: ActionTrace = { ...trace('Acme & Co'), endPath: '/companies/Acme%20%26%20Co?search=Acme+%26+Co&name=Acme & Co' };
+    const recorded = templateTrace(moved, name('Acme & Co'))!;
+    expect(recorded.endPath).toBe('/companies/{{param:/name|uri}}?search={{param:/name|form}}&name={{param:/name}}');
+    expect(expandTrace(recorded, name('Globex Inc'))?.endPath).toBe('/companies/Globex%20Inc?search=Globex+Inc&name=Globex Inc');
+    // A value no encoding changes has one spelling and one placeholder.
+    expect(templateText('/tags/vip?q=vip', [{ pointer: '/tag', value: 'vip' }])).toBe('/tags/{{param:/tag}}?q={{param:/tag}}');
+  });
+
+  it('refuses a placeholder whose encoding it does not know', () => {
+    expect(expandText('/x/{{param:/name|base64}}', values(name('Acme')))).toBeUndefined();
   });
 });
