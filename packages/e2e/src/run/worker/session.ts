@@ -66,6 +66,18 @@ export class TargetWorker {
   private deps: TargetWorkerDeps | undefined;
   private executor: TargetExecutor | undefined;
   private runErrorWatermark = 0;
+  /**
+   * The pair executing now, for attributing output the process writes: set
+   * when a pair starts, cleared at its result and when its unit is done. A
+   * serial group's members follow one another, so the latest start is the
+   * one running.
+   */
+  private inFlight: { readonly testId: string; readonly agent: string } | undefined;
+
+  /** The pair executing now, or undefined between units. */
+  get pairInFlight(): { readonly testId: string; readonly agent: string } | undefined {
+    return this.inFlight;
+  }
   /** Serializes message handling so units never overlap on one worker. */
   private queue: Promise<void> = Promise.resolve();
   /** Disposal happens once, whichever of shutdown or terminate asks first. */
@@ -94,9 +106,14 @@ export class TargetWorker {
         interruptSignal: this.interruptController.signal,
         ...(deps.debug !== undefined ? { debug: deps.debug } : {}),
         events: {
-          onResult: (result) => this.host.emit({ type: 'result', result: encodeResult(result) }),
+          onResult: (result) => {
+            // Teardown after the result (an afterAll) belongs to no pair.
+            if (this.inFlight?.testId === result.test.id && this.inFlight.agent === result.agent) this.inFlight = undefined;
+            this.host.emit({ type: 'result', result: encodeResult(result) });
+          },
           onSerialGroup: (group) => this.host.emit({ type: 'serial-group', group }),
-          onPairStart: (pair) =>
+          onPairStart: (pair) => {
+            this.inFlight = { testId: pair.test.id, agent: pair.agent };
             this.host.emit({
               type: 'pair-start',
               testId: pair.test.id,
@@ -104,7 +121,8 @@ export class TargetWorker {
               title: pair.test.titlePath.join(' > '),
               file: pair.test.file,
               serialId: pair.test.serialId,
-            }),
+            });
+          },
           onProgress: (pair, progress) =>
             this.host.emit({ type: 'progress', testId: pair.test.id, agent: pair.agent, progress }),
           onRunAbort: (runError) => {
@@ -184,6 +202,7 @@ export class TargetWorker {
         registration,
       );
     }
+    this.inFlight = undefined;
     this.host.emit({
       type: 'unit-done',
       unitId: message.unitId,

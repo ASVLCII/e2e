@@ -247,6 +247,14 @@ export class ListReporter implements Reporter {
    * block, live rows, failure entry, and test counters.
    */
   private explore: ExploreView | undefined;
+  /** The stream and source of the output line printed last, while nothing else printed since. */
+  private lastOutput: string | undefined;
+  /**
+   * Output not yet ended by a newline, by stream and source: a line written
+   * in pieces prints once whole. Flushed when its test's result arrives and
+   * when the run ends.
+   */
+  private readonly pendingOutput = new Map<string, { readonly heading: string; readonly pair: string | undefined; fragment: string }>();
 
   constructor(
     private readonly output: ListReporterOutput = DEFAULT_OUTPUT,
@@ -257,7 +265,7 @@ export class ListReporter implements Reporter {
     this.pc = picocolors.createColors(options.colors ?? (live || picocolors.isColorSupported));
     this.separator = this.pc.dim(' > ');
     this.tree = new RunningTree(this.pc, (target) => this.badge(target));
-    this.window = new LiveWindow(live ? output.raw?.bind(output) : undefined, () => this.renderWindow());
+    this.window = new LiveWindow(live ? output.raw?.bind(output) : undefined, (room) => this.renderWindow(room));
   }
 
   onEvent(event: RunEvent): void {
@@ -289,6 +297,9 @@ export class ListReporter implements Reporter {
       case 'step':
         this.step(event);
         break;
+      case 'output':
+        this.testOutput(event);
+        break;
       case 'test-finished':
         this.testFinished(event.result);
         break;
@@ -312,9 +323,55 @@ export class ListReporter implements Reporter {
 
   /** Writes one permanent line without disturbing the live window. */
   private print(line: string): void {
+    this.lastOutput = undefined;
     this.window.erase();
     this.output.write(line);
+    this.window.logged(line);
     this.window.redraw();
+  }
+
+  /**
+   * Text a test wrote to stdout or stderr, printed above the live window
+   * under a `stdout | file › title` heading, as vitest does. Writes that
+   * follow one another from the same source share one heading; any other
+   * line in between brings it back. A write carries any piece of a line, so
+   * only lines a newline has ended print; the rest waits for the next write,
+   * the test's result, or the end of the run.
+   */
+  private testOutput(event: RunEventOf<'output'>): void {
+    const { pc } = this;
+    if (event.text === '') return;
+    const pair = event.pair === undefined ? undefined : pairKey(event.pair.testId, event.pair.agent, event.target);
+    const running = pair === undefined ? undefined : this.pairs.get(pair);
+    const source = running === undefined ? this.badge(event.target) : `${this.badge(running.group.target)} ${bounded(running.group.file)}${this.separator}${running.title}`;
+    const key = `${event.stream}\u0000${source}`;
+    let entry = this.pendingOutput.get(key);
+    if (entry === undefined) {
+      const label = event.stream === 'stderr' ? pc.yellow(event.stream) : pc.dim(event.stream);
+      entry = { heading: `${label} ${pc.dim('|')} ${source}`, pair, fragment: '' };
+      this.pendingOutput.set(key, entry);
+    }
+    const lines = (entry.fragment + event.text).split('\n');
+    entry.fragment = lines.pop() ?? '';
+    if (entry.fragment === '') this.pendingOutput.delete(key);
+    this.printOutput(key, entry.heading, lines);
+  }
+
+  /** Prints finished output lines under their heading, unless the heading is the one printed last. */
+  private printOutput(key: string, heading: string, lines: readonly string[]): void {
+    if (lines.length === 0) return;
+    if (this.lastOutput !== key) this.print(heading);
+    for (const line of lines) this.print(bounded(line));
+    this.lastOutput = key;
+  }
+
+  /** Prints the unfinished output of `pair`, or of every source when undefined. */
+  private flushOutput(pair?: string): void {
+    for (const [key, entry] of this.pendingOutput) {
+      if (pair !== undefined && entry.pair !== pair) continue;
+      this.pendingOutput.delete(key);
+      this.printOutput(key, entry.heading, [entry.fragment]);
+    }
   }
 
   /**
@@ -360,8 +417,8 @@ export class ListReporter implements Reporter {
     this.targets = event.targets;
     this.launchedAt = new Date();
     const version = packageVersion(import.meta.url, '../../package.json', '0.0.0');
-    this.output.write('');
-    this.output.write(
+    this.print('');
+    this.print(
       `${pc.bold(pc.black(pc.bgCyan(' RUN ')))} ${pc.cyan(`e2e v${version}`)} ${pc.gray(event.projectRoot)}`,
     );
     const details = [`run ${event.runId}`, `targets: ${event.targets.join(', ')}`];
@@ -369,13 +426,13 @@ export class ListReporter implements Reporter {
       details.push(`${event.agents.length === 1 ? 'agent' : 'agents'}: ${event.agents.map(bounded).join(', ')}`);
     }
     if (event.ci) details.push('CI');
-    this.output.write(BADGE_PADDING + pc.dim(details.join(' · ')));
+    this.print(BADGE_PADDING + pc.dim(details.join(' · ')));
     if (event.model !== undefined) {
       this.models = bounded(event.model);
       if (event.judge !== undefined) this.models += ` · judge ${bounded(event.judge)}`;
-      this.output.write(BADGE_PADDING + pc.dim(`model ${this.models}`));
+      this.print(BADGE_PADDING + pc.dim(`model ${this.models}`));
     }
-    this.output.write('');
+    this.print('');
     this.window.start();
   }
 
@@ -559,6 +616,7 @@ export class ListReporter implements Reporter {
     // counted them.
     if (!result.selected) return;
     const key = pairKey(result.test.id, result.agent, result.target.name);
+    this.flushOutput(key);
     const steps = this.pairs.get(key)?.steps ?? [];
     this.pairs.delete(key);
     const group = this.group(result.test.file, result.target.name);
@@ -738,12 +796,13 @@ export class ListReporter implements Reporter {
   }
 
   /** The live window: the running tree, then the summary. */
-  private renderWindow(): string[] {
+  /** The block's rows for `room` screen rows under the permanent log. */
+  private renderWindow(room: number): string[] {
     const running = [...this.pairs.values()].filter((test) => test.executing);
     if (this.explore !== undefined) {
-      return this.explore.liveRows(this.exploreBadge(), running[0]?.current?.events, this.summaryRows(false), Date.now());
+      return this.explore.liveRows(this.exploreBadge(), running[0]?.current?.events, this.summaryRows(false), Date.now(), room);
     }
-    return this.tree.render(running, this.summaryRows(false), Date.now(), this.inFlight);
+    return this.tree.render(running, this.summaryRows(false), Date.now(), room, this.inFlight);
   }
 
   /** The badge of the explored target: an exploration runs on exactly one. */
@@ -902,6 +961,7 @@ export class ListReporter implements Reporter {
     const { pc } = this;
     if (event.status === 'interrupted') this.interrupted = true;
     this.window.stop();
+    this.flushOutput();
     // An interrupted or crashed run leaves files without their full result
     // set; print what they have so nothing that ran goes unreported.
     for (const group of this.groups.values()) {

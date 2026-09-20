@@ -1588,6 +1588,123 @@ describe('ListReporter', () => {
       reporter.handle(testStarted('t1', 'signs in', 'chromium'));
       expect(lines).toEqual([]);
     });
+    it('prints a test\u2019s console output above the window under one heading per source', () => {
+      const { lines, output } = liveCapture();
+      const reporter = plainReporter(output, true);
+      reporter.handle(runStarted());
+      reporter.handle(testStarted('t1', 'signs in', 'chromium'));
+      const write = (stream: 'stdout' | 'stderr', text: string, pair?: { testId: string; agent: string }) =>
+        reporter.handle({ type: 'output', target: 'chromium', pair, stream, text });
+      const t1 = { testId: 't1', agent: 'default' };
+      write('stdout', 'hello\n', t1);
+      write('stdout', 'two\nlines\n', t1);
+      write('stderr', 'oops\n', t1);
+      write('stdout', 'again\n', t1);
+      write('stdout', 'no pair\n');
+      expect(lines.slice(lines.indexOf('stdout | |chromium| tests/case.e2e.ts > signs in'))).toEqual([
+        'stdout | |chromium| tests/case.e2e.ts > signs in',
+        'hello',
+        'two',
+        'lines',
+        'stderr | |chromium| tests/case.e2e.ts > signs in',
+        'oops',
+        'stdout | |chromium| tests/case.e2e.ts > signs in',
+        'again',
+        'stdout | |chromium|',
+        'no pair',
+      ]);
+    });
+
+    it('joins a line written in pieces and prints an unfinished one when the test\u2019s result arrives', () => {
+      const { lines, output } = liveCapture();
+      const reporter = plainReporter(output, true);
+      reporter.handle(runStarted());
+      reporter.handle(plan([{ file: 'tests/case.e2e.ts', tests: 1 }]));
+      reporter.handle(testStarted('t1', 'signs in', 'chromium'));
+      const write = (text: string) =>
+        reporter.handle({ type: 'output', target: 'chromium', pair: { testId: 't1', agent: 'default' }, stream: 'stdout', text });
+      write('progress ');
+      write('50%\nnext');
+      expect(lines.filter((line) => line.startsWith('progress') || line.startsWith('next'))).toEqual(['progress 50%']);
+      reporter.handle(finished(result({ status: 'passed', title: ['signs in'], id: 't1' })));
+      const from = lines.indexOf('next');
+      expect(from).toBeGreaterThan(-1);
+      // The fragment prints before the test's own line does.
+      expect(lines.slice(from).some((line) => line.includes('signs in'))).toBe(true);
+    });
+
+    it('brings the output heading back after another line printed in between', () => {
+      const { lines, output } = liveCapture();
+      const reporter = plainReporter(output, true);
+      reporter.handle(runStarted());
+      reporter.handle(testStarted('t1', 'signs in', 'chromium'));
+      reporter.handle({ type: 'output', target: 'chromium', pair: { testId: 't1', agent: 'default' }, stream: 'stdout', text: 'one\n' });
+      reporter.handle({ type: 'notice', target: 'chromium', message: 'between' });
+      reporter.handle({ type: 'output', target: 'chromium', pair: { testId: 't1', agent: 'default' }, stream: 'stdout', text: 'two\n' });
+      expect(lines.filter((line) => line.startsWith('stdout |'))).toHaveLength(2);
+      expect(lines.at(-1)).toBe('two');
+    });
+
+    it('pads the block to the bottom of a tall terminal and shrinks it as the log grows', () => {
+      const restore = withTerminalSize({ rows: 60, columns: 120 });
+      try {
+        const { chunks, lines, output } = liveCapture();
+        const reporter = plainReporter(output, true);
+        reporter.handle(runStarted());
+        reporter.handle(plan([{ file: 'tests/case.e2e.ts', tests: 2 }]));
+        reporter.handle(testStarted('t1', 'signs in', 'chromium'));
+        const painted = (chunk: string) => chunk.split('\n').length - 1;
+        // The header took the rows above; the block takes every row under
+        // it but the cursor's, so the summary sits at the bottom of the screen.
+        const above = lines.length;
+        expect(painted(chunks.at(-1)!)).toBe(60 - 1 - above);
+        expect(chunks.at(-1)!.replace(ANSI_PATTERN, '')).toMatch(/Duration {2}\d+m?s\n\n$/);
+        // A permanent notice above the block takes one row from it: no scroll.
+        reporter.handle({ type: 'notice', target: 'chromium', message: 'one more line' });
+        expect(painted(chunks.at(-1)!)).toBe(60 - 1 - above - 1);
+      } finally {
+        restore();
+      }
+    });
+
+    it('stops shrinking at the rows the running area needs once the log has grown down to it', () => {
+      const restore = withTerminalSize({ rows: 30, columns: 120 });
+      try {
+        const { chunks, output } = liveCapture();
+        const reporter = plainReporter(output, true);
+        reporter.handle(runStarted());
+        reporter.handle(plan([{ file: 'tests/case.e2e.ts', tests: 2 }]));
+        reporter.handle(testStarted('t1', 'signs in', 'chromium'));
+        for (let i = 0; i < 40; i += 1) {
+          reporter.handle({ type: 'notice', target: 'chromium', message: `line ${i}` });
+        }
+        const rows = chunks.at(-1)!.split('\n').length - 1;
+        // Fourteen running rows plus the frame and the summary, no more.
+        expect(rows).toBeGreaterThanOrEqual(14 + 3 + 2);
+        expect(rows).toBeLessThan(29);
+        expect(chunks.at(-1)!).toContain('└── signs in');
+      } finally {
+        restore();
+      }
+    });
+
+    it('counts a wrapped permanent line by its rows', () => {
+      const restore = withTerminalSize({ rows: 40, columns: 40 });
+      try {
+        const { chunks, lines, output } = liveCapture();
+        const reporter = plainReporter(output, true);
+        reporter.handle(runStarted());
+        reporter.handle(testStarted('t1', 'signs in', 'chromium'));
+        const before = chunks.at(-1)!.split('\n').length - 1;
+        reporter.handle({ type: 'notice', target: 'chromium', message: 'x'.repeat(70) });
+        expect(lines.at(-1)).toContain('x'.repeat(70));
+        // Seventy-two visible characters on a forty-column terminal wrap onto two rows.
+        expect(chunks.at(-1)!.split('\n').length - 1).toBe(before - 2);
+      } finally {
+        restore();
+      }
+    });
+
     it('keeps the window within the terminal height and folds the tests that do not fit', () => {
       const restore = withTerminalSize({ rows: 8, columns: 60 });
       try {
