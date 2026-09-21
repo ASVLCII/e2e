@@ -53,6 +53,7 @@ import {
 } from './nodes.ts';
 import type { AgentDeviceClient, AgentDeviceOptions, AgentDevicePlatform, ClientFactory } from './options.ts';
 import { maskPng } from './png.ts';
+import { pinnedApp } from './bindings.ts';
 import { DevicePool, deviceSelection } from './pool.ts';
 import {
   invalidState,
@@ -215,7 +216,7 @@ export class AgentDeviceSurface {
   private readonly located = new Map<string, NodeBinding>();
   private idCounter = 0;
   private appIdentity: string | undefined;
-  /** The app `appPath` installed at init, when no `app` option names one. */
+  /** The app the build `appPath` installed, once `init` has, itself or through a lease. */
   private installedApp: string | undefined;
   /** Where relative build paths resolve; the run's project root once init has told us. */
   private projectRoot = process.cwd();
@@ -263,7 +264,7 @@ export class AgentDeviceSurface {
 
   /** The app opened fresh per attempt: the `app` option, else the build `appPath` installed. */
   get pinnedApp(): string | undefined {
-    return this.options.app ?? this.installedApp;
+    return pinnedApp(this.options, this.installedApp);
   }
 
   /** Whether an attempt is running on this surface right now. */
@@ -315,16 +316,15 @@ export class AgentDeviceSurface {
 
   async init(info: EngineInitInfo): Promise<void> {
     this.projectRoot = info.projectRoot;
-    this.device = this.pool.device(info.targetName, info.workerSlot, info.env);
-    this.client ??= this.createClient(this.pool.session(info.targetName, info.workerSlot));
+    const binding = this.pool.binding(info.targetName, info.workerSlot, info.env);
+    this.device = binding?.device;
+    this.client ??= this.createClient(this.pool.session(info.targetName, info.workerSlot), binding?.daemon);
     await this.command('boot', (client) => client.devices.boot(this.selection()), info.signal);
     if (this.options.appPath === undefined) return;
-    const installed = await this.installApp(
-      this.options.appPath,
-      this.options.app === undefined ? {} : { app: this.options.app },
-      info.signal,
-    );
-    if (this.options.app === undefined) this.installedApp = installed.app;
+    // A provider that installed the build itself says so on the binding; the worker then installs nothing.
+    this.installedApp =
+      binding?.installedApp ??
+      (await this.installApp(this.options.appPath, this.options.app === undefined ? {} : { app: this.options.app }, info.signal)).app;
   }
 
   async startAttempt(context: EngineAttemptContext): Promise<void> {

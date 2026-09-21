@@ -88,6 +88,131 @@ agentDevice({ platform: 'ios', app: 'com.example.app', device: ['iPhone 17', 'iP
 Without `device`, the engine uses booted devices up to the worker limit.
 If none are booted, it boots one. Two workers never drive the same device.
 
+## Hosted devices
+
+A `device` can also be a `DeviceProvider`: an object that leases one hosted
+device per worker slot when the run starts and releases it when the run
+ends. The engine drives each lease through the agent-device daemon the lease
+names instead of the local one, so any service that runs an agent-device
+daemon next to a simulator, an emulator, or a physical device works. Nothing
+in the framework knows a vendor; a provider is a few dozen lines in your
+project.
+
+```ts
+export interface DeviceProvider {
+  /** Label in progress lines and error messages. */
+  readonly name: string;
+  /** Called once per worker slot, for every slot at once, in the runner process. */
+  acquire(request: DeviceRequest): Promise<DeviceLease>;
+  /** Called once per lease when the run ends, on every exit path. */
+  release(lease: DeviceLease, context: DeviceReleaseContext): Promise<void>;
+}
+
+export interface DeviceLease {
+  /** The provider's handle (a session id), handed back to `release`. */
+  readonly id: string;
+  /** The agent-device daemon the worker connects to. */
+  readonly daemon: { readonly baseUrl: string; readonly authToken?: string };
+  /** Device to select inside that daemon, when it hosts more than one. */
+  readonly device?: string;
+  /** Bundle id or package the provider installed itself; skips `appPath`. */
+  readonly installedApp?: string;
+}
+```
+
+`acquire` receives the platform, run id, target, slot, the `app` and resolved
+`appPath` options, the run's environment, an interrupt signal, and a `log`
+that reaches the reporter. Read tokens from `request.env`, not
+`process.env`. A target with nothing to run leases nothing. Every lease
+granted is held by the engine: a slot that fails to lease ends the run
+before any test, and the leases that succeeded are still released. Release
+happens after the last worker exits, on every exit path including failure,
+interrupt, and a `prepare` that threw, within `cleanupTimeout`. `release`
+receives the object `acquire` returned, so a provider can keep its own
+fields on it; only `daemon`, `device`, and `installedApp` travel to the
+workers. Report `installedApp` only for a request that carried `appPath`.
+Leased devices are warmed like local ones: booted and opened once before
+the run's clock starts.
+
+A provider against a typical session API has three requests: create a
+session, poll it until the daemon is reachable, stop it.
+
+```ts title="device-provider.ts"
+import type { DeviceProvider } from '@e2edev/agent-device';
+
+/**
+ * Leases devices from a service that starts an agent-device daemon per
+ * session. Replace the three requests with your service's API.
+ */
+export function hostedDevices(options: { serviceUrl: string; image: string }): DeviceProvider {
+  return {
+    name: 'hosted-devices',
+    async acquire(request) {
+      const token = request.env['DEVICE_SERVICE_TOKEN'];
+      if (token === undefined || token === '') throw new Error('DEVICE_SERVICE_TOKEN is not set');
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+      // 1. Ask for a device; name the session after the run so it can be found later.
+      const created = await fetch(`${options.serviceUrl}/sessions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          platform: request.platform,
+          image: options.image,
+          name: `e2e ${request.runId} ${request.targetName} ${request.slot + 1}/${request.slots}`,
+        }),
+        signal: request.signal,
+      });
+      if (!created.ok) throw new Error(`device service: HTTP ${created.status}`);
+      const { id } = (await created.json()) as { id: string };
+      // 2. Wait until the session exposes its agent-device daemon.
+      for (;;) {
+        const response = await fetch(`${options.serviceUrl}/sessions/${id}`, { headers, signal: request.signal });
+        const session = (await response.json()) as { status: string; daemonUrl?: string; daemonToken?: string; viewerUrl?: string };
+        if (session.status === 'ready' && session.daemonUrl !== undefined) {
+          if (session.viewerUrl !== undefined) request.log(`watch at ${session.viewerUrl}`);
+          return { id, daemon: { baseUrl: session.daemonUrl, authToken: session.daemonToken } };
+        }
+        if (session.status !== 'starting') throw new Error(`device service: session ${id} is ${session.status}`);
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+      }
+    },
+    async release(lease, context) {
+      // 3. Stop the session; the run waits for this within cleanupTimeout.
+      const token = context.env['DEVICE_SERVICE_TOKEN'] ?? '';
+      await fetch(`${options.serviceUrl}/sessions/${lease.id}/stop`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: context.signal,
+      });
+    },
+  };
+}
+```
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { agentDevice } from '@e2edev/agent-device';
+import { hostedDevices } from './device-provider.ts';
+
+export default {
+  targets: [
+    {
+      name: 'ios',
+      engine: agentDevice({
+        platform: 'ios',
+        app: 'com.example.app',
+        device: hostedDevices({ serviceUrl: 'https://devices.example.com', image: 'ios-18-iphone-17' }),
+      }),
+    },
+  ],
+  workers: 2,
+} satisfies E2EConfig;
+```
+
+Two workers lease two sessions in parallel. Hosted sessions are billed while
+they run, so keep `workers` at what the suite can fill. The trace cache keys
+on `app`, so traces recorded locally replay on hosted devices.
+
 ## Writing a device test
 
 `screen` maps native controls to common roles such as `button`, `textbox`,

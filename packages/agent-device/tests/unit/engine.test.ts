@@ -12,15 +12,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppError } from 'agent-device';
 import { decodePng, encodePng } from '../helpers/png.ts';
-import type { EngineFixtureContext, EngineHandle, OperationContext, SemanticNode } from 'e2e/engine';
-import { buildEngine } from '../../src/engine.ts';
+import type { EngineFixtureContext, OperationContext, SemanticNode } from 'e2e/engine';
 import type { Device } from '../../src/device.ts';
-import type { AgentDeviceOptions } from '../../src/options.ts';
-import { AgentDeviceSurface } from '../../src/surface.ts';
-import { createFakeClient, SETTINGS_NODES, SETTINGS_SNAPSHOT, type FakeClient } from '../helpers/fake-client.ts';
-
-/** Deliberately not `process.cwd()`: relative build paths must resolve here, not there. */
-const PROJECT_ROOT = '/project';
+import { SETTINGS_NODES, SETTINGS_SNAPSHOT } from '../helpers/fake-client.ts';
+import { boot, harness, poolVariableIn, PROJECT_ROOT, type Harness } from '../helpers/harness.ts';
 
 /** An agent's operation: the agent reads the screen right after acting, so its actions settle. */
 function operation(signal = new AbortController().signal): OperationContext {
@@ -31,56 +26,7 @@ function cleanup() {
   return { signal: new AbortController().signal, timeoutMs: 5_000 };
 }
 
-/** The pool variable `prepare` wrote for a target, found by its readable prefix (the suffix is a digest of the name). */
-function poolVariableIn(env: NodeJS.ProcessEnv, readable: string): string {
-  const key = Object.keys(env).find((candidate) => new RegExp(`^E2E_AGENT_DEVICE_POOL_${readable}_[0-9A-F]{8}$`).test(candidate));
-  if (key === undefined) throw new Error(`no pool variable for ${readable} in ${Object.keys(env).join(', ')}`);
-  return key;
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function boot(
-  engine: EngineHandle,
-  targetName = 'ios-simulator',
-  workerSlot = 0,
-  env: Readonly<Record<string, string | undefined>> = {},
-): Promise<void> {
-  await engine.init!({
-    runId: 'run-1',
-    targetName,
-    projectRoot: PROJECT_ROOT,
-    app: {},
-    env,
-    headed: false,
-    workerSlot,
-    signal: new AbortController().signal,
-  });
-}
-
-interface Harness {
-  readonly engine: EngineHandle;
-  readonly fake: FakeClient;
-  readonly sessions: string[];
-  readonly surface: AgentDeviceSurface;
-}
-
-/** An engine over the scripted client; `pinned` false leaves the `app` option out. */
-function harness(options: Partial<AgentDeviceOptions> = {}, pinned = true): Harness {
-  const fake = createFakeClient({
-    'capture.snapshot': () => SETTINGS_SNAPSHOT,
-    'apps.open': () => ({ session: 's', appName: 'Settings', appBundleId: 'com.apple.Preferences', identifiers: {} }),
-    // The viewport probe's answer for a tree without geometry; tests that read pixels script a real file instead.
-    'capture.screenshot': () => ({ logicalWidth: 390, logicalHeight: 844 }),
-  });
-  const sessions: string[] = [];
-  const base: AgentDeviceOptions = pinned ? { platform: 'ios', app: 'Settings' } : { platform: 'ios' };
-  const surface = new AgentDeviceSurface({ ...base, ...options }, (session) => {
-    sessions.push(session);
-    return fake.client;
-  });
-  return { engine: buildEngine(surface), fake, sessions, surface };
-}
 
 let artifactsDir: string;
 
@@ -212,6 +158,7 @@ describe('lifecycle', () => {
     await h.engine.prepare!({
       runId: 'run-1',
       targetName: 'ios',
+      projectRoot: PROJECT_ROOT,
       slots: 2,
       env: {},
       signal: new AbortController().signal,
@@ -226,10 +173,10 @@ describe('lifecycle', () => {
 
     // Without a pinned app there is nothing to open; a build `appPath` installs in init, so it boots only too.
     const bare = harness({ device: 'iPhone 16e' }, false);
-    await bare.engine.prepare!({ runId: 'run-1', targetName: 'ios', slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
+    await bare.engine.prepare!({ runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
     expect(bare.fake.methods()).toEqual(['devices.boot']);
     const build = harness({ device: 'iPhone 16e', appPath: 'build/App.app' });
-    await build.engine.prepare!({ runId: 'run-1', targetName: 'ios', slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
+    await build.engine.prepare!({ runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
     expect(build.fake.methods()).toEqual(['devices.boot']);
 
     const single = harness({ device: 'iPhone 16e', session: 'qa' });
@@ -237,6 +184,7 @@ describe('lifecycle', () => {
     await single.engine.prepare!({
       runId: 'run-1',
       targetName: 'ios',
+      projectRoot: PROJECT_ROOT,
       slots: 1,
       env: {},
       signal: new AbortController().signal,
@@ -252,7 +200,7 @@ describe('lifecycle', () => {
       throw new Error('runner still installing');
     });
     const lines: string[] = [];
-    const info = { runId: 'run-1', targetName: 'ios', slots: 1, env: {}, signal: new AbortController().signal, log: (line: string) => lines.push(line) };
+    const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: (line: string) => lines.push(line) };
     await h.engine.prepare!(info);
     expect(lines[1]).toMatch(/runner not warmed up.*runner still installing/);
 
@@ -277,6 +225,7 @@ describe('lifecycle', () => {
     const result = await h.engine.prepare!({
       runId: 'run-1',
       targetName: 'ios',
+      projectRoot: PROJECT_ROOT,
       slots: 4,
       env,
       signal: new AbortController().signal,
@@ -295,7 +244,7 @@ describe('lifecycle', () => {
     const handed = result?.env ?? {};
     const variable = poolVariableIn(handed, 'IOS');
     expect(handed[variable]).toBe(
-      JSON.stringify(['2BBF3F07-AF66-4F95-82AB-BF442506FC89', '8A2DC8D6-7B20-44FA-ADBB-47D3EAE6E8F3']),
+      JSON.stringify([{ device: '2BBF3F07-AF66-4F95-82AB-BF442506FC89' }, { device: '8A2DC8D6-7B20-44FA-ADBB-47D3EAE6E8F3' }]),
     );
     expect(env).toEqual({});
     // A worker reads the pool from the environment it was started with, never process.env.
@@ -313,18 +262,18 @@ describe('lifecycle', () => {
       { platform: 'ios', id: 'B', name: 'B', booted: true },
     ]);
     const env: NodeJS.ProcessEnv = {};
-    const info = { runId: 'run-1', targetName: 'ios', slots: 1, env, signal: new AbortController().signal, log: () => undefined };
+    const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env, signal: new AbortController().signal, log: () => undefined };
     const first = await h.engine.prepare!(info);
     expect(first?.workers).toBe(1);
     const firstEnv = first?.env ?? {};
     expect(h.fake.calls.filter((call) => call.method === 'devices.boot').map((call) => call.args)).toEqual([{ platform: 'ios', device: 'A' }]);
-    expect(firstEnv[poolVariableIn(firstEnv, 'IOS')]).toBe(JSON.stringify(['A']));
+    expect(firstEnv[poolVariableIn(firstEnv, 'IOS')]).toBe(JSON.stringify([{ device: 'A' }]));
     // The same handle prepared again, for another target, discovers afresh and hands back that target's own variable.
     h.fake.respond('devices.list', () => [{ platform: 'ios', id: 'C', name: 'C', booted: true }]);
     const second = await h.engine.prepare!({ ...info, targetName: 'ios.a', env });
     const secondEnv = second?.env ?? {};
     expect(h.fake.methods().filter((method) => method === 'devices.list')).toHaveLength(2);
-    expect(secondEnv[poolVariableIn(secondEnv, 'IOS_A')]).toBe(JSON.stringify(['C']));
+    expect(secondEnv[poolVariableIn(secondEnv, 'IOS_A')]).toBe(JSON.stringify([{ device: 'C' }]));
     // Names that sanitize alike keep distinct variables.
     const third = await h.engine.prepare!({ ...info, targetName: 'ios-a', env });
     expect(Object.keys(third?.env ?? {})[0]).not.toBe(Object.keys(secondEnv)[0]);
@@ -337,7 +286,8 @@ describe('lifecycle', () => {
     expect(coldResult).toMatchObject({ workers: 1 });
     expect(cold.fake.lastArgs('devices.boot')).toEqual({ platform: 'ios' });
     const coldHanded = coldResult?.env ?? {};
-    expect(coldHanded[poolVariableIn(coldHanded, 'IOS')]).toBe('[]');
+    // One slot bound to no device in particular: the daemon picks.
+    expect(coldHanded[poolVariableIn(coldHanded, 'IOS')]).toBe('[{}]');
     expect(coldEnv).toEqual({});
   });
 
@@ -1325,3 +1275,4 @@ describe('deterministic actions', () => {
     expect(() => harness({ transition: 0.5 })).toThrow(/non-negative integer/);
   });
 });
+

@@ -69,7 +69,7 @@ function toyEngine(
     withState?: boolean;
     withIsolation?: boolean;
     withoutInit?: boolean;
-    withPrepare?: 'ok' | 'fail';
+    withPrepare?: 'ok' | 'fail' | 'hang-finish';
   } = {},
 ) {
   const lifecycle: string[] = [];
@@ -97,6 +97,15 @@ function toyEngine(
             // What prepare provisioned reaches the workers through the
             // result's env; the run's own variables are never overwritten.
             return { env: { TOY_POOL: 'sim-a,sim-b', TOY_CACHE: '/overwritten' } };
+          },
+          // Releases what prepare acquired: after the last worker, on every exit path.
+          async finish(info: { env: NodeJS.ProcessEnv; signal: AbortSignal; log: (line: string) => void }) {
+            lifecycle.push('finish');
+            if (options.withPrepare === 'hang-finish') {
+              // Ignores its signal on purpose: the runner must not wait on it.
+              await new Promise(() => undefined);
+            }
+            info.log(`releasing toy device for ${info.env['TOY_CACHE'] ?? 'no cache'}`);
           },
         }),
     ...(options.withoutInit === true
@@ -407,7 +416,8 @@ test('second attempt also starts fresh', async ({ screen }) => {
           if (!order.includes(event.type)) order.push(event.type);
           if (event.type === 'notice') {
             notices.push({ target: event.target, message: event.message });
-            noticeAt = Date.parse(event.at);
+            // The prepare notice; finish narrates after the clock, and is not what startedAt is measured against.
+            if (noticeAt === 0) noticeAt = Date.parse(event.at);
           }
           if (event.type === 'setup') {
             setup.push({
@@ -420,9 +430,12 @@ test('second attempt also starts fresh', async ({ screen }) => {
         },
       });
       expect(outcome.exitCode).toBe(0);
-      expect(toy.lifecycle).toEqual(['prepare', 'init', 'dispose']);
-      // The hook sees the run's environment, the one the workers start with.
-      expect(notices).toEqual([{ target: 'toy-sim', message: 'provisioning toy device for /run/cache' }]);
+      expect(toy.lifecycle).toEqual(['prepare', 'init', 'dispose', 'finish']);
+      // Both hooks see the run's environment, the one the workers start with.
+      expect(notices).toEqual([
+        { target: 'toy-sim', message: 'provisioning toy device for /run/cache' },
+        { target: 'toy-sim', message: 'releasing toy device for /run/cache' },
+      ]);
       // The result's env reached init as the worker's environment; the run's own value won.
       expect(toy.initEnv()).toEqual({ TOY_POOL: 'sim-a,sim-b', TOY_CACHE: '/run/cache' });
       expect(env['TOY_POOL']).toBeUndefined();
@@ -468,11 +481,39 @@ test('second attempt also starts fresh', async ({ screen }) => {
       });
       expect(outcome.status).toBe('error');
       expect(outcome.results).toEqual([]);
-      // No worker ever booted: nothing to init, nothing to dispose.
-      expect(toy.lifecycle).toEqual(['prepare']);
+      // No worker ever booted: nothing to init, nothing to dispose. What the
+      // failed prepare may have acquired is still released.
+      expect(toy.lifecycle).toEqual(['prepare', 'finish']);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toContain('toolchain missing');
       expect(errors[0]?.phase).toBe('launch');
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it('abandons a finish hook that outlives the cleanup budget as a cleanup error instead of hanging the run', async () => {
+    const toy = toyEngine({ withLocate: true, withPrepare: 'hang-finish' });
+    const project = createProject({ 'tests/screen.e2e.ts': DETERMINISTIC_SUITE });
+    const errors: { code: string; phase: string | undefined }[] = [];
+    try {
+      const outcome = await run({
+        cwd: project.dir,
+        rawConfig: {
+          targets: [{ name: 'toy-sim', platform: 'ios', engine: toy.engine }],
+          cache: 'off',
+          cleanupTimeout: 300,
+        },
+        env: { ...process.env, APP_URL: '', CI: '' },
+        quiet: true,
+        onEvent: (event) => {
+          if (event.type === 'run-error') errors.push({ code: event.error.code, phase: event.error.phase });
+        },
+      });
+      // The tests ran and passed; only the teardown is in error, and the run still reported.
+      expect(outcome.results.map((result) => result.status)).toEqual(['passed']);
+      expect(toy.lifecycle).toEqual(['prepare', 'init', 'dispose', 'finish']);
+      expect(errors).toEqual([{ code: 'CLEANUP_TIMEOUT', phase: 'cleanup' }]);
     } finally {
       project.cleanup();
     }
