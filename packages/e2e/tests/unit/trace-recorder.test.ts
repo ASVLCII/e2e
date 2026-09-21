@@ -102,6 +102,31 @@ describe('TraceRecorder', () => {
     expect(oversized.finalize(conclusion)?.truncated).toBe(true);
   });
 
+  it('keeps the smallest coverage when folding scrolls, and none when a repeat lacks one', () => {
+    const list: SemanticNode = { ref: { id: 'l1', revision: 'r1' }, role: 'group', name: 'Rows', rect: { x: 0, y: 0, width: 390, height: 500 } };
+    const recorder = makeRecorder();
+    recorder.record({ name: 'scroll', direction: 'down', node: list, spans: 0.6 });
+    recorder.record({ name: 'scroll', direction: 'down', node: list, spans: 0.4 });
+    expect(recorder.finalize(conclusion)?.actions[0]).toMatchObject({ name: 'scroll', times: 2, spans: 0.4 });
+    const mixed = makeRecorder();
+    mixed.record({ name: 'scroll', direction: 'down', node: list, spans: 0.6 });
+    mixed.record({ name: 'scroll', direction: 'down', node: list });
+    const folded = mixed.finalize(conclusion)?.actions[0];
+    expect(folded).toMatchObject({ name: 'scroll', times: 2 });
+    expect(folded).not.toHaveProperty('spans');
+  });
+
+  it('folds consecutive identical scrolls into one action with a repeat count', () => {
+    const recorder = makeRecorder({ maxActions: 3 });
+    for (let i = 0; i < 5; i += 1) recorder.record({ name: 'scroll', direction: 'down' });
+    recorder.record({ name: 'scroll', direction: 'up' });
+    const trace = recorder.finalize(conclusion);
+    expect(trace?.actions.map((a) => (a.name === 'scroll' ? [a.direction, a.times] : a.name))).toEqual([['down', 5], ['up', undefined]]);
+    expect(trace?.truncated).toBeUndefined();
+    const read = readTraceEntry(JSON.parse(JSON.stringify(buildTraceEntry(trace!))));
+    expect(read?.payload.actions[0]).toMatchObject({ name: 'scroll', direction: 'down', times: 5 });
+  });
+
   it('marks a gap that ends replay for a mutating project tool', () => {
     const recorder = makeRecorder();
     recorder.record({ name: 'tap', node: upgradeButton });
