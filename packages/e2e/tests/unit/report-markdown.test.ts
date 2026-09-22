@@ -166,7 +166,7 @@ describe('renderMarkdownReport', () => {
           '**🔴 members › an email invitation is accepted by the invited account only**',
           '**ASSERTION_FAILED** at step 4 of 6: `agent.act` "Accept the invitation from the email", after 38.0s and 12 model calls',
           '> expected heading "Welcome, Ada" to be visible\n> The Accept button opened a page that still shows Sign in.',
-          '[tests/members.e2e.ts:41](https://github.com/o/r/blob/abc/tests/members.e2e.ts#L41) · Evidence: [screenshot, video, trace](https://github.com/o/r/actions/runs/9)',
+          '[tests/members.e2e.ts:41](https://github.com/o/r/blob/abc/tests/members.e2e.ts#L41) · Evidence: [screenshot, video, trace](https://github.com/o/r/actions/runs/9): `t/attempt-0/screenshot-1.bin`, `t/attempt-0/video-2.bin`, `t/attempt-0/trace-0.bin`',
         ].join('\n\n'),
         '',
         // A flaky test is folded: the run is green, and its story is the attempt that failed, not the retry that passed.
@@ -178,7 +178,7 @@ describe('renderMarkdownReport', () => {
             '**⚠️ todos survive a filter round-trip**',
             '**STEP_TIMEOUT** at step 2 of 2: `agent.waitFor` "the filtered list", after 30.0s',
             '> slow',
-            '[tests/todos.e2e.ts:3](https://github.com/o/r/blob/abc/tests/todos.e2e.ts#L3) · Evidence: [screenshot](https://github.com/o/r/actions/runs/9)',
+            '[tests/todos.e2e.ts:3](https://github.com/o/r/blob/abc/tests/todos.e2e.ts#L3) · Evidence: [screenshot](https://github.com/o/r/actions/runs/9): `t/attempt-0/screenshot-0.bin`',
           ].join('\n\n'),
           '</details>',
         ].join('\n'),
@@ -218,6 +218,17 @@ describe('renderMarkdownReport', () => {
         '',
       ].join('\n'),
     );
+  });
+
+  it('leaves a result the selection did not choose out of the counts and the list, and reads one without the flag as selected', () => {
+    const unselected = { ...named({ title: 'agent journey', file: 'tests/agent/tests.e2e.ts', status: 'skipped', skip: { cause: 'filtered', reason: 'file not selected by a positional argument' } }), selected: false };
+    const body = renderMarkdownReport(page({ results: [passing, unselected] }));
+    expect(body).toContain('### 🟢 e2e: 1 passed');
+    expect(body).toContain('All 1 test in 1 file');
+    expect(body).not.toContain('tests/agent/tests.e2e.ts');
+    expect(body).not.toContain('positional argument');
+    const legacy = { ...passing, selected: undefined as unknown as boolean };
+    expect(renderMarkdownReport(page({ results: [legacy] }))).toContain('### 🟢 e2e: 1 passed');
   });
 
   it('names the page after its title, so two comments on one pull request read apart', () => {

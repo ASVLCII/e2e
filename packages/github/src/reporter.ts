@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { renderMarkdownReport, type FinishedRun, type MarkdownReportOptions, type Reporter, type ReporterSummary } from 'e2e';
 import { detectActions, type ActionsContext, type ActionsDeps } from './actions.ts';
 import { upsertComment } from './post.ts';
@@ -20,6 +22,8 @@ export interface GitHubOptions {
 export interface ReportDeps extends ActionsDeps {
   readonly fetch: typeof fetch;
   readonly appendFile: (file: string, text: string) => Promise<void>;
+  /** Whether a path exists; the checkout root is the directory that holds `.git`. */
+  readonly exists: (file: string) => boolean;
 }
 
 /**
@@ -44,6 +48,7 @@ export function github(options: GitHubOptions = {}): Reporter {
         env: process.env,
         readFile: (file) => readFile(file, 'utf8'),
         appendFile: (file, text) => appendFile(file, text, 'utf8'),
+        exists: existsSync,
       }),
   };
 }
@@ -80,11 +85,42 @@ function commentMarker(run: FinishedRun, context: ActionsContext, key: string | 
   return `<!-- e2e-github ${parts.join(' ')} -->`;
 }
 
-function sourceUrl(context: ActionsContext): MarkdownReportOptions['sourceUrl'] {
+/**
+ * The directory the repository is checked out in: the nearest ancestor of the
+ * project root, itself included, that holds `.git`. `actions/checkout` puts
+ * it at `GITHUB_WORKSPACE` unless its `path` input names a subdirectory, so
+ * the workspace bounds the walk and stands in when no `.git` is found.
+ */
+function checkoutRoot(workspace: string, projectRoot: string, exists: (file: string) => boolean): string {
+  let dir = projectRoot;
+  while (dir.startsWith(workspace)) {
+    if (exists(path.join(dir, '.git'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return workspace;
+}
+
+/**
+ * The project's path inside the checkout, as segments. The report's files are
+ * relative to the project root, and a suite that lives in `packages/e2e-tests`
+ * links to `blob/<sha>/packages/e2e-tests/tests/...`. A project at the
+ * checkout root, or one outside it, adds nothing.
+ */
+function projectSegments(workspace: string | undefined, projectRoot: string, exists: (file: string) => boolean): string[] {
+  if (workspace === undefined) return [];
+  const relative = path.relative(checkoutRoot(workspace, projectRoot, exists), projectRoot);
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return [];
+  return relative.split(path.sep);
+}
+
+function sourceUrl(context: ActionsContext, projectRoot: string, deps: ReportDeps): MarkdownReportOptions['sourceUrl'] {
   const sha = context.sha;
   if (sha === undefined) return undefined;
+  const prefix = projectSegments(context.workspace, projectRoot, deps.exists);
   return (file, line) =>
-    `${context.serverUrl}/${context.repository}/blob/${sha}/${file.split('/').map(encodeURIComponent).join('/')}#L${line}`;
+    `${context.serverUrl}/${context.repository}/blob/${sha}/${[...prefix, ...file.split('/')].map(encodeURIComponent).join('/')}#L${line}`;
 }
 
 /** What posting needs, or the one reason this job cannot post. */
@@ -121,7 +157,13 @@ export async function reportRun(
   if (context === undefined) return [{ label: SUMMARY_LABEL, text: 'not posted: not running on GitHub Actions' }];
 
   // One page for both places; the comment carries the marker a rerun finds it by.
-  const page = renderMarkdownReport(run.report, { artifactsUrl: context.runUrl, sourceUrl: sourceUrl(context), title: options.key });
+  // Evidence links land on the run page's Artifacts section, where the job's
+  // upload-artifact step put the files; the page names each file's path inside it.
+  const page = renderMarkdownReport(run.report, {
+    artifactsUrl: `${context.runUrl}#artifacts`,
+    sourceUrl: sourceUrl(context, run.projectRoot, deps),
+    title: options.key,
+  });
   const summary = await writeSummary(context, page, deps);
   const post = posting(context);
   const marker = commentMarker(run, context, options.key);

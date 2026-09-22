@@ -124,8 +124,8 @@ function pageName(options: MarkdownReportOptions): string {
   return title === '' ? 'e2e' : `e2e ${cell(title, MAX_ID_CHARS)}`;
 }
 
-function headline(run: ReportRun, options: MarkdownReportOptions): string {
-  const summary = countText(tally(run.results)) || (run.errors.length > 0 ? 'no tests ran' : 'no tests selected');
+function headline(run: ReportRun, results: readonly ReportResult[], options: MarkdownReportOptions): string {
+  const summary = countText(tally(results)) || (run.errors.length > 0 ? 'no tests ran' : 'no tests selected');
   return `### ${run.status === 'passed' ? ICON.passed : ICON.failed} ${pageName(options)}: ${summary}`;
 }
 
@@ -164,22 +164,31 @@ function spendLine(run: ReportRun, entries: readonly Entry[]): string | undefine
   return parts.join(' · ');
 }
 
+/** The artifact paths as the reader finds them: under `artifactsDir` when given, else as the report keeps them, capped. */
+function evidencePaths(sorted: readonly ReportArtifact[], dir: string | undefined, label: (artifact: ReportArtifact, file: string) => string): string[] {
+  const files = sorted.flatMap((artifact) => (artifact.path === undefined ? [] : [{ artifact, file: dir === undefined ? artifact.path : path.posix.join(dir, artifact.path) }]));
+  const shown = files.slice(0, MAX_EVIDENCE_PATHS).map(({ artifact, file }) => label(artifact, file));
+  if (files.length > shown.length) shown.push(`and ${files.length - shown.length} more`);
+  return shown;
+}
+
 /**
- * Where the evidence is: linked to the run page when there is one, listed as
- * paths under `artifactsDir` when the reader has the files, and named by
- * kind otherwise. Paths are POSIX, as the report keeps them.
+ * Where the evidence is: the kinds linked to the run's artifacts when there is
+ * a URL, followed by each file's path inside what was uploaded, so the reader
+ * can find it in the download; listed as paths under `artifactsDir` when the
+ * reader has the files; and named by kind otherwise. Paths are POSIX, as the
+ * report keeps them.
  */
 function evidence(artifacts: readonly ReportArtifact[], options: MarkdownReportOptions): string {
   if (artifacts.length === 0) return '';
   const sorted = artifacts.toSorted((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind]);
   const named = [...new Set(sorted.map((artifact) => artifact.kind))].join(', ');
-  if (options.artifactsUrl !== undefined) return link(named, options.artifactsUrl);
-  const dir = options.artifactsDir;
-  const files = dir === undefined ? [] : sorted.flatMap((artifact) => (artifact.path === undefined ? [] : [{ kind: artifact.kind, file: path.posix.join(dir, artifact.path) }]));
-  if (files.length === 0) return named;
-  const shown = files.slice(0, MAX_EVIDENCE_PATHS).map(({ kind, file }) => `${kind} ${code(file)}`);
-  if (files.length > shown.length) shown.push(`and ${files.length - shown.length} more`);
-  return shown.join(', ');
+  if (options.artifactsUrl !== undefined) {
+    const paths = evidencePaths(sorted, options.artifactsDir, (_, file) => code(file));
+    return paths.length === 0 ? link(named, options.artifactsUrl) : `${link(named, options.artifactsUrl)}: ${paths.join(', ')}`;
+  }
+  const shown = options.artifactsDir === undefined ? [] : evidencePaths(sorted, options.artifactsDir, (artifact, file) => `${artifact.kind} ${code(file)}`);
+  return shown.length === 0 ? named : shown.join(', ');
 }
 
 // --- a test that did not pass ---
@@ -457,7 +466,11 @@ export function renderMarkdownReport(report: Report1Document, options: MarkdownR
   const run = report.run;
   const explore = run.explore;
   const serialGroups = new Map(run.serialGroups.map((group) => [group.id, group]));
-  const entries: Entry[] = run.results.map((result) => ({ result, final: outcome(result, serialGroups) }));
+  // A result the selection left out (another suite's file, a tag filter) is
+  // report-only: the JSON keeps it, the page never counts or lists it. A
+  // document written before results carried the flag is all selected.
+  const selected = run.results.filter((result) => result.selected !== false);
+  const entries: Entry[] = selected.map((result) => ({ result, final: outcome(result, serialGroups) }));
   const manyTargets = run.targets.length > 1;
 
   const errors = run.errors.slice(0, MAX_RUN_ERRORS).map(runErrorLine);
@@ -475,11 +488,11 @@ export function renderMarkdownReport(report: Report1Document, options: MarkdownR
   );
 
   const spend = spendLine(run, entries);
-  const head = [explore === undefined ? headline(run, options) : exploreHeadline(run, explore, options), ...(spend === undefined ? [] : [spend]), ''];
+  const head = [explore === undefined ? headline(run, selected, options) : exploreHeadline(run, explore, options), ...(spend === undefined ? [] : [spend]), ''];
   const groups = fileGroups(entries);
   const sections =
     explore === undefined
-      ? [errors, ...failures, flaky, allTests(groups, run.results.length, manyTargets)]
+      ? [errors, ...failures, flaky, allTests(groups, selected.length, manyTargets)]
       : [
           [`**Goal:** ${cell(explore.goal, MAX_GOAL_CHARS)}  `, `**Steps:** ${exploreSteps(explore)}`],
           errors,
