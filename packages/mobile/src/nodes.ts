@@ -82,8 +82,19 @@ const ROLE_MAP: Readonly<Record<string, string>> = {
   tab: 'tab',
   'tab-bar-item': 'tab',
   'tab-bar-button': 'tab',
+  'tab-bar': 'tablist',
+  'tab-group': 'tablist',
+  'segmented-control': 'tablist',
+  menu: 'menu',
+  'menu-bar': 'menubar',
   'menu-item': 'menuitem',
+  'menu-bar-item': 'menuitem',
   'menu-button': 'menuitem',
+  toolbar: 'toolbar',
+  'radio-group': 'radiogroup',
+  'radio-button': 'radio',
+  stepper: 'spinbutton',
+  'table-row': 'row',
   alert: 'alert',
   dialog: 'dialog',
   sheet: 'dialog',
@@ -91,8 +102,9 @@ const ROLE_MAP: Readonly<Record<string, string>> = {
   heading: 'heading',
   header: 'heading',
   'navigation-bar': 'navigation',
+  // A spinner says something is happening; a bar says how far along it is.
   'activity-indicator': 'status',
-  'progress-indicator': 'status',
+  'progress-indicator': 'progressbar',
 };
 
 const SECURE_KINDS = new Set(['secure-text-field', 'securetextfield', 'password-field']);
@@ -126,6 +138,15 @@ const ANDROID_ROLE_MAP: Readonly<Record<string, string>> = {
   'seek-bar': 'slider',
   slider: 'slider',
   spinner: 'combobox',
+  'progress-bar': 'progressbar',
+  'radio-group': 'radiogroup',
+  'number-picker': 'spinbutton',
+  toolbar: 'toolbar',
+  'tab-layout': 'tablist',
+  'tab-widget': 'tablist',
+  'bottom-navigation-view': 'tablist',
+  'tab-layout$tab-view': 'tab',
+  'bottom-navigation-item-view': 'tab',
   'web-view': 'document',
   'recycler-view': 'list',
   'list-view': 'list',
@@ -165,10 +186,18 @@ export function normalizeKind(type: string): string {
     .toLowerCase();
 }
 
-/** Contract role for one platform element type. */
-function roleOf(kind: string, android = false): string | undefined {
+/** iOS containers whose button children a browser would call tabs. */
+const TAB_CONTAINER_KINDS = new Set(['tab-bar', 'segmented-control']);
+
+/**
+ * Contract role for one platform element type. XCTest reports the items of a
+ * tab bar or segmented control as plain buttons; the parent says what they
+ * are, so a `tablist` scope finds its `tab` children as it does on the web.
+ */
+function roleOf(kind: string, android: boolean, parentKind: string | undefined): string | undefined {
   if (kind === '') return undefined;
   if (android) return ANDROID_ROLE_MAP[kind] ?? (kind.endsWith('layout') ? 'group' : kind);
+  if (kind === 'button' && parentKind !== undefined && TAB_CONTAINER_KINDS.has(parentKind)) return 'tab';
   return ROLE_MAP[kind] ?? kind;
 }
 
@@ -236,7 +265,7 @@ export function projectSnapshot(raw: readonly RawNode[], options: { readonly min
     const source = raw[position] as RawNode;
     const id = options.mintId();
     const kind = kindOf(source);
-    const role = roleOf(kind, isAndroidClass(source.type));
+    const role = roleOf(kind, isAndroidClass(source.type), parent?.kind);
     const secure = SECURE_KINDS.has(kind);
     const checked = checkedOf(role, source.value);
     const states = {
