@@ -1,5 +1,21 @@
 # @e2edev/mobile
 
+## 0.8.0-canary-20260921180210
+
+### Minor Changes
+
+- [#365](https://github.com/tester-army/e2e/pull/365) [`f7f86d9`](https://github.com/tester-army/e2e/commit/f7f86d91e87b317dea9ae076f143e20f6ba8ed98) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `mobile({ device })` accepts a `DeviceProvider`: an object that leases one hosted device per worker slot when the run starts and releases every lease when it ends. The engine drives each lease through the agent-device daemon the lease names (`daemon.baseUrl`, `daemon.authToken`) instead of the local one, selects `device` inside it when given, and skips its own `appPath` install when the lease reports `installedApp`. Slots lease in parallel; a slot that fails releases the others and ends the run before any test. No vendor ships in the package; the mobile guide shows an example provider against a generic session API. `DeviceProvider`, `DeviceRequest`, `DeviceLease`, and `DeviceReleaseContext` are exported.
+
+- [#380](https://github.com/tester-army/e2e/pull/380) [`54c0dba`](https://github.com/tester-army/e2e/commit/54c0dba62fc47403564ece41ce503bb9b9ce9a08) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The engine declares the `swipeTo` pointer action and performs it as a coordinate swipe from the point to `target`, so `screen.swipe({ from, to })` works on a device. A directional swipe at a bare point is still `UNSUPPORTED_CAPABILITY`; `screen.swipe({ direction })` scrolls the screen root as before.
+
+- [#392](https://github.com/tester-army/e2e/pull/392) [`f5e96d0`](https://github.com/tester-army/e2e/commit/f5e96d0cbea6bc26da1084ea3bbc49b7a7a16dd8) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The engine packages are named after what they drive, not what they are built on. `@e2edev/playwright` is now `@e2edev/web` with a `web()` factory, and `@e2edev/agent-device` is now `@e2edev/mobile` with a `mobile()` factory; the engine names in reports and telemetry follow (`web`, `mobile`). Option types rename with them (`WebOptions`, `WebConnectOptions`, `WebBasicAuth`, `MobileOptions`, `MobilePlatform`), the agent tool pack is `mobileTools` from `@e2edev/mobile/tools`, and the `device` fixture keeps its name. `PlaywrightLiveSurface` keeps its name because it hands out Playwright objects. `e2e init` writes the new packages. Replace the dependency and the import in an existing project; the old packages are deprecated on npm and receive no further releases.
+
+### Patch Changes
+
+- [#378](https://github.com/tester-army/e2e/pull/378) [`a124837`](https://github.com/tester-army/e2e/commit/a124837191be58a65dea105146f63295ec896445) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An agent-device failure keeps its hint in the engine error message. `dismissKeyboard` on an iPhone keyboard is refused upstream because the keyboard shows no dismiss key and agent-device taps nothing outside it; the model used to see only the refusal and retried it, and now reads the recovery path (the app's own Done control, or pressing return) in the same message.
+- Updated dependencies [[`54c0dba`](https://github.com/tester-army/e2e/commit/54c0dba62fc47403564ece41ce503bb9b9ce9a08), [`f7f86d9`](https://github.com/tester-army/e2e/commit/f7f86d91e87b317dea9ae076f143e20f6ba8ed98), [`2e18196`](https://github.com/tester-army/e2e/commit/2e18196b79ac724c2a274a27562ea06d7a316d02), [`9f2b73f`](https://github.com/tester-army/e2e/commit/9f2b73f9293d4cdee449bb04e4f8272477d22402), [`f5e96d0`](https://github.com/tester-army/e2e/commit/f5e96d0cbea6bc26da1084ea3bbc49b7a7a16dd8)]:
+  - e2e@0.15.0-canary-20260921180210
+
 ## 0.8.0-canary-20260921154506
 
 ### Minor Changes
