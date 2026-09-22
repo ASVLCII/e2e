@@ -59,8 +59,23 @@ export interface CreateAgentOptions {
    * its own model it does not share the actor's blind spots either.
    */
   readonly judge?: SdkLanguageModel;
-  /** Extra system guidance appended to the base execution rules. */
+  /**
+   * How the acting agent should work, appended to the built-in execution
+   * rules: its persona, its caution, what it verifies before it finishes. Only
+   * the act loop reads it. The judges behind `assert`, `waitFor`, and
+   * `extract` never see it, so nothing here can talk a judge into a verdict.
+   */
   readonly system?: string;
+  /**
+   * What the app calls things, for every model call this agent makes: the
+   * names of screens and menus, where a feature lives, which button submits a
+   * form. Unlike `system`, the judges see it too, since a judge that does not
+   * know "plans are called tiers" cannot check that a tier was chosen.
+   * Prepended as project context to act turns and judgments, at most
+   * `limits.maxAgentContextBytes`. One value per agent: set it here or on the
+   * agent's options object, and if both are set they must be identical.
+   */
+  readonly context?: string;
   /** Project tools from `defineTool`, merged with the default toolset. */
   readonly tools?: Readonly<Record<string, DefinedTool>>;
   /** Upper bound on model turns per step; defaults to the model-call budget. */
@@ -150,6 +165,7 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
   const agent: DefaultAgent = {
     ...executor,
     ...(options.judge === undefined ? {} : { judge: options.judge }),
+    ...(options.context === undefined ? {} : { context: options.context }),
     options: { ...options, tools: userTools },
     tools: userTools,
   };

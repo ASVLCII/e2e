@@ -167,7 +167,7 @@ export function resolveAgentConfig(
     DEFAULT_OBSERVATION_BYTES;
 
 
-  const context = resolveContext(agent?.context, limits.maxAgentContextBytes, label);
+  const context = resolveContext(agent?.context, executor?.context, limits.maxAgentContextBytes, label);
 
   const model = resolveCanonicalModel(agent?.model, executor?.model, label, 'model');
   return {
@@ -326,16 +326,41 @@ function resolveModel(model: ModelInstance | undefined, label: string): Resolved
   };
 }
 
-function resolveContext(context: string | undefined, maxBytes: number, label: string): string | undefined {
+/**
+ * One app vocabulary per agent. It may arrive on the executor or on the
+ * agent's options object; whichever is set is used. Two different values are
+ * rejected rather than joined or overridden, because two vocabularies for one
+ * agent would disagree without anyone noticing, and the fix is to write it
+ * once.
+ */
+function resolveContext(
+  configured: unknown,
+  executorContext: string | undefined,
+  maxBytes: number,
+  label: string,
+): string | undefined {
+  const key = `${label}.context`;
+  const own = validateContext(executorContext, maxBytes, `the executor's own context`);
+  const explicit = validateContext(configured, maxBytes, key);
+  if (own !== undefined && explicit !== undefined && own !== explicit) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${key} and the executor's own context (createAgent({ context })) differ; configure the context in one place`,
+    );
+  }
+  return own ?? explicit;
+}
+
+function validateContext(context: unknown, maxBytes: number, label: string): string | undefined {
   if (context === undefined) return undefined;
   if (typeof context !== 'string') {
-    throw new ConfigurationError('INVALID_CONFIG', `${label}.context must be a string`);
+    throw new ConfigurationError('INVALID_CONFIG', `${label} must be a string`);
   }
   const bytes = new TextEncoder().encode(context).byteLength;
   if (bytes > maxBytes) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      `${label}.context is ${bytes} bytes; the resolved maximum is ${maxBytes}`,
+      `${label} is ${bytes} bytes; the resolved maximum is ${maxBytes}`,
     );
   }
   return context;

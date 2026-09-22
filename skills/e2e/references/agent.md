@@ -34,8 +34,14 @@ Keep `ai@^7` installed when using agent steps with any provider.
   `MODEL_UNAVAILABLE` when the first test acquires `agent`, then stops the
   run with exit 2. Authentication failures occur on the first model call
   and raise `MODEL_PROVIDER_FAILED`.
-- `context` in the config and `agentContext` on a test or group add trusted
-  project vocabulary. Use `createAgent` for a `system` prompt and tools.
+- `context` is what the app calls things, told to every model call, judges
+  included; `system` is how the acting agent works and only the act loop
+  reads it. Pass `context` to `createAgent` next to `model` and `system`, or
+  set it on the agent's options object; `agentContext` on a test or group
+  adds more for that test. Set it in one place: differing values on
+  `createAgent` and the surrounding options
+  produce `INVALID_CONFIG`. `{ executor: createAgent({ model, system,
+  context }) }` is a complete agent and needs no second `model` key.
 
 ### Choose an agent
 
@@ -278,6 +284,7 @@ the one that knows its screens, and that comes from iterating on it:
    transcript with `--debug` to see what the model saw and tried.
 2. **`context`.** Vocabulary every step needs: what the plans are called,
    what a "workspace" is, which tab holds billing. Set it once on the agent
+   (`createAgent({ model, system, context })` or `agents.<name>.context`)
    or per test with `agentContext`, not in every instruction.
 3. **`system` on `createAgent`.** How the agent works: how carefully it
    verifies, what it never does, how it treats a modal. A UX reviewer, a

@@ -1021,7 +1021,14 @@ export interface AgentConfig {
   timeout?: number;
   /** Observation payload ceiling for act turns and judgments, 1024 through 16777216; default 262144. */
   maxObservationBytes?: number;
-  /** Trusted project context prepended to agent prompts, at most `limits.maxAgentContextBytes`. */
+  /**
+   * What the app calls things, told to every model call this agent makes,
+   * act turns and judgments alike: the names of screens and menus, where a
+   * feature lives, which button submits a form. At most
+   * `limits.maxAgentContextBytes`. An executor built with its own vocabulary
+   * (`createAgent({ context })`) makes this key redundant; setting a
+   * different value on both is `INVALID_CONFIG`.
+   */
   context?: string;
   /** Provider options every model call carries, e.g. a reasoning effort. */
   providerOptions?: ProviderOptions;
