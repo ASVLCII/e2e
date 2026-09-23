@@ -50,7 +50,12 @@ export function readPngSize(data: Uint8Array): { width: number; height: number }
 /**
  * The finger gesture that scrolls one rect's content in `direction`. Scrolling
  * down reveals what is below, so the finger travels up; the travel is a share
- * of the rect's extent scaled by momentum, and never leaves the rect.
+ * of the rect's extent scaled by momentum, and never leaves the rect. The
+ * root scroll sends no share (agent-device's default, see `perform`); these
+ * are for a gesture inside one control, and deterministic tests step through
+ * a list with `slow`, a quarter of the box, shorter than any row, so every
+ * row lands fully on screen at some stop. At three quarters the mobile
+ * benchmark's scenario list dragged rows past.
  */
 export function swipeWithin(
   rect: Rect,
