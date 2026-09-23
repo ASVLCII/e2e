@@ -272,6 +272,38 @@ describe('snapshot projection', () => {
     expect(screenTitle(project([{ ref: 'e1', type: 'android.widget.FrameLayout', label: 'x' }]))).toBeUndefined();
   });
 
+  it('marks an Android password EditText secure by attribute and leaves a plain EditText its value', () => {
+    const projected = project([
+      { ref: 'e1', index: 0, depth: 0, type: 'android.widget.FrameLayout', rect: { x: 0, y: 0, width: 390, height: 844 } },
+      { ref: 'e2', index: 1, parentIndex: 0, depth: 1, type: 'android.widget.EditText', label: 'Email', value: 'oskar@example.com', editable: true, password: false },
+      { ref: 'e3', index: 2, parentIndex: 0, depth: 1, type: 'android.widget.EditText', label: 'Password', value: 'hunter2', editable: true, password: true, identifier: 'com.example:id/password', rect: { x: 0, y: 270, width: 390, height: 44 } },
+      { ref: 'e4', index: 3, parentIndex: 0, depth: 1, type: 'com.example.PinView', label: 'PIN', value: '1234', editable: true, password: true },
+      { ref: 'e5', index: 4, parentIndex: 0, depth: 1, type: 'android.widget.TextView', label: 'Forgot?', editable: false },
+    ]);
+    const [, email, password, pin, note] = projected.index.map((entry) => entry.node);
+    expect(email).toMatchObject({ role: 'textbox', name: 'Email', value: 'oskar@example.com' });
+    expect(email!.states).toBeUndefined();
+    expect(email!.inputPurpose).toBeUndefined();
+    expect(password).toMatchObject({ role: 'textbox', name: 'Password', inputPurpose: 'password', states: { secure: true }, testId: 'com.example:id/password' });
+    expect(password!.value).toBeUndefined();
+    // A custom input class the maps do not know is a textbox once the platform says it is editable.
+    expect(projected.index[3]!.kind).toBe('pin-view');
+    expect(pin).toMatchObject({ role: 'textbox', inputPurpose: 'password', states: { secure: true } });
+    expect(pin!.value).toBeUndefined();
+    expect(note!.role).toBe('text');
+  });
+
+  it('keeps a role that already takes text when the platform reports it editable, and trusts the flag on a control role', () => {
+    const projected = project([
+      { ref: 'e1', type: 'searchbox', label: 'Search', editable: true },
+      { ref: 'e2', type: 'android.widget.Spinner', label: 'Country', editable: true },
+      { ref: 'e3', type: 'android.widget.Button', label: 'Submit', editable: true },
+      { ref: 'e4', type: 'android.widget.Button', label: 'Cancel', editable: false },
+      { ref: 'e5', type: 'android.widget.Button', label: 'Later' },
+    ]);
+    expect(projected.index.map((entry) => entry.node.role)).toEqual(['searchbox', 'combobox', 'textbox', 'button', 'button']);
+  });
+
   it('reads the screen title from the navigation bar, its inner text, its identifier, or nothing', () => {
     expect(screenTitle(project(SETTINGS_NODES))).toBe('General');
     expect(screenTitle(project([{ ref: '@e1', type: 'navigation-bar', identifier: 'About' }]))).toBe('About');
