@@ -89,6 +89,17 @@ describe('failure streak', () => {
     expect(isFailedResult(tapped)).toBe(false);
     // Text the model typed is not a failure, even when it reads like one.
     expect(isFailedResult('Typed "failed: no" into #n3.\n\nScreen unchanged since revision b3 (2 nodes).')).toBe(false);
+    expect(isFailedResult('Typed "(x) failed: no" into #n3.\n\nScreen unchanged since revision b3 (2 nodes).')).toBe(false);
+  });
+
+  it('recognizes the point verbs, whose lead is the verb and the point rather than a sentence', () => {
+    const missed = 'nothing the screen lists is at (50, 50)';
+    expect(isFailedResult(`tap_at (30, 30) failed: ${missed}; this engine taps listed nodes only\n\nScreen unchanged since revision b3 (2 nodes).`)).toBe(true);
+    expect(isFailedResult(`type_at (60, 189) failed: ${missed}; type_at needs a control the screen lists.`)).toBe(true);
+    expect(isFailedResult(`press_at (60, 189) failed: ${missed}; press_at needs a control the screen lists.`)).toBe(true);
+    expect(isFailedResult(`select_at (30, 30) failed: ${missed}; select_at needs a control the screen lists.`)).toBe(true);
+    expect(isFailedResult('Tapped the point (300, 60); no listed control is there.\n\nScreen unchanged since revision b3 (2 nodes).')).toBe(false);
+    expect(isFailedResult('Typed into the field at (120, 60) (tapped to focus it; nothing the screen lists is at (200, 100)).')).toBe(false);
   });
 
   it('warns at three failures in a row, stops at five, and starts over after a success', () => {
@@ -101,11 +112,20 @@ describe('failure streak', () => {
     expect(checkFailureStreak([...streak(4), tapped, ...streak(2)]).kind).toBe('clear');
   });
 
+  const result = (toolName: string, output: ToolResultPart['output']): ModelMessage => ({
+    role: 'tool',
+    content: [{ type: 'tool-result', toolCallId: toolName, toolName, output }],
+  });
+  /** A grammar result once the step shows pixels: the text, then the screenshot as a file item. */
+  const withScreenshot = (text: string): ToolResultPart['output'] => ({
+    type: 'content',
+    value: [
+      { type: 'text', text: `${text}\n\nScreenshot attached: 640 by 360 pixels.` },
+      { type: 'file', data: { type: 'data', data: Buffer.from('not really a png').toString('base64') }, mediaType: 'image/png' },
+    ],
+  });
+
   it('reads text tool results in order and skips the conclusion tool and structured results', () => {
-    const result = (toolName: string, output: ToolResultPart['output']): ModelMessage => ({
-      role: 'tool',
-      content: [{ type: 'tool-result', toolCallId: toolName, toolName, output }],
-    });
     const messages: ModelMessage[] = [
       { role: 'user', content: 'Execute this test step' },
       result('tap', { type: 'text', value: failed }),
@@ -114,5 +134,20 @@ describe('failure streak', () => {
       result('tap', { type: 'text', value: tapped }),
     ];
     expect(extractToolResults(messages, 'complete_step')).toEqual([failed, tapped]);
+  });
+
+  it('reads the message of a call the SDK refused before dispatch', () => {
+    const refused = 'AI_InvalidToolInputError: Invalid input for tool tap: unrecognized key "force"';
+    const results = extractToolResults([result('tap', { type: 'error-text', value: refused }), result('tap', { type: 'text', value: tapped })], 'complete_step');
+    expect(results).toEqual([refused, tapped]);
+  });
+
+  it('reads the text beside a screenshot, so the streak warns and stops in pixel mode too', () => {
+    const streak = (count: number) => Array.from({ length: count }, () => result('tap', withScreenshot(failed)));
+    const results = extractToolResults([result('tap', withScreenshot(tapped)), ...streak(3)], 'complete_step');
+    expect(results).toHaveLength(4);
+    expect(results[1]).toMatch(/^Tapped #n6\. failed: /);
+    expect(checkFailureStreak(results)).toEqual({ kind: 'warn', reason: 'the last 3 actions failed in a row' });
+    expect(checkFailureStreak(extractToolResults(streak(5), 'complete_step')).kind).toBe('stop');
   });
 });

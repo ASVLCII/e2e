@@ -10,6 +10,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import { toolResultTexts } from './screen-update.ts';
 
 /** One tool call as identity: the name plus its exact serialized input. */
 export interface GuardToolCall {
@@ -151,8 +152,9 @@ function safeStringify(value: unknown): string {
 
 /**
  * Extracts the text of every tool result in a transcript, in order, excluding
- * the conclusion tool's. Only text results count: a structured result is a
- * project tool's own shape and says nothing about failure.
+ * the conclusion tool's. A result with a screenshot attached counts as its
+ * text, lead first; a structured result is a project tool's own shape and
+ * says nothing about failure.
  */
 export function extractToolResults(messages: readonly ModelMessage[], concludeToolName: string): string[] {
   const results: string[] = [];
@@ -160,8 +162,8 @@ export function extractToolResults(messages: readonly ModelMessage[], concludeTo
     if (message.role !== 'tool' || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
       if (part.type !== 'tool-result' || part.toolName === concludeToolName) continue;
-      const output = part.output;
-      if (output.type === 'text' && typeof output.value === 'string') results.push(output.value);
+      const texts = toolResultTexts(part.output);
+      if (texts.length > 0) results.push(texts.join('\n'));
     }
   }
   return results;
@@ -169,12 +171,15 @@ export function extractToolResults(messages: readonly ModelMessage[], concludeTo
 
 /**
  * Whether a tool result reports its action failing, by the first line's
- * shape: `Tapped #n6. failed: …` from a grammar action, `Action failed: …`
- * from the loop's guard, `Tool "x" failed: …` from a project tool.
+ * shape: `Tapped #n6. failed: …` from an id-addressed grammar action,
+ * `tap_at (30, 30) failed: …` from a point verb, `Action failed: …` from the
+ * loop's guard, `Tool "x" failed: …` from a project tool. A point verb's lead
+ * is its name and the point, so `failed:` after a closing parenthesis counts
+ * only at the line's start; text the model typed never leads a line.
  */
 export function isFailedResult(text: string): boolean {
   const first = text.split('\n', 1)[0] ?? '';
-  return /(?:^|\. )(?:Action |Tool "[^"]*" )?failed: /.test(first);
+  return /(?:^|\. )(?:Action |Tool "[^"]*" )?failed: |^[a-z_]+ \([^)]*\) failed: /.test(first);
 }
 
 /**
