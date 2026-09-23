@@ -70,16 +70,19 @@ export const VERDICT_RULES = `Verdict rules:
 
 /**
  * A plain AI SDK function tool with its input typed from the schema — what
- * `tool()` from `ai` does, without loading `ai` to do it.
+ * `tool()` from `ai` does, without loading `ai` to do it. The schema is
+ * closed here, once for every tool: a field it does not declare fails
+ * validation, and the SDK hands the failure back to the model as the call's
+ * result instead of stripping the field and running the call without it.
  */
-function schemaTool<Schema extends z.ZodType, Output = string>(definition: {
+function schemaTool<Schema extends z.ZodObject, Output = string>(definition: {
   readonly description: string;
   readonly inputSchema: Schema;
   readonly execute: (input: z.output<Schema>) => Promise<Output>;
   /** Maps a structured result onto model content; a string result needs none. */
   readonly toModelOutput?: (options: { readonly output: Output }) => ModelOutput;
 }): Tool {
-  return definition as Tool;
+  return { ...definition, inputSchema: definition.inputSchema.strict() } as Tool;
 }
 
 /** The model-facing shape of a tool result: text, or text with a screenshot attached. */
@@ -96,7 +99,7 @@ type ModelOutput =
  * same way. A tool that skipped the encoder would hand the model the image
  * bytes as JSON the first time an action ran in pixel mode.
  */
-function screenTool<Schema extends z.ZodType>(definition: {
+function screenTool<Schema extends z.ZodObject>(definition: {
   readonly description: string;
   readonly inputSchema: Schema;
   readonly execute: (input: z.output<Schema>) => Promise<ScreenOutput>;
@@ -132,7 +135,10 @@ export interface VerdictTool {
 /**
  * The `complete_step` verdict tool. A blocked verdict without a blockable
  * code is rejected back to the model, a passed verdict never carries a code,
- * and the first accepted verdict is final.
+ * and the first accepted verdict is final. A code sent beside `passed` is
+ * dropped and the result says so, never refused: one model attaches
+ * `ACTION_FAILED` to about half of its passes, and a schema refusal had it
+ * resend the identical call until the turn budget ran out.
  */
 export function createVerdictTool(): VerdictTool {
   let verdict: StepVerdict | undefined;
@@ -148,7 +154,10 @@ export function createVerdictTool(): VerdictTool {
         .describe(
           'One to three sentences for the next step: what you did, what the screen shows now, and any value it will need (a name or id you created, a message you saw). No page narration; under 400 characters.',
         ),
-      errorCode: z.enum(MODEL_ERROR_CODES).optional(),
+      errorCode: z
+        .enum(MODEL_ERROR_CODES)
+        .optional()
+        .describe('Why the step failed or what blocked it. Only with status failed or blocked; a passed step carries none.'),
     }),
     execute: async (input) => {
       if (verdict !== undefined) return 'The step already concluded.';
@@ -170,7 +179,9 @@ export function createVerdictTool(): VerdictTool {
           ? {}
           : { errorCode: input.errorCode }),
       };
-      return 'Step concluded.';
+      return input.status === 'passed' && input.errorCode !== undefined
+        ? `Step concluded; dropped errorCode ${input.errorCode} on a passed verdict.`
+        : 'Step concluded.';
     },
   });
   return {

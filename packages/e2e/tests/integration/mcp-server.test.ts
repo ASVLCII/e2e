@@ -120,6 +120,24 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
     expect(observed.text).toContain('NO_SESSION');
   });
 
+  it('refuses an argument a fixed tool does not declare at the protocol layer, before anything runs', async () => {
+    // The MCP SDK validates against the closed schema before the handler runs:
+    // the refusal names the tool and the key, and no session opened.
+    for (const [name, args, key] of [
+      ['open_session', { headless: true }, 'headless'],
+      ['tools', { all: true }, 'all'],
+      ['call', { tool: 'observe', verbose: true }, 'verbose'],
+      ['close_session', { force: true }, 'force'],
+    ] as const) {
+      const refused = await invoke(name, args);
+      expect(refused.isError, name).toBe(true);
+      expect(refused.text, name).toContain(`Invalid arguments for tool ${name}: Unrecognized key: "${key}"`);
+    }
+    const listed = await invoke('tools');
+    expect(listed.isError).toBe(true);
+    expect(listed.text).toContain('NO_SESSION');
+  });
+
   it('opens a session with its catalog, then locates, acts, fills a secret, and withholds pixels afterwards', async () => {
     const opened = await invoke('open_session');
     expect(opened.isError, opened.text).toBe(false);
@@ -184,6 +202,10 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
     expect(malformed.isError).toBe(true);
     expect(malformed.text).toMatch(/^INVALID_ARGUMENT: call tap: target: /);
     expect(malformed.text).toContain('tools {tool: "tap"} shows its arguments');
+    // An argument the tool does not declare is refused the same way, never stripped and acted on.
+    const decorated = await call('tap', { target: nodeId(after.text, /button "Increment"/), force: true });
+    expect(decorated.isError).toBe(true);
+    expect(decorated.text).toBe('INVALID_ARGUMENT: call tap: Unrecognized key: "force"; tools {tool: "tap"} shows its arguments');
     const nameless = await call('teleport');
     expect(nameless.isError).toBe(true);
     expect(nameless.text).toContain('UNKNOWN_TOOL');

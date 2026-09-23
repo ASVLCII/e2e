@@ -1,9 +1,13 @@
 import type { Tool, ToolSet } from 'ai';
 import { z } from 'zod';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadAiSdk } from '../../src/agent/ai-sdk.ts';
+import { createGrammarTools } from '../../src/agent/primitives.ts';
+import { ScreenPresenter } from '../../src/agent/screen-update.ts';
 import { TestError } from '../../src/internal/errors.ts';
+import { createSessionCatalog } from '../../src/mcp/catalog.ts';
 import { catalogLine, describeToolDetail, errorResult, invokeTool, resultFromOutput, toolJsonSchema } from '../../src/mcp/tools.ts';
+import { fakeExecutorContext } from '../helpers/fake-executor-context.ts';
 
 const extra = { signal: new AbortController().signal };
 
@@ -75,6 +79,40 @@ describe('invokeTool', () => {
     });
     await expect(invokeTool('tap', guarded, {}, extra)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' });
     expect(ran).toBe(false);
+  });
+
+  it('refuses an argument a grammar tool does not declare, before anything is dispatched', async () => {
+    const { context, dispatched } = fakeExecutorContext();
+    const grammar = createGrammarTools(context);
+    await expect(invokeTool('tap', grammar['tap']!, { target: 'n4', force: true }, extra)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      message: 'call tap: Unrecognized key: "force"; tools {tool: "tap"} shows its arguments',
+    });
+    expect(dispatched).toEqual([]);
+  });
+
+  it("refuses an argument the session catalog's observe and locate do not declare", async () => {
+    const { context, dispatched } = fakeExecutorContext();
+    const resolveAll = vi.fn(async () => []);
+    const { tools } = createSessionCatalog({
+      context,
+      screen: new ScreenPresenter(),
+      locator: { resolveAll } as never,
+      session: {} as never,
+      executor: undefined,
+      redact: (text) => text,
+      warn: () => undefined,
+    });
+    await expect(invokeTool('observe', tools['observe']!, { verbose: true }, extra)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      message: 'call observe: Unrecognized key: "verbose"; tools {tool: "observe"} shows its arguments',
+    });
+    await expect(invokeTool('locate', tools['locate']!, { role: 'button', selector: '#save' }, extra)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      message: 'call locate: Unrecognized key: "selector"; tools {tool: "locate"} shows its arguments',
+    });
+    expect(dispatched).toEqual([]);
+    expect(resolveAll).not.toHaveBeenCalled();
   });
 
   it('lets a tool failure propagate with its code, for the host to render', async () => {
