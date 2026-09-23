@@ -25,6 +25,7 @@ const target: ResolvedTarget = {
   index: 0,
   platform: 'web',
   engine: undefined,
+  appDeclaration: {},
   app: EMPTY_APP,
 };
 

@@ -9,7 +9,7 @@ here.
 ## Layout
 
 - `app/server.mjs` — dependency-free playground app. The runner starts and
-  stops it via the web engine's `command` option. The pages live under
+  stops it via the target's `app.command`. The pages live under
   `app/pages/` by group, each module exporting its routes and its nav
   entries: `basics` (home, todos, forms, login/session, dashboard, wizard),
   `interaction` (network, dialogs, board, pointer pad, iframes), `canvas`

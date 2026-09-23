@@ -1,0 +1,5 @@
+---
+'e2e': minor
+---
+
+The app under test is declared on its target. `Target.app` carries `url`, `environment`, `identity`, `command`, `readyUrl`, and `services`; every field overrides the default the engine declared, and the processes are the target's alone. `EngineAppDeclaration` shrinks to `url`, `environment`, and `identity`, the facts an engine can know (`web({ url })` names the URL, `mobile({ app })` the identity), and an engine declaring `command`, `readyUrl`, or `services` is `INVALID_CONFIG`. A device target can now start Metro for a debug build (`app: { command, readyUrl }`) without the engine knowing a process exists, and a release build simply has no `command`. `app.url` on a target whose engine declares no URL is `INVALID_CONFIG`: only the engine that brought a URL can open one. The config digest records the merged declaration once, so a URL given to the engine and the same URL on the target digest alike, with command and service env values reduced to their names either way. Foreign keys (`webServer`, a target-level `url` or `command`) point at `app`.

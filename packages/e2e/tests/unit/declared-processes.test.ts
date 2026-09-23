@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { defineEngine, type EngineAppDeclaration } from '../../src/engine/index.ts';
+import { defineEngine } from '../../src/engine/index.ts';
+import { obj } from '../../src/internal/objects.ts';
+import type { TargetApp } from '../../src/types.ts';
 import { assignPorts, resolveConfig } from '../../src/config/resolve.ts';
 import { declaredProcesses } from '../../src/run/declared-processes.ts';
 import { snapshot } from '../helpers/snapshot.ts';
@@ -7,20 +9,27 @@ import { snapshot } from '../helpers/snapshot.ts';
 const ROOT = '/tmp/e2e-declared-processes';
 
 /** Resolves one target per declaration, named t0, t1, ..., the way two browsers on one app would be configured. */
-function configOf(...declarations: EngineAppDeclaration[]) {
+function configOf(...declarations: TargetApp[]) {
   return resolveConfig(
     {
       targets: declarations.map((app, index) => ({
         name: `t${index}`,
         platform: 'web',
-        engine: defineEngine({ name: 'fake', version: '1.0.0', spiVersion: 1, observe: async () => snapshot([]), app }),
+        engine: defineEngine({
+          name: 'fake',
+          version: '1.0.0',
+          spiVersion: 1,
+          observe: async () => snapshot([]),
+          app: obj({ url: app.url }),
+        }),
+        app,
       })),
     },
     { projectRoot: ROOT, env: {} as NodeJS.ProcessEnv },
   );
 }
 
-function targets(...declarations: EngineAppDeclaration[]) {
+function targets(...declarations: TargetApp[]) {
   return configOf(...declarations).targets;
 }
 
@@ -68,7 +77,7 @@ describe('declaredProcesses', () => {
 
   it('dedupes commands and services on their expanded values once ports are assigned', () => {
     const emulator = { executable: 'node', args: ['emulator.js', '{port}'], waitForExit: true };
-    const shared: EngineAppDeclaration = {
+    const shared: TargetApp = {
       url: 'http://127.0.0.1:0',
       command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } },
       services: [emulator],
@@ -87,7 +96,7 @@ describe('declaredProcesses', () => {
     expect(twoPorts.commands.map((command) => command.readyUrl)).toEqual(['http://127.0.0.1:4321/', 'http://127.0.0.1:4322/']);
     expect(twoPorts.services.map((service) => service.command.args)).toEqual([['emulator.js', '4321'], ['emulator.js', '4322']]);
     // An explicit name still means one process: expanded to two ports it names two.
-    const named: EngineAppDeclaration = { ...shared, services: [{ ...emulator, name: 'emulator' }] };
+    const named: TargetApp = { ...shared, services: [{ ...emulator, name: 'emulator' }] };
     expect(() => declaredProcesses(assignPorts(configOf(named, named), { t0: 4321, t1: 4322 }).targets)).toThrow(
       /service "emulator" is declared by target "t1" and by target "t0" with different commands/,
     );

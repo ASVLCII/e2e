@@ -37,7 +37,7 @@ export { raceAbort } from './timing.ts';
 export { Deadline, pollCondition, withTimeout, withinCleanupBudget, type PollConditionOptions } from '../internal/time.ts';
 export { sameSite, siteOf, urlMatches } from '../internal/urls.ts';
 export { obj, type WithoutUndefined } from '../internal/objects.ts';
-import type { CommandConfig, Expectable, Locator, Screen, ServiceConfig } from '../types.ts';
+import type { Expectable, Locator, Screen } from '../types.ts';
 import type {
   EngineSpiVersion,
   LocatorAction,
@@ -67,7 +67,7 @@ export {
   RETRYABLE_ENGINE_ERROR_CODES,
   parseKey,
 } from './contract.ts';
-export type { CommandConfig, ServiceConfig, Expectable, JsonValue, Locator, Screen } from '../types.ts';
+export type { Expectable, JsonValue, Locator, Screen } from '../types.ts';
 
 /**
  * Capability names: the closed harness capabilities plus one name per
@@ -121,12 +121,13 @@ export interface EngineKeyboard {
 }
 
 /**
- * What an engine declares about the app it drives. The app
- * under test is the engine's to describe: a browser engine names a URL, a
- * device engine a bundle id. The harness resolves the declaration once per
- * target and owns everything built on it - navigation and origin policy,
- * cache and session identity, the report's target record, and the app
- * process it starts before the run.
+ * The defaults an engine knows about the app it drives: a browser engine may
+ * name the URL it was given, a device engine the bundle id it pins. The
+ * target's own `app` declaration overrides every field, and the processes
+ * that serve the app (`command`, `services`) are the target's alone. The
+ * harness resolves the merged declaration once per target and owns everything
+ * built on it - navigation and origin policy, cache and session identity, the
+ * report's target record, and the processes it starts before the run.
  */
 export interface EngineAppDeclaration {
   /**
@@ -135,8 +136,9 @@ export interface EngineAppDeclaration {
    * fragment; a missing scheme becomes `https://`, or `http://` for a
    * loopback host. Plain HTTP is accepted for loopback hosts only. A URL on
    * `127.0.0.1` or `[::1]` with port 0 asks the run for a free port,
-   * substituted wherever the declaration used it and handed to `command` and
-   * `services` as `{port}`.
+   * substituted wherever the declaration used it and handed to the target's
+   * `command` and `services` as `{port}`. A target may override the URL only
+   * when its engine declares one: an engine without a URL cannot open one.
    */
   readonly url?: string;
   /**
@@ -156,26 +158,6 @@ export interface EngineAppDeclaration {
    * across them.
    */
   readonly identity?: string;
-  /**
-   * Process the runner starts before the first test and stops on every exit
-   * path (a dev server). Structured, never shell-interpreted; the child
-   * inherits only `PATH`, `HOME`, the temp-directory variables, and
-   * `command.env`. Targets declaring the same command share one process,
-   * probed at the first declaring target's `readyUrl`.
-   */
-  readonly command?: CommandConfig;
-  /** URL polled until `command` is ready (a 200-499 status); defaults to `url`. */
-  readonly readyUrl?: string;
-  /**
-   * Dependency processes the app needs before it can boot (a database
-   * container, a migration step), started in declaration order before any
-   * app command and torn down in reverse after it. Valid without `command`:
-   * the app may already be running, or be one of the services itself.
-   * Services declared identically by several targets start once; shared
-   * services must be declared in one order, and an explicit `name` must mean
-   * one process across the run.
-   */
-  readonly services?: readonly ServiceConfig[];
 }
 
 /**
@@ -678,7 +660,7 @@ export interface Engine {
   readonly state?: EngineStateCapability;
   /** capability: artifacts - screenshots and traces under the attempt directory. */
   readonly artifacts?: EngineArtifacts;
-  /** The app under test, as data: url, identity, environment, command, services. */
+  /** The app under test, as the defaults this engine knows: url, identity, environment. */
   readonly app?: EngineAppDeclaration;
   /** Steering hooks: open, back, restart, reset. */
   readonly session?: EngineSession;

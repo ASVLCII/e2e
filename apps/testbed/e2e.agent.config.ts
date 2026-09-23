@@ -34,10 +34,8 @@ export default {
   targets: [
     {
       name: 'web',
-      engine: web({
-        url: 'http://127.0.0.1:4272',
-        command: { executable: 'node', args: ['app/server.mjs'], env: { PORT: '4272' } },
-      }),
+      engine: web({ url: 'http://127.0.0.1:4272' }),
+      app: { command: { executable: 'node', args: ['app/server.mjs'], env: { PORT: '4272' } } },
     },
   ],
   // Every agent step includes model round trips; a loaded provider needs

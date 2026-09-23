@@ -8,7 +8,7 @@ import type { CredentialConfig, Secret, SecretConfig } from './config/secrets.ts
 import type { Unique } from './params.ts';
 import type { StepExecutor } from './agent/executor.ts';
 import type { StepCacheInfo } from './run/steps.ts';
-import type { EngineHandle } from './engine/index.ts';
+import type { EngineAppDeclaration, EngineHandle } from './engine/index.ts';
 import type { Momentum, ScrollDirection, SelectOption, ViewportPoint } from './engine/contract.ts';
 import type { TraceCacheStore } from './cache/store.ts';
 import type { RunEvent, RunExitCode, RunStatus } from './run/events.ts';
@@ -924,11 +924,41 @@ export interface ServiceConfig extends CommandConfig {
 }
 
 /**
+ * The app one target drives, declared beside its engine. Every field
+ * overrides the default the engine declared (`web({ url })` names a URL,
+ * `mobile({ app })` an identity); the processes are the target's alone. A
+ * target whose engine declares no `url` cannot declare one either: the
+ * engine could not open it.
+ */
+export interface TargetApp extends EngineAppDeclaration {
+  /**
+   * Process the runner starts before the first test and stops on every exit
+   * path (a dev server, Metro for a debug build). Structured, never
+   * shell-interpreted; the child inherits only `PATH`, `HOME`, the
+   * temp-directory variables, and `command.env`. Targets declaring the same
+   * command share one process, probed at the first declaring target's
+   * `readyUrl`. A release build has no command.
+   */
+  command?: CommandConfig;
+  /** URL polled until `command` is ready (a 200-499 status); defaults to `url`, and is required without one. */
+  readyUrl?: string;
+  /**
+   * Dependency processes this target needs before its command can boot,
+   * started in declaration order before any app command and torn down in
+   * reverse after it. Valid without `command`: the app may already be
+   * running, or be one of the services itself. Services declared identically
+   * by several targets start once; shared services must be declared in one
+   * order, and an explicit `name` must mean one process across the run.
+   */
+  services?: readonly ServiceConfig[];
+}
+
+/**
  * One target: a named surface on one platform, served by an engine.
  * What the target can do is graded from the engine's declared capabilities;
  * with no `engine` the target is agent-tools-only and everything runs opaque.
- * The app under test is the engine's to declare (its URL, identity, or the
- * command that starts it); a target carries no app config of its own.
+ * The app under test is declared in `app`, over the defaults the engine
+ * brought; a target without an engine has no app.
  */
 export interface Target {
   /** Label in reports and for `--target`; defaults to the platform. */
@@ -940,6 +970,8 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
+  /** The app under test: its URL, identity, and the processes that serve it. */
+  app?: TargetApp;
 }
 
 /**

@@ -3,9 +3,9 @@ title: Starting your app
 description: Point the runner at a running app, or let it start the app and its dependencies.
 ---
 
-Set your app's URL in the engine config. If you also provide a start
-command, the runner starts the app, waits until it is ready, and stops it
-when the run ends.
+Give the engine your app's URL. If the target also declares a start command,
+the runner starts the app, waits until it is ready, and stops it when the run
+ends.
 
 ## Point at a running app
 
@@ -26,8 +26,9 @@ a scheme use HTTPS, or HTTP for loopback hosts.
 
 ## Let the runner start it
 
-Add `command` and the runner spawns the dev server, waits until `url`
-answers, and stops it when the run ends, fails, or is interrupted:
+Add `app.command` beside the engine and the runner spawns the dev server,
+waits until `url` answers, and stops it when the run ends, fails, or is
+interrupted:
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
@@ -43,15 +44,15 @@ export default {
     }),
   },
   targets: [{
-    engine: web({
-      url: process.env.APP_URL ?? 'http://localhost:3000',
+    engine: web({ url: process.env.APP_URL ?? 'http://localhost:3000' }),
+    app: {
       command: {
         executable: 'npm',
         args: ['run', 'dev'],
         reuseExisting: true,
         log: '.e2e/logs/app.log',
       },
-    }),
+    },
   }],
 } satisfies E2EConfig;
 ```
@@ -69,8 +70,9 @@ The main command options are:
 | `env` | Pass environment variables to the app. Model keys and CI tokens are not inherited automatically. |
 | `startupTimeout` | How long to wait for readiness, 60 seconds by default. |
 
-To probe a health endpoint instead of the base URL, set `readyUrl` on
-`web({ url, readyUrl, command })`, alongside `command`.
+To probe a health endpoint instead of the base URL, set `readyUrl` in `app`
+alongside `command`. The processes are the target's, never the engine's:
+`web({ command })` is rejected with a pointer here.
 
 The command runs without a shell. `executable` is resolved on `PATH` and
 `args` are passed as written. The child inherits only basic system variables
@@ -84,10 +86,10 @@ chooses a free port and replaces `{port}` in the command's `args` and `env`.
 Your app command must use that value:
 
 ```ts
-engine: web({
-  url: 'http://127.0.0.1:0',
-  command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } },
-}),
+{
+  engine: web({ url: 'http://127.0.0.1:0' }),
+  app: { command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } } },
+},
 ```
 
 Tests can read the allocated URL from `app.baseUrl`. Cache entries remain
@@ -102,8 +104,8 @@ start in order before the app command and stop in reverse order when the
 run ends.
 
 ```ts title="Target fragment"
-engine: web({
-  url: 'http://localhost:3000',
+engine: web({ url: 'http://localhost:3000' }),
+app: {
   services: [
     {
       name: 'postgres',
@@ -128,7 +130,7 @@ engine: web({
     },
   ],
   command: { executable: 'pnpm', args: ['dev'], log: '.e2e/logs/app.log' },
-}),
+},
 ```
 
 A service is ready when its `readyUrl` responds, or, with `waitForExit`, when
@@ -159,10 +161,37 @@ export default {
 
 Targets that declare the same `command` share one process. Every test runs
 on every target unless it is scoped with `platforms` or `requires`;
-`--target <name>` selects at run time. A device target sits beside a browser
-target in the same list; see the [Mobile engine reference](/reference/mobile).
-One target per screen size is how a suite runs at several
-[viewports](/viewports).
+`--target <name>` selects at run time. One target per screen size is how a
+suite runs at several [viewports](/viewports).
+
+A device target sits beside a browser target in the same list, and an Expo
+app is one Metro serving both. Declare the command once, on the target whose
+engine cannot probe a URL of its own:
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { web } from '@e2edev/web';
+import { mobile } from '@e2edev/mobile';
+
+export default {
+  targets: [
+    { name: 'web', engine: web({ url: 'http://localhost:8081' }) },
+    {
+      name: 'ios',
+      engine: mobile({ platform: 'ios', app: 'dev.example.app' }),
+      app: {
+        command: { executable: 'npx', args: ['expo', 'start'] },
+        readyUrl: 'http://127.0.0.1:8081/status',
+      },
+    },
+  ],
+} satisfies E2EConfig;
+```
+
+Commands start before any test on any target, so the browser finds Metro up.
+A device engine declares no `url` (it opens the pinned app, not an address),
+so its command needs `readyUrl`; a release build has no `command`. See the
+[Mobile engine reference](/reference/mobile).
 
 ## Protected previews
 

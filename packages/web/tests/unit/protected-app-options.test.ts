@@ -76,3 +76,13 @@ describe('web({ testIdAttribute })', () => {
     }
   });
 });
+
+describe('web({ command, readyUrl, services })', () => {
+  it('rejects each process option by name and points at the target app', () => {
+    for (const key of ['command', 'readyUrl', 'services'] as const) {
+      expect(() => web({ url: 'http://127.0.0.1:3000', [key]: {} } as never)).toThrowError(
+        `web({ ${key} }) moved: the processes that serve the app are the target's, so declare targets: [{ engine: web({ url }), app: { ${key} } }]`,
+      );
+    }
+  });
+});

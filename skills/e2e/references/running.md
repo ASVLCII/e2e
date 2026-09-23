@@ -186,7 +186,7 @@ jobs:
 
 - Install browsers as their own step so the download never counts against a
   launch timeout.
-- Start the app through the engine's `command`; the runner tears it down on
+- Start the app through the target's `app.command`; the runner tears it down on
   every exit path.
 - Agent steps run in the same job as everything else. Pass the key the
   config's model reads (`AI_GATEWAY_API_KEY` for `gateway()` from `ai`) as

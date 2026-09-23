@@ -23,6 +23,7 @@ import type {
   SecretProvider,
   SecretPurpose,
   Target,
+  TargetApp,
   TraceCacheStore,
   VideoArtifactConfig,
 } from '../types.ts';
@@ -35,7 +36,7 @@ import {
   type ResolvedLimits,
   type ResolvedBaseLimits,
 } from './agent.ts';
-import { digestAppDeclaration, resolveTargetApp, type ResolvedApp } from './app.ts';
+import { digestAppDeclaration, mergeAppDeclaration, resolveTargetApp, type ResolvedApp } from './app.ts';
 import { envName, isSecretValue, secretValueProblem } from './secrets.ts';
 
 export type { ResolvedAgentConfig, ResolvedLimits } from './agent.ts';
@@ -47,7 +48,9 @@ export interface ResolvedTarget {
   readonly platform: string;
   /** Validated engine; undefined for an agent-tools-only target. */
   readonly engine: EngineHandle | undefined;
-  /** The app under test, resolved from the engine's declaration. */
+  /** The target's `app` over the engine's defaults, as `resolveTargetApp` read it; kept so a run can re-resolve with its assigned port. */
+  readonly appDeclaration: TargetApp;
+  /** The app under test, resolved from `appDeclaration`. */
   readonly app: ResolvedApp;
 }
 
@@ -150,7 +153,7 @@ export interface CliOverrides {
 /** A safe artifact path segment: the filename alphabet, and never `.` or `..`, which would name a directory's self or parent. */
 const TARGET_NAME_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]+$/;
 
-const TARGET_KEYS = new Set(['name', 'platform', 'engine']);
+const TARGET_KEYS = new Set(['name', 'platform', 'engine', 'app']);
 
 const TOP_LEVEL_KEYS = new Set([
   'specVersion',
@@ -176,36 +179,38 @@ const TOP_LEVEL_KEYS = new Set([
 const CACHE_KEYS = new Set(['mode', 'store', 'dir']);
 const CACHE_MODES = new Set(['off', 'read-only', 'read-write']);
 
-const APP_BELONGS_TO_ENGINE =
-  'the app under test is declared by the engine: engine: web({ url }) for a browser, mobile({ platform, app }) for a device';
+const APP_BELONGS_TO_TARGET =
+  'the app under test is declared on its target: targets: [{ engine: web({ url }), app: { command, readyUrl, services } }]';
 
 /** Keys from other runners' configs, each mapped to where that fact lives here. */
 const FOREIGN_TOP_LEVEL_KEYS: Readonly<Record<string, string>> = {
   testDir: 'test files are selected by tests, a glob such as "tests/**/*.e2e.ts"',
   testMatch: 'test files are selected by tests, a glob such as "tests/**/*.e2e.ts"',
-  app: APP_BELONGS_TO_ENGINE,
-  url: APP_BELONGS_TO_ENGINE,
-  baseURL: APP_BELONGS_TO_ENGINE,
-  baseUrl: APP_BELONGS_TO_ENGINE,
-  webServer: 'the runner starts the app from the engine options: web({ url, command: { executable, args } })',
-  use: 'browser and app options are engine options: engine: web({ ... })',
+  app: APP_BELONGS_TO_TARGET,
+  url: APP_BELONGS_TO_TARGET,
+  baseURL: APP_BELONGS_TO_TARGET,
+  baseUrl: APP_BELONGS_TO_TARGET,
+  services: APP_BELONGS_TO_TARGET,
+  webServer: 'the runner starts the app from the target: targets: [{ engine: web({ url }), app: { command: { executable, args } } }]',
+  use: 'browser options are engine options (engine: web({ ... })), the app under test is the target\'s app: { url, command }',
   projects: 'one target per browser or device: targets: [{ engine }]',
   agent: 'agents are named: agents: { default: <what agent held> }; e2e run --agent <name> runs with another',
   screen: 'the test-id attribute is an engine option: engine: web({ testIdAttribute })',
 };
 
+/** Keys authors put on a target that belong under its `app`, each with where it goes. */
+const APP_TARGET_KEYS: Readonly<Record<string, string>> = {
+  url: 'app: { url }',
+  baseURL: 'app: { url }',
+  baseUrl: 'app: { url }',
+  command: 'app: { command }',
+  readyUrl: 'app: { readyUrl }',
+  services: 'app: { services }',
+  webServer: 'app: { command, readyUrl }',
+};
+
 /** Keys authors put on a target that belong to its engine. */
-const FOREIGN_TARGET_KEYS: ReadonlySet<string> = new Set([
-  'app',
-  'url',
-  'baseURL',
-  'baseUrl',
-  'command',
-  'appPath',
-  'bundleId',
-  'browser',
-  'device',
-]);
+const ENGINE_TARGET_KEYS: ReadonlySet<string> = new Set(['appPath', 'bundleId', 'browser', 'device']);
 
 /** `; did you mean "targets"?` or a pointer to where a foreign key's fact lives. */
 function unknownTopLevelKeyHint(key: string): string {
@@ -323,7 +328,7 @@ export function resolveConfig(
     limits,
     credentials,
     secrets,
-    configDigest: computeConfigDigest(raw, projectId),
+    configDigest: computeConfigDigest(raw, projectId, targets),
   };
   return resolved;
 }
@@ -339,7 +344,7 @@ export function assignPorts(config: ResolvedConfig, ports: PortAssignments): Res
     ...config,
     targets: config.targets.map((target) => ({
       ...target,
-      app: resolveTargetApp(target.name, target.engine, config.projectRoot, ports[target.name]),
+      app: resolveTargetApp(target.name, target.appDeclaration, config.projectRoot, ports[target.name]),
     })),
   };
 }
@@ -608,12 +613,16 @@ function resolveTargets(raw: E2EConfig, projectRoot: string, ports: PortAssignme
     const where = typeof target.name === 'string' ? `target "${target.name}"` : `targets[${index}]`;
     for (const key of Object.keys(target)) {
       if (!TARGET_KEYS.has(key)) {
-        const hint = FOREIGN_TARGET_KEYS.has(key)
-          ? `; ${APP_BELONGS_TO_ENGINE}`
-          : didYouMean(key, [...TARGET_KEYS]);
+        const under = APP_TARGET_KEYS[key];
+        const hint =
+          under !== undefined
+            ? `; the app under test is declared as ${under} on the target`
+            : ENGINE_TARGET_KEYS.has(key)
+              ? '; browser and device options are engine options: engine: web({ ... }) or mobile({ ... })'
+              : didYouMean(key, [...TARGET_KEYS]);
         throw new ConfigurationError(
           'INVALID_CONFIG',
-          `${where} has unknown key "${key}"; a target is { name?, platform?, engine? }${hint}`,
+          `${where} has unknown key "${key}"; a target is { name?, platform?, engine?, app? }${hint}`,
         );
       }
     }
@@ -642,12 +651,14 @@ function resolveTargets(raw: E2EConfig, projectRoot: string, ports: PortAssignme
     }
     seen.add(name);
     if (target.name === undefined) defaulted.add(name);
+    const appDeclaration = mergeAppDeclaration(name, target.engine, target.app);
     return {
       name,
       index,
       platform,
       engine: target.engine,
-      app: resolveTargetApp(name, target.engine, projectRoot, ports[name]),
+      appDeclaration,
+      app: resolveTargetApp(name, appDeclaration, projectRoot, ports[name]),
     };
   });
 }
@@ -839,7 +850,7 @@ function digestedArtifactKinds(artifacts: NonNullable<E2EConfig['artifacts']>): 
   return (kinds ?? [...DEFAULT_ARTIFACT_KINDS]).filter((kind) => kind !== 'video');
 }
 
-function computeConfigDigest(raw: E2EConfig, projectId: string): string {
+function computeConfigDigest(raw: E2EConfig, projectId: string, targets: readonly ResolvedTarget[]): string {
   // An agent may be the executor itself; its digest identity is name/version,
   // which is exactly what survives the function-stripping JSON clone below.
   // Every model instance, wherever an agent entry carries it (`model`,
@@ -882,16 +893,21 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
     );
   }
   if (raw.targets !== undefined) {
-    sanitized['targets'] = raw.targets.map((target) => {
+    sanitized['targets'] = raw.targets.map((target, index) => {
       // An engine handle holds live functions; its digest identity is the
       // declaration - name, version, contract version, the platform it
       // drives (a named target inherits it, so two workers whose engines
       // declare different platforms must not agree on the digest), capability
       // set, and what it declares about the app under test.
-      if (isEngineHandle(target.engine)) {
-        const { engine, ...rest } = target;
+      // The app enters once, as the merged declaration the run resolves, so a
+      // URL given to the engine and the same URL declared on the target digest
+      // alike; the raw `app` may carry env values and never enters as written.
+      const { app: _app, engine, ...rest } = target;
+      const digestedApp = { app: digestAppDeclaration(targets[index]?.appDeclaration ?? {}) };
+      if (isEngineHandle(engine)) {
         return {
           ...rest,
+          ...digestedApp,
           engine: {
             name: engine.name,
             ...(engine.version === undefined ? {} : { version: engine.version }),
@@ -899,11 +915,10 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
             ...(engine.platform === undefined ? {} : { platform: engine.platform }),
             ...(engine.workers === undefined ? {} : { workers: engine.workers }),
             capabilities: [...engine.capabilities].toSorted(),
-            app: digestAppDeclaration(engine.app ?? {}),
           },
         };
       }
-      return target;
+      return { ...rest, ...digestedApp };
     });
   }
   return canonicalDigest(sanitized);

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { EngineAppDeclaration } from '../../src/engine/index.ts';
+import type { TargetApp } from '../../src/types.ts';
 import { createFakeEngine } from '../helpers/fake-engine.ts';
 import { createProject, runExisting } from '../helpers/run-project.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
@@ -38,25 +38,25 @@ function service(name: string) {
 /** Two targets sharing an app and a third with processes that must stay stopped. */
 function targets(port: number) {
   const url = `http://127.0.0.1:${port}`;
-  const app: EngineAppDeclaration = {
+  const app: TargetApp = {
     url,
     services: [service('first'), service('second')],
     command: { executable: process.execPath, args: ['server.cjs', String(port)] },
   };
+  const engine = () => createFakeEngine({ app: { url } }).engine;
   return [
     {
       name: 'unused',
       platform: 'fake',
-      engine: createFakeEngine({
-        app: {
-          url,
-          services: [service('first'), service('unused-service')],
-          command: { executable: process.execPath, args: ['service.cjs', 'unused-command'] },
-        },
-      }).engine,
+      engine: engine(),
+      app: {
+        url,
+        services: [service('first'), service('unused-service')],
+        command: { executable: process.execPath, args: ['service.cjs', 'unused-command'] },
+      },
     },
-    { name: 'selected-a', platform: 'fake', engine: createFakeEngine({ app }).engine },
-    { name: 'selected-b', platform: 'fake', engine: createFakeEngine({ app }).engine },
+    { name: 'selected-a', platform: 'fake', engine: engine(), app },
+    { name: 'selected-b', platform: 'fake', engine: engine(), app },
   ];
 }
 

@@ -7,10 +7,8 @@ export default {
   targets: [
     {
       name: 'web',
-      engine: web({
-        url: 'http://127.0.0.1:4271',
-        command: { executable: 'node', args: ['app/server.mjs'], env: { PORT: '4271' } },
-      }),
+      engine: web({ url: 'http://127.0.0.1:4271' }),
+      app: { command: { executable: 'node', args: ['app/server.mjs'], env: { PORT: '4271' } } },
     },
   ],
   credentials: {

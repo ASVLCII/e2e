@@ -136,8 +136,9 @@ targeted agent action is bounded by the smaller of `actionTimeout` and 15 s.
 
 ```ts
 /**
- * One named test target. The engine declares its app and capabilities.
- * Without an engine, the target supports agent tools only.
+ * One named test target. The engine declares its capabilities and the
+ * defaults it knows about the app; `app` declares the rest. Without an
+ * engine, the target supports agent tools only.
  */
 export interface Target {
   /** Label in reports and for `--target`; defaults to the platform. */
@@ -149,6 +150,8 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
+  /** The app under test: its URL, identity, and the processes that serve it. */
+  app?: TargetApp;
 }
 ```
 
@@ -164,13 +167,44 @@ selection fails with `COLLECTION_ERROR`.
 
 ## The app under test
 
-The engine declares the app it drives: the browser engine as options of
-`web(...)`, the device engine from the app it pins. The runner
-resolves it at config load.
+The target declares the app it drives in `app`, over the defaults its engine
+brought: `web({ url })` names the URL, `mobile({ app })` the identity. Every
+field of `app` overrides the engine's; the processes (`command`, `readyUrl`,
+`services`) are the target's alone. The runner merges and resolves the
+declaration at config load.
 
 ```ts
 /**
- * App details declared by an engine and resolved once per target.
+ * The app one target drives, declared beside its engine. Every field
+ * overrides the default the engine declared; the processes are the target's
+ * alone. A target whose engine declares no `url` cannot declare one either.
+ */
+export interface TargetApp extends EngineAppDeclaration {
+  /**
+   * Process the runner starts before the first test and stops on every exit
+   * path (a dev server, Metro for a debug build). Structured, never
+   * shell-interpreted; the child inherits only `PATH`, `HOME`, the
+   * temp-directory variables, and `command.env`. Targets declaring the same
+   * command share one process, probed at the first declaring target's
+   * `readyUrl`. A release build has no command.
+   */
+  command?: CommandConfig;
+  /** URL polled until `command` is ready (a 200-499 status); defaults to `url`, and is required without one. */
+  readyUrl?: string;
+  /**
+   * Dependency processes this target needs before its command can boot,
+   * started in declaration order before any app command and torn down in
+   * reverse after it. Valid without `command`: the app may already be
+   * running, or be one of the services itself. Services declared identically
+   * by several targets start once; shared services must be declared in one
+   * order, and an explicit `name` must mean one process across the run.
+   */
+  services?: readonly ServiceConfig[];
+}
+
+/**
+ * The defaults an engine knows about the app it drives; the target's `app`
+ * overrides every field.
  */
 export interface EngineAppDeclaration {
   /**
@@ -179,8 +213,9 @@ export interface EngineAppDeclaration {
    * fragment; a missing scheme becomes `https://`, or `http://` for a
    * loopback host. Plain HTTP is accepted for loopback hosts only. A URL on
    * `127.0.0.1` or `[::1]` with port 0 asks the run for a free port,
-   * substituted wherever the declaration used it and handed to `command` and
-   * `services` as `{port}`.
+   * substituted wherever the declaration used it and handed to the target's
+   * `command` and `services` as `{port}`. A target may override the URL only
+   * when its engine declares one: an engine without a URL cannot open one.
    */
   readonly url?: string;
   /**
@@ -196,32 +231,36 @@ export interface EngineAppDeclaration {
    * apps must have different identities to prevent replay across them.
    */
   readonly identity?: string;
-  /**
-   * Process the runner starts before the first test and stops on every exit
-   * path (a dev server). Structured, never shell-interpreted; the child
-   * inherits only `PATH`, `HOME`, the temp-directory variables, and
-   * `command.env`. Targets declaring the same command share one process,
-   * probed at the first declaring target's `readyUrl`.
-   */
-  readonly command?: CommandConfig;
-  /** URL polled until `command` is ready (a 200-499 status); defaults to `url`. */
-  readonly readyUrl?: string;
-  /**
-   * Dependency processes the app needs before it can boot (a database
-   * container, a migration step), started in declaration order before any
-   * app command and torn down in reverse after it. Valid without `command`:
-   * the app may already be running, or be one of the services itself.
-   * Services declared identically by several targets start once; shared
-   * services must be declared in one order, and an explicit `name` must mean
-   * one process across the run.
-   */
-  readonly services?: readonly ServiceConfig[];
 }
 ```
 
+```ts title="A browser and a debug build on one Metro"
+targets: [
+  {
+    name: 'web',
+    engine: web({ url: 'http://localhost:8081' }),
+  },
+  {
+    name: 'ios',
+    engine: mobile({ platform: 'ios', app: 'dev.example.app' }),
+    app: {
+      command: { executable: 'npx', args: ['expo', 'start'] },
+      readyUrl: 'http://127.0.0.1:8081/status',
+    },
+  },
+],
+```
+
+Commands start before any test on any target, so the browser finds Metro
+serving the web bundle. A device target has no `url` (its engine opens the
+pinned app, not an address), so its command is probed through `readyUrl`; a
+release build declares no `command` at all.
+
 Port `0` on any host other than `127.0.0.1` or `[::1]`, `localhost`
 included, is `INVALID_APP_URL`. A `command` with neither `url` nor `readyUrl`
-is `APP_URL_REQUIRED` at config load.
+is `APP_URL_REQUIRED` at config load. `app.url` on a target whose engine
+declares no URL, `app` on a target without an engine, and a key the shape
+does not know are `INVALID_CONFIG`.
 
 ### The app's site
 
@@ -241,10 +280,10 @@ the base URL, the default `readyUrl`, and the report. The command must take
 the port through `{port}` in `args` or `env`.
 
 ```ts title="e2e.config.ts"
-engine: web({
-  url: 'http://127.0.0.1:0',
-  command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } },
-}),
+{
+  engine: web({ url: 'http://127.0.0.1:0' }),
+  app: { command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } } },
+},
 ```
 
 `localhost:0` is `INVALID_APP_URL`: it may resolve to an address other than

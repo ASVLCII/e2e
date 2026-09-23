@@ -1,26 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import { assignPorts, resolveConfig, type PortAssignments } from '../../src/config/resolve.ts';
-import { defineEngine, type EngineAppDeclaration } from '../../src/engine/index.ts';
+import { defineEngine } from '../../src/engine/index.ts';
+import { obj } from '../../src/internal/objects.ts';
+import type { TargetApp } from '../../src/types.ts';
 import { allocateAppPorts, assignedPorts } from '../../src/run/app-ports.ts';
 import { snapshot } from '../helpers/snapshot.ts';
 
 const ROOT = '/tmp/e2e-app-ports';
 
-/** Resolves one web target per declaration, named after its key, with the given port assignments. */
-function configOf(apps: Readonly<Record<string, EngineAppDeclaration>>, ports?: PortAssignments) {
+/** Resolves one web target per declaration, named after its key, with the given port assignments; the engine brings the URL, the target the rest. */
+function configOf(apps: Readonly<Record<string, TargetApp>>, ports?: PortAssignments) {
   return resolveConfig(
     {
       targets: Object.entries(apps).map(([name, app]) => ({
         name,
         platform: 'web',
-        engine: defineEngine({ name: 'fake', version: '1.0.0', spiVersion: 1, observe: async () => snapshot([]), app }),
+        engine: defineEngine({
+          name: 'fake',
+          version: '1.0.0',
+          spiVersion: 1,
+          observe: async () => snapshot([]),
+          app: obj({ url: app.url }),
+        }),
+        app,
       })),
     },
     { projectRoot: ROOT, env: {} as NodeJS.ProcessEnv, ...(ports === undefined ? {} : { ports }) },
   );
 }
 
-function appOf(app: EngineAppDeclaration, port?: number) {
+function appOf(app: TargetApp, port?: number) {
   return configOf({ web: app }, port === undefined ? undefined : { web: port }).targets[0]!.app;
 }
 
@@ -37,7 +46,7 @@ describe('port requests', () => {
   });
 
   it('substitutes the assigned port in the base URL and the default readyUrl, keeping the identity', () => {
-    const declaration: EngineAppDeclaration = {
+    const declaration: TargetApp = {
       url: 'http://127.0.0.1:0/shop/',
       command: { executable: 'pnpm', args: ['dev'] },
     };
@@ -104,7 +113,7 @@ describe('port requests', () => {
   it('rejects {port} on a target without a URL, naming the field', () => {
     expect(() =>
       appOf({ command: { executable: 'node', args: ['server.js', '{port}'] }, readyUrl: 'http://127.0.0.1:9/' }),
-    ).toThrow(/target "web" engine fake app\.command\.args uses \{port\}, but the target declares no url/);
+    ).toThrow(/target "web" app\.command\.args uses \{port\}, but the target declares no url/);
     expect(() => appOf({ services: [{ executable: 'node', env: { PORT: '{port}' }, waitForExit: true }] })).toThrow(
       /app\.services\[0\]\.env\.PORT uses \{port\}/,
     );

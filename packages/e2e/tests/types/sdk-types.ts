@@ -34,12 +34,13 @@ import {
   type StepExecutorContext,
   type StepTurn,
   type Target,
+  type TargetApp,
   type Unique,
   type TraceCacheStore,
   type ExecutorObservation,
   type ValueExpectation,
 } from '../../src/index.ts';
-import type { EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
+import type { EngineAppDeclaration, EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
 import { createAgent, defineTool, type DefaultAgent } from '../../src/agent/public.ts';
 import type { Report } from '../../src/index.ts';
 import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/provider';
@@ -83,6 +84,16 @@ engineSnapshot.treeUnavailable satisfies true | undefined;
 ({ targets: [{ platform: 'ios' }] }) satisfies E2EConfig;
 // A target inherits its platform from the engine; the resolver rejects one with neither.
 ({ targets: [{ engine }] }) satisfies E2EConfig;
+// The app under test is the target's: processes live beside the engine, never inside it.
+({ targets: [{ engine, app: { command: { executable: 'pnpm', args: ['dev'] }, readyUrl: 'http://127.0.0.1:3000/' } }] }) satisfies E2EConfig;
+({ url: 'http://127.0.0.1:0', services: [{ executable: 'docker', args: ['compose', 'up'], waitForExit: true }] }) satisfies TargetApp;
+({ url: 'http://127.0.0.1:3000', identity: 'shop', environment: 'staging' }) satisfies EngineAppDeclaration;
+// @ts-expect-error an engine declares no process; command is the target's
+({ command: { executable: 'pnpm' } }) satisfies EngineAppDeclaration;
+// @ts-expect-error services are the target's too
+({ services: [] }) satisfies EngineAppDeclaration;
+// @ts-expect-error a target carries the app under `app`, not at its top level
+({ targets: [{ engine, command: { executable: 'pnpm' } }] }) satisfies E2EConfig;
 declare const model: ModelInstance;
 // A model is the live AI SDK object: every LanguageModelV2 through V4 assigns, and so does a subscription constructor.
 declare const modelV2: LanguageModelV2;

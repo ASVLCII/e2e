@@ -1,6 +1,6 @@
 /**
- * Per-target app resolution: what an engine declares
- * about the app it drives, validated where an error can name the target.
+ * Per-target app resolution: the target's `app` declaration over the defaults
+ * its engine declares, validated where an error can name the target.
  */
 
 import path from 'node:path';
@@ -17,7 +17,7 @@ import {
   withPort,
   type NormalizedBaseUrl,
 } from '../internal/urls.ts';
-import type { CommandConfig, ServiceConfig } from '../types.ts';
+import type { CommandConfig, ServiceConfig, TargetApp } from '../types.ts';
 import { httpUrl, positiveInt } from './validate.ts';
 
 /**
@@ -52,10 +52,10 @@ export interface PortRequest {
 }
 
 /**
- * The app one target drives, as the harness resolved the engine's `app`
+ * The app one target drives, as the harness resolved the merged `app`
  * declaration. Navigation policy, cache and session identity, the report's
- * target record, and the app processes all read from here; a target without a
- * engine, or whose engine declares nothing, gets the empty resolution.
+ * target record, and the app processes all read from here; a target without
+ * an engine, or that declares nothing, gets the empty resolution.
  */
 export interface ResolvedApp {
   /** Normalized base URL; undefined for a surface without addressable locations. */
@@ -84,11 +84,54 @@ export interface ResolvedApp {
 
 const ENVIRONMENTS = new Set(['test', 'staging', 'production']);
 
+const TARGET_APP_KEYS: ReadonlySet<string> = new Set(['url', 'environment', 'identity', 'command', 'readyUrl', 'services']);
+
 /**
- * Resolves one target's app from its engine's `app` declaration. Every fact
- * is optional: a URL normalizes like any base URL, a command needs something
- * to poll, services need one readiness contract each, and the identity
- * defaults to where the app is served when the engine gives none.
+ * The declaration `resolveTargetApp` reads: the target's `app` over the
+ * defaults its engine declares, field by field. A target without an engine
+ * has nothing to drive an app, so any `app` there is a mistake; a target
+ * whose engine declares no `url` cannot introduce one, since only the engine
+ * that brought a URL can open it (a device engine launches a pinned app).
+ */
+export function mergeAppDeclaration(
+  targetName: string,
+  engine: EngineHandle | undefined,
+  declared: TargetApp | undefined,
+): TargetApp {
+  const defaults: EngineAppDeclaration = engine?.app ?? {};
+  if (declared === undefined) return defaults;
+  const where = `target "${targetName}"`;
+  if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} app must be an object`);
+  }
+  if (engine === undefined) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${where} declares app without an engine; only an engine can drive an app, so name one: engine: web({ url }) or mobile({ platform, app })`,
+    );
+  }
+  for (const key of Object.keys(declared)) {
+    if (!TARGET_APP_KEYS.has(key)) {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `${where} app has unknown key "${key}"; app is { url?, environment?, identity?, command?, readyUrl?, services? }`,
+      );
+    }
+  }
+  if (declared.url !== undefined && defaults.url === undefined) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${where} declares app.url, but its engine ${engine.name} declares no url and cannot open one; probe a process with app.readyUrl instead, or give the engine the URL`,
+    );
+  }
+  return { ...defaults, ...obj(declared) };
+}
+
+/**
+ * Resolves one target's app from the merged declaration (`mergeAppDeclaration`).
+ * Every fact is optional: a URL normalizes like any base URL, a command needs
+ * something to poll, services need one readiness contract each, and the
+ * identity defaults to where the app is served when nothing gives one.
  * `projectRoot` anchors every command's `log` path. `port` is the free port
  * the run assigned to a URL declared with port 0: it replaces the 0 in the
  * base URL and the default readiness probe. The default identity keeps the
@@ -98,12 +141,11 @@ const ENVIRONMENTS = new Set(['test', 'staging', 'production']);
  */
 export function resolveTargetApp(
   targetName: string,
-  engine: EngineHandle | undefined,
+  declared: TargetApp,
   projectRoot: string,
   port?: number,
 ): ResolvedApp {
-  const declared: EngineAppDeclaration = engine?.app ?? {};
-  const where = `target "${targetName}" engine ${engine?.name ?? 'none'}`;
+  const where = `target "${targetName}"`;
   const declaredBase = declared.url === undefined ? undefined : normalizeBaseUrl(declared.url);
   const portRequest = declaredBase === undefined ? undefined : freePortRequest(declaredBase, port);
   const base =
@@ -286,7 +328,7 @@ function serviceName(service: ServiceConfig, position: string, taken: Set<string
  * and teardown; the default leaves values as written.
  */
 export function resolveServices(
-  raw: EngineAppDeclaration['services'],
+  raw: TargetApp['services'],
   projectRoot: string,
   prefix = 'app.services',
   expand: PortExpander = (value) => value,
@@ -343,12 +385,12 @@ function digestCommand<T extends CommandConfig>(command: T): Omit<T, 'env'> & Di
 }
 
 /**
- * The declarative part of an engine's `app` manifest as it enters the config
- * digest: hooks stripped, and every `command.env`, service env, and service
- * teardown env value replaced by `{ envName: key }`, so no environment value
- * contributes to the digest.
+ * An `app` declaration (a target's or an engine's defaults) as it enters the
+ * config digest: every `command.env`, service env, and service teardown env
+ * value replaced by `{ envName: key }`, so no environment value contributes
+ * to the digest.
  */
-export function digestAppDeclaration(app: EngineAppDeclaration) {
+export function digestAppDeclaration(app: TargetApp) {
   const { url, environment, identity, command, readyUrl, services } = app;
   return obj({
     url,

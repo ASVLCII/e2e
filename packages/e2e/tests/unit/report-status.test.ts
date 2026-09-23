@@ -19,6 +19,7 @@ const target = {
   index: 0,
   platform: 'web',
   engine: undefined,
+  appDeclaration: {},
   app: { base: undefined, site: undefined, environment: 'test', identity: undefined, command: undefined, readyUrl: undefined, services: [] },
 } as unknown as ResolvedTarget;
 

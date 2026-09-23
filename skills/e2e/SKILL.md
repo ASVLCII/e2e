@@ -29,10 +29,8 @@ import { gateway } from 'ai';
 export default {
   targets: [
     {
-      engine: web({
-        url: 'http://127.0.0.1:3000',
-        command: { executable: 'pnpm', args: ['dev'], log: '.e2e/logs/app.log' },
-      }),
+      engine: web({ url: 'http://127.0.0.1:3000' }),
+      app: { command: { executable: 'pnpm', args: ['dev'], log: '.e2e/logs/app.log' } },
     },
   ],
   // The model behind every agent.* step: an AI SDK instance; gateway() from 'ai' reads AI_GATEWAY_API_KEY or a Vercel OIDC token.
@@ -104,9 +102,11 @@ one. Without them, the installed CLI prints the same text:
 - Run the CLI as `npx e2e ...` (or `pnpm exec e2e ...`).
 - The config is `export default { ... } satisfies E2EConfig` with
   `import type { E2EConfig } from 'e2e'`. `targets` is required and
-  UI targets name an engine. The engine declares the app, for example
-  `web({ url, command })`. A tools-only target can omit the engine
-  and set `platform` explicitly. There is no top-level `app` key or `defineConfig`.
+  UI targets name an engine and declare the app beside it: the engine
+  brings the URL (`web({ url })`), the target's `app` the processes
+  (`app: { command, readyUrl, services }`). A tools-only target can omit
+  the engine and set `platform` explicitly. There is no top-level `app`
+  key or `defineConfig`.
 - Import `test`, `expect`, `credentials`, and `secrets` from `e2e`. A test that
   uses the `web` fixture imports `test` from `@e2edev/web` instead: the
   same runtime `test`, typed with `web`.

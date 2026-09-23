@@ -384,14 +384,14 @@ function joinAgentContext(
   return parts.length === 0 ? undefined : parts.join('\n');
 }
 
-/** Navigation needs an app URL, and only the target's engine can declare one. */
+/** Navigation needs an app URL: the target's `app.url`, or the one its engine declared. */
 function requireAppUrl(target: ResolvedTarget): asserts target is ResolvedTarget & {
   app: { base: NonNullable<ResolvedTarget['app']['base']> };
 } {
   if (target.app.base !== undefined) return;
   throw new ConfigurationError(
     'APP_URL_REQUIRED',
-    `navigation needs an app URL: the engine of target "${target.name}" declares none (${target.engine?.name ?? 'no engine'})`,
+    `navigation needs an app URL: target "${target.name}" declares none, and neither does its engine (${target.engine?.name ?? 'no engine'})`,
   );
 }
 

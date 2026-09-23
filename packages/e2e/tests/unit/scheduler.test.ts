@@ -49,6 +49,7 @@ function makeTarget(name: string, index: number, engine?: EngineHandle): Resolve
     index,
     platform: 'web',
     engine,
+    appDeclaration: {},
     app: EMPTY_APP,
   };
 }

@@ -27,11 +27,9 @@ export function getEnginePresets() {
       dependencies: { ...siblingDependency('@e2edev/web'), playwright: playwrightRange(SIBLING_VERSIONS?.['playwright']) },
       imports: ["import { web } from '@e2edev/web';"],
       config: `  targets: [{
-    engine: web({
-      url: process.env.APP_URL ?? 'http://localhost:3000',
-      // Or let the runner start the dev server:
-      // command: { executable: 'npm', args: ['run', 'dev'] },
-    }),
+    engine: web({ url: process.env.APP_URL ?? 'http://localhost:3000' }),
+    // Or let the runner start the dev server:
+    // app: { command: { executable: 'npm', args: ['run', 'dev'] } },
   }],`,
       example: `import { test } from '@e2edev/web';
 import { expect } from 'e2e';

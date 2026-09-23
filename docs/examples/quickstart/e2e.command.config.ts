@@ -11,14 +11,14 @@ export default {
     }),
   },
   targets: [{
-    engine: web({
-      url: process.env.APP_URL ?? 'http://localhost:3000',
+    engine: web({ url: process.env.APP_URL ?? 'http://localhost:3000' }),
+    app: {
       command: {
         executable: 'npm',
         args: ['run', 'dev'],
         reuseExisting: true,
         log: '.e2e/logs/app.log',
       },
-    }),
+    },
   }],
 } satisfies E2EConfig;

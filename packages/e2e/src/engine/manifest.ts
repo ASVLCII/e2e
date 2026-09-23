@@ -47,18 +47,15 @@ const NESTED_HOOKS = {
 } as const;
 
 /**
- * Members of the `app` declaration: facts about the app under test, copied
- * through as data. Their values are validated when the config resolves the
- * target, where an error can name it.
+ * Members of the `app` declaration: the defaults an engine knows about the
+ * app under test, copied through as data. Their values are validated when
+ * the config resolves the target, where an error can name it. The processes
+ * (`command`, `services`) are the target's and rejected here by name.
  */
-const APP_DECLARATION_KEYS = [
-  'url',
-  'environment',
-  'identity',
-  'command',
-  'readyUrl',
-  'services',
-] as const satisfies readonly (keyof EngineAppDeclaration)[];
+const APP_DECLARATION_KEYS = ['url', 'environment', 'identity'] as const satisfies readonly (keyof EngineAppDeclaration)[];
+
+/** Process members an engine used to declare; the error names their new home. */
+const PROCESS_KEYS: ReadonlySet<string> = new Set(['command', 'readyUrl', 'services']);
 
 const FUNCTION_MEMBERS = [
   'observe',
@@ -124,7 +121,10 @@ function appDeclaration(name: string, value: unknown): Record<string, unknown> {
   const declaration: Record<string, unknown> = {};
   for (const [member, fact] of Object.entries(value)) {
     if (!keys.includes(member)) {
-      throw invalid(name, `app has unknown key "${member}"; expected one of ${keys.join(', ')}. Steering hooks belong on session`);
+      const where = PROCESS_KEYS.has(member)
+        ? `; ${member} is the target's: targets: [{ engine, app: { ${member} } }]`
+        : '. Steering hooks belong on session';
+      throw invalid(name, `app has unknown key "${member}"; expected one of ${keys.join(', ')}${where}`);
     }
     if (typeof fact === 'function') throw invalid(name, `app.${member} is a declaration, not a hook`);
     if (fact !== undefined) declaration[member] = fact;

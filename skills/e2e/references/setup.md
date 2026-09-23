@@ -87,10 +87,8 @@ export default {
   tests: 'tests/**/*.e2e.ts',
   targets: [
     {
-      engine: web({
-        url: 'http://127.0.0.1:3000',
-        command: { executable: 'pnpm', args: ['dev'], log: '.e2e/logs/app.log' },
-      }),
+      engine: web({ url: 'http://127.0.0.1:3000' }),
+      app: { command: { executable: 'pnpm', args: ['dev'], log: '.e2e/logs/app.log' } },
     },
   ],
   // The model behind every agent.* step: an AI SDK instance; gateway() from 'ai' reads AI_GATEWAY_API_KEY or a Vercel OIDC token.
@@ -125,17 +123,27 @@ export default {
 
 ## The app under test
 
-The engine declares the app. The runner starts its processes and uses its
-identity for cache and session keys. `web()` accepts:
+The target declares the app in `app`, over the defaults its engine brings
+(`web({ url })` names the URL, `mobile({ app })` the identity). The runner
+starts the target's processes and uses the identity for cache and session
+keys. `app` accepts:
 
-| Option | Meaning |
+| Field | Meaning |
 | --- | --- |
-| `url` | Base URL for `app.open()` and relative navigation. A missing scheme becomes `https://`, or `http://` for a loopback host. Required once a test navigates. Port `0` on `127.0.0.1` or `[::1]` asks the run for a free port. |
-| `command` | The process that serves `url`. `{port}` in `args` and `env` expands to the port of `url`. See below. |
-| `readyUrl` | Readiness probe when it differs from `url`. `{port}` expands here too. |
+| `url` | Base URL for `app.open()` and relative navigation, overriding the engine's. Only a target whose engine declares a URL may set one; a device engine has none. Port `0` on `127.0.0.1` or `[::1]` asks the run for a free port. |
+| `command` | The process that serves the app. `{port}` in `args` and `env` expands to the port of `url`. See below. |
+| `readyUrl` | Readiness probe when it differs from `url`; required with `command` on a target without `url` (Metro for a debug build). `{port}` expands here too. |
 | `services` | Dependency processes started before `command`, in order. |
 | `environment` | `'test'`, `'staging'`, `'production'`. Inferred from the host; a label for the report and the cache key. |
 | `identity` | Stable app identity for cache and session keys when the origin changes per deploy (preview URLs). |
+
+`web({ command })` is rejected: the processes are never engine options.
+`web()` itself accepts `url`, `environment`, `identity`, and the browser
+options:
+
+| Option | Meaning |
+| --- | --- |
+| `url` | Base URL of the app; a missing scheme becomes `https://`, or `http://` for a loopback host. Required once a test navigates. |
 | `browser` | `'chromium'` (default), `'firefox'`, `'webkit'`, or a `BrowserProvider` object that leases hosted browsers over CDP: one per worker slot for the run (`scope: 'worker'`, the default, acquired at `prepare` and released at `finish`) or a fresh one per attempt (`scope: 'attempt'`, released at `endAttempt`, the same limits as `reconnectEndpoint`). A provider implies chromium and excludes `connect`. |
 | `viewport` | `{ width, height }`, default 1280x720; `null` follows the browser window (a hosted browser's live view, a headed run). |
 | `connect` | `{ cdpEndpoint }` attaches to a remote Chromium over CDP. Adding `reconnectEndpoint` uses a dedicated persistent default context, provisions a fresh browser per attempt, and reconnects only to the original browser and page. |
@@ -177,8 +185,8 @@ Prefer `command` over a hand-started dev server: the run is then
 self-contained locally and in CI.
 
 ```ts
-engine: web({
-  url: 'http://127.0.0.1:3000',
+engine: web({ url: 'http://127.0.0.1:3000' }),
+app: {
   services: [
     {
       name: 'postgres',
@@ -196,7 +204,7 @@ engine: web({
     startupTimeout: 120_000,
     log: '.e2e/logs/app.log',
   },
-}),
+},
 ```
 
 How it behaves:
@@ -225,7 +233,7 @@ How it behaves:
   run for a free port, so two checkouts can run at once. The command must take
   it through `{port}` in `args` or `env`; the token also expands in `readyUrl`
   and the services:
-  `command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } }`.
+  `app: { command: { executable: 'pnpm', args: ['dev', '--port', '{port}'], env: { PORT: '{port}' } } }`.
   Tests read the allocated URL from `app.baseUrl`; the cache identity keeps
   the declared `:0`. Services keep their own ports. A port another process
   grabs between allocation and spawn fails the start with `APP_UNREACHABLE`;

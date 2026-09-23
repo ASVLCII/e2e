@@ -58,6 +58,14 @@ export function web(options: WebOptions = {}): EngineHandle {
       `web({ connect }) requires the chromium browser; CDP attach is chromium-only, got "${options.browser}"`,
     );
   }
+  for (const key of ['command', 'readyUrl', 'services'] as const) {
+    if (key in options) {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `web({ ${key} }) moved: the processes that serve the app are the target's, so declare targets: [{ engine: web({ url }), app: { ${key} } }]`,
+      );
+    }
+  }
   if ('allowedOrigins' in options) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
@@ -211,8 +219,8 @@ function validateTestIdAttribute(attribute: unknown): void {
 
 /** The app-declaration half of the options, so browser knobs never reach the manifest. */
 function declaredApp(options: WebOptions): EngineAppDeclaration {
-  const { url, environment, identity, command, readyUrl, services } = options;
-  return obj({ url, environment, identity, command, readyUrl, services });
+  const { url, environment, identity } = options;
+  return obj({ url, environment, identity });
 }
 
 /** This package's published version, read through require resolution. */

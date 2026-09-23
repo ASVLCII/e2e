@@ -24,9 +24,10 @@ export default {
 
 ```ts
 /**
- * Options of the browser engine: the app it drives (`url`, `command`,
- * `services`, `environment`, `identity`, `readyUrl` - the
- * engine contract's app declaration) plus the browser itself.
+ * Options of the browser engine: the app defaults it declares (`url`,
+ * `environment`, `identity` - the engine contract's app declaration) plus
+ * the browser itself. The processes that serve the app are the target's
+ * `app`, never options here.
  */
 export interface WebOptions extends EngineAppDeclaration {
   /**
@@ -70,9 +71,10 @@ export interface WebOptions extends EngineAppDeclaration {
 }
 ```
 
-The app declaration fields (`url`, `command`, `readyUrl`, `services`,
-`environment`, `identity`) are documented under
-[the app under test](/reference/config#the-app-under-test). `connect` needs
+The app declaration fields (`url`, `environment`, `identity`) are documented
+under [the app under test](/reference/config#the-app-under-test); `command`,
+`readyUrl`, and `services` belong to the target's `app`, and `web()` rejects
+them with a pointer there. `connect` needs
 chromium; `cdpEndpoint(signal)` is called once per worker and again at an
 attempt start after a disconnect. A `browser` provider object leases hosted
 browsers and releases them when the run or the attempt ends; see

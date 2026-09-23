@@ -135,7 +135,7 @@ export interface Engine {
   readonly state?: EngineStateCapability;
   /** capability: artifacts - screenshots and traces under the attempt directory. */
   readonly artifacts?: EngineArtifacts;
-  /** The app under test, as data: url, identity, environment, command, services. */
+  /** The app under test, as the defaults this engine knows: url, identity, environment. */
   readonly app?: EngineAppDeclaration;
   /** Steering hooks: open, back, restart, reset. */
   readonly session?: EngineSession;
@@ -711,12 +711,19 @@ export function parseKey(key: string): ParsedKey | undefined;
 
 ## App
 
-`app` declares what the engine knows about the app under test. Every member
-is data; a function here is `INVALID_CONFIG`.
+`app` declares the defaults the engine knows about the app under test: the
+URL it was given, the identity of the app it pins. The target's own `app`
+overrides every field, and the processes (`command`, `readyUrl`, `services`)
+are the target's alone; an engine declaring one is `INVALID_CONFIG`, as is a
+function anywhere in `app`. A target may declare `app.url` only when its
+engine declares one: the engine that brought a URL is the one that can open
+it, so an engine without a URL (a device engine launching a pinned app) never
+sees a target-level URL either.
 
 ```ts
 /**
- * App details declared by an engine and resolved once per target.
+ * The defaults an engine knows about the app it drives; the target's `app`
+ * overrides every field.
  */
 export interface EngineAppDeclaration {
   /**
@@ -725,8 +732,9 @@ export interface EngineAppDeclaration {
    * fragment; a missing scheme becomes `https://`, or `http://` for a
    * loopback host. Plain HTTP is accepted for loopback hosts only. A URL on
    * `127.0.0.1` or `[::1]` with port 0 asks the run for a free port,
-   * substituted wherever the declaration used it and handed to `command` and
-   * `services` as `{port}`.
+   * substituted wherever the declaration used it and handed to the target's
+   * `command` and `services` as `{port}`. A target may override the URL only
+   * when its engine declares one: an engine without a URL cannot open one.
    */
   readonly url?: string;
   /**
@@ -742,26 +750,6 @@ export interface EngineAppDeclaration {
    * apps must have different identities to prevent replay across them.
    */
   readonly identity?: string;
-  /**
-   * Process the runner starts before the first test and stops on every exit
-   * path (a dev server). Structured, never shell-interpreted; the child
-   * inherits only `PATH`, `HOME`, the temp-directory variables, and
-   * `command.env`. Targets declaring the same command share one process,
-   * probed at the first declaring target's `readyUrl`.
-   */
-  readonly command?: CommandConfig;
-  /** URL polled until `command` is ready (a 200-499 status); defaults to `url`. */
-  readonly readyUrl?: string;
-  /**
-   * Dependency processes the app needs before it can boot (a database
-   * container, a migration step), started in declaration order before any
-   * app command and torn down in reverse after it. Valid without `command`:
-   * the app may already be running, or be one of the services itself.
-   * Services declared identically by several targets start once; shared
-   * services must be declared in one order, and an explicit `name` must mean
-   * one process across the run.
-   */
-  readonly services?: readonly ServiceConfig[];
 }
 ```
 
