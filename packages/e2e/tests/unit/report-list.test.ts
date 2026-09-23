@@ -121,7 +121,7 @@ function serialGroup(
 }
 
 function runStarted(
-  overrides: { ci?: boolean; targets?: string[]; projectRoot?: string; model?: string } = {},
+  overrides: { ci?: boolean; targets?: string[]; projectRoot?: string; model?: string; judge?: string } = {},
 ): RunEventFact {
   const projectRoot = overrides.projectRoot ?? '/project';
   return {
@@ -133,6 +133,7 @@ function runStarted(
     ci: overrides.ci ?? false,
     targets: overrides.targets ?? ['chromium'],
     ...(overrides.model === undefined ? {} : { model: overrides.model }),
+    ...(overrides.judge === undefined ? {} : { judge: overrides.judge }),
   };
 }
 
@@ -740,7 +741,7 @@ describe('ListReporter', () => {
       }
     });
 
-    it('reports model usage per file and for the run, naming the configured model', () => {
+    it('reports model usage per file and for the run, naming the one model the steps reported without a count', () => {
       const { lines, output } = capture();
       const reporter = plainReporter(output);
       reporter.handle(runStarted({ model: 'openai/gpt-5.6-luna-fast' }));
@@ -756,7 +757,7 @@ describe('ListReporter', () => {
         durationMs: 10,
         events: [],
         artifacts: [],
-        model: { calls: 3, inputTokens: 12_000, outputTokens: 400, estimatedCostUsd: 0.0123 },
+        model: { provider: 'openai', model: 'gpt-5.6-luna-fast', calls: 3, inputTokens: 12_000, outputTokens: 400, estimatedCostUsd: 0.0123 },
       } as unknown as AttemptRecord['steps'][number];
       reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [step] })] })));
       reporter.handle(runFinished({ reportPath: 'r.json' }));
@@ -765,7 +766,7 @@ describe('ListReporter', () => {
       expect(lines).toContain('         AI  12.4k tokens · $0.0123 · 3 model calls · openai/gpt-5.6-luna-fast');
     });
 
-    it('leaves the model off the AI row when none is configured', () => {
+    it("names the step's model on the AI row when none is configured", () => {
       const { lines, output } = capture();
       const reporter = plainReporter(output);
       reporter.handle(runStarted());
@@ -781,11 +782,89 @@ describe('ListReporter', () => {
         durationMs: 10,
         events: [],
         artifacts: [],
-        model: { calls: 3, inputTokens: 12_000, outputTokens: 400, estimatedCostUsd: 0.0123 },
+        model: { provider: 'typesafe-ai', model: 'jev', calls: 3, inputTokens: 12_000, outputTokens: 400, estimatedCostUsd: 0.0123 },
       } as unknown as AttemptRecord['steps'][number];
       reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [step] })] })));
       reporter.handle(runFinished({ reportPath: 'r.json' }));
-      expect(lines).toContain('         AI  12.4k tokens · $0.0123 · 3 model calls');
+      expect(lines.some((line) => line.startsWith('      model '))).toBe(false);
+      expect(lines).toContain('         AI  12.4k tokens · $0.0123 · 3 model calls · typesafe-ai/jev');
+    });
+
+    it('names the models the steps reported on the AI row, most calls first, while the header keeps the configuration', () => {
+      const { lines, output } = capture();
+      const reporter = plainReporter(output);
+      reporter.handle(runStarted({ model: 'gateway/openai/gpt-5.6-luna', judge: 'anthropic/claude-sonnet-4.5' }));
+      reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 2 }]));
+      const step = (api: string, model: { provider: string; model: string; calls: number; inputTokens: number; outputTokens: number }) =>
+        ({
+          id: api,
+          index: 0,
+          kind: 'agent',
+          api,
+          label: 'do it',
+          status: 'passed',
+          startedAt: new Date(0).toISOString(),
+          durationMs: 10,
+          events: [],
+          artifacts: [],
+          model,
+        }) as unknown as AttemptRecord['steps'][number];
+      const acted = step('agent.act', { provider: 'typesafe-ai', model: 'jev', calls: 22, inputTokens: 10_000, outputTokens: 400 });
+      const judged = step('agent.assert', { provider: 'anthropic', model: 'claude-sonnet-4.5', calls: 1, inputTokens: 2_000, outputTokens: 0 });
+      reporter.handle(finished(result({ status: 'passed', id: 'test-1', title: ['suite', 'acts'], file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [acted] })] })));
+      reporter.handle(
+        finished(result({ status: 'passed', id: 'test-2', title: ['suite', 'judges'], declarationIndex: 1, file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [judged] })] })),
+      );
+      reporter.handle(runFinished({ reportPath: 'r.json' }));
+      expect(lines[3]).toBe('      model gateway/openai/gpt-5.6-luna · judge anthropic/claude-sonnet-4.5');
+      expect(lines).toContain('         AI  12.4k tokens · 23 model calls · typesafe-ai/jev (22 calls) · anthropic/claude-sonnet-4.5 (1 call)');
+    });
+
+    it('falls back to the configured label, never `undefined`, when a step reports calls without provenance', () => {
+      const { lines, output } = capture();
+      const reporter = plainReporter(output);
+      reporter.handle(runStarted({ model: 'openai/gpt-5.6-luna-fast' }));
+      reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 1 }]));
+      const step = {
+        id: 's',
+        index: 0,
+        kind: 'agent',
+        api: 'agent.act',
+        label: 'do it',
+        status: 'passed',
+        startedAt: new Date(0).toISOString(),
+        durationMs: 10,
+        events: [],
+        artifacts: [],
+        model: { calls: 2, inputTokens: 1_000, outputTokens: 100 },
+      } as unknown as AttemptRecord['steps'][number];
+      reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [step] })] })));
+      reporter.handle(runFinished({ reportPath: 'r.json' }));
+      expect(lines).toContain('         AI  1.1k tokens · 2 model calls · openai/gpt-5.6-luna-fast');
+      expect(lines.some((line) => line.includes('undefined'))).toBe(false);
+    });
+
+    it('prints no AI row for a run whose steps made no model call; the header alone names the configured model', () => {
+      const { lines, output } = capture();
+      const reporter = plainReporter(output);
+      reporter.handle(runStarted({ model: 'gateway/openai/gpt-5.6-luna' }));
+      reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 1 }]));
+      const step = {
+        id: 's',
+        index: 0,
+        kind: 'locator',
+        api: 'locator.tap',
+        label: 'button',
+        status: 'passed',
+        startedAt: new Date(0).toISOString(),
+        durationMs: 10,
+        events: [],
+        artifacts: [],
+      } as unknown as AttemptRecord['steps'][number];
+      reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [step] })] })));
+      reporter.handle(runFinished({ reportPath: 'r.json' }));
+      expect(lines[3]).toBe('      model gateway/openai/gpt-5.6-luna');
+      expect(lines.some((line) => line.trimStart().startsWith('AI '))).toBe(false);
     });
 
     it('tallies the trace cache under the AI row by step, leaving zero counts out', () => {
@@ -806,7 +885,7 @@ describe('ListReporter', () => {
           events: [],
           artifacts: [],
           ...(cache === undefined ? {} : { cache }),
-          model: { calls, inputTokens: 1_000, outputTokens: 100 },
+          model: { provider: 'openai', model: 'gpt-5.6-luna-fast', calls, inputTokens: 1_000, outputTokens: 100 },
         }) as unknown as AttemptRecord['steps'][number];
       const steps = [
         step('replayed-1', { mode: 'self-finalized', replayedActions: 3, totalActions: 3 }, 0),
@@ -838,7 +917,7 @@ describe('ListReporter', () => {
           events: [],
           artifacts: [],
           ...(cache === undefined ? {} : { cache }),
-          model: { calls: 3, inputTokens: 1_000, outputTokens: 100 },
+          model: { provider: 'openai', model: 'gpt-5.6-luna-fast', calls: 3, inputTokens: 1_000, outputTokens: 100 },
         } as unknown as AttemptRecord['steps'][number];
         reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts', attempts: [attempt({ steps: [step] })] })));
         reporter.handle(runFinished({ reportPath: 'r.json' }));
@@ -975,7 +1054,7 @@ describe('ListReporter', () => {
       const { lines, output } = capture();
       const reporter = plainReporter(output);
       reporter.handle(plan([{ file: 'tests/case.e2e.ts', tests: 2 }]));
-      const step = { model: { calls: 1, inputTokens: 600, outputTokens: 400 } } as never;
+      const step = { model: { provider: 'typesafe-ai', model: 'jev', calls: 1, inputTokens: 600, outputTokens: 400 } } as never;
       reporter.handle(serialGroup('g1', [
         { members: [serialMember('m1', { durationMs: 300, steps: [step] }), serialMember('m2', { status: 'failed', durationMs: 200, error: memberError })], error: memberError },
         { members: [serialMember('m1', { durationMs: 100 }), serialMember('m2', { status: 'failed', durationMs: 50, error: memberError })], error: memberError },
@@ -993,7 +1072,26 @@ describe('ListReporter', () => {
       reporter.handle(runFinished({ status: 'failed', exitCode: 1 }));
       expect(lines).toContain('ASSERTION_FAILED: plan step failed');
       // Usage is counted once, through the member lines, not again from the group.
-      expect(lines.find((line) => line.trimStart().startsWith('AI'))).toContain('1.0k tokens · 1 model calls');
+      expect(lines.find((line) => line.trimStart().startsWith('AI'))).toContain('1.0k tokens · 1 model calls · typesafe-ai/jev');
+    });
+
+    it('tallies the models serial members reported on the AI row beside an ordinary result’s', () => {
+      const { lines, output } = capture();
+      const reporter = plainReporter(output);
+      reporter.handle(runStarted({ model: 'openai/gpt-5.6-luna-fast' }));
+      reporter.handle(plan([{ file: 'tests/case.e2e.ts', tests: 3 }]));
+      const step = (provider: string, model: string, calls: number) =>
+        ({ model: { provider, model, calls, inputTokens: 500, outputTokens: 100 } }) as never;
+      reporter.handle(serialGroup('g1', [
+        { members: [serialMember('m1', { steps: [step('typesafe-ai', 'jev', 2)] }), serialMember('m2', { steps: [step('openai', 'gpt-5.6-luna-fast', 1)] })] },
+      ]));
+      reporter.handle(finished(result({ status: 'passed', id: 'm1', title: ['wizard', 'step 1'], serialGroupId: 'g1' })));
+      reporter.handle(finished(result({ status: 'passed', id: 'm2', title: ['wizard', 'step 2'], declarationIndex: 1, serialGroupId: 'g1' })));
+      reporter.handle(finished(result({ status: 'passed', id: 't3', title: ['suite', 'case'], declarationIndex: 2, attempts: [attempt({ steps: [step('typesafe-ai', 'jev', 1)] })] })));
+      reporter.handle(runFinished({ reportPath: 'r.json' }));
+      expect(lines.find((line) => line.trimStart().startsWith('AI'))).toBe(
+        '         AI  1.8k tokens · 4 model calls · typesafe-ai/jev (3 calls) · openai/gpt-5.6-luna-fast (1 call)',
+      );
     });
 
     it('falls back to the attempt error for a member the group never reached', () => {
