@@ -686,7 +686,7 @@ describe('scheduler fault handling', () => {
     expect(collected.results.map((result) => result.status)).toEqual(['skipped']);
   });
 
-  it('terminates when interrupted while a worker is still starting', async () => {
+  it('terminates when interrupted while workers are still starting, reporting each unit once and no init failure', async () => {
     const target = makeTarget('web', 0);
     const pairs = ['a', 'b'].map((name) =>
       makePair(makeTest(`tests/${name}.e2e.ts`, name), target),
@@ -707,11 +707,48 @@ describe('scheduler fault handling', () => {
     );
     clearTimeout(timer);
 
-    expect(fleet.spawned.length).toBeGreaterThan(0);
-    expect(collected.results.every((result) => result.status === 'skipped')).toBe(true);
+    expect(fleet.spawned).toHaveLength(2);
+    expect(fleet.unitsByWorker.flat()).toHaveLength(0);
+    expect(collected.results.map((result) => [result.test.title, result.status, result.skip?.reason]).toSorted()).toEqual([
+      ['a', 'skipped', 'run interrupted before execution'],
+      ['b', 'skipped', 'run interrupted before execution'],
+    ]);
+    expect(fleet.interruptSkips).toEqual([undefined, undefined]);
+    // Both workers exit before becoming ready, as many as MAX_INIT_FAILURES: exits the interrupt asked for are not init failures.
+    expect(collected.runErrors).toEqual([]);
   });
 
-  it('terminates without dispatching when interrupted before it starts', async () => {
+  it('a plain interrupt reports the queued units it cancels, so a rerun can pick them up', async () => {
+    const target = makeTarget('web', 0);
+    const pairs = ['running', 'queued', 'queued-too'].map((name) =>
+      makePair(makeTest(`tests/${name}.e2e.ts`, name), target),
+    );
+    const fleet = new FakeFleet({ hangOn: ['file::web::tests/running.e2e.ts'] });
+    const controller = new AbortController();
+    // Abort once the single worker is busy with the first unit and the rest waits in the queue.
+    const timer = setTimeout(() => controller.abort(), 20);
+
+    const collected = await run(
+      makeSelection([{ target, pairs }]),
+      makeCollection(
+        pairs.map((pair) => pair.test.file),
+        pairs,
+      ),
+      fleet,
+      { workers: 1, interruptSignal: controller.signal, interruptGraceMs: 10 },
+    );
+    clearTimeout(timer);
+
+    expect(fleet.unitsByWorker.flat().map((unit) => unit.unitId)).toEqual(['file::web::tests/running.e2e.ts']);
+    expect(collected.results.map((result) => [result.test.title, result.status, result.skip?.cause])).toEqual([
+      ['queued', 'skipped', 'infrastructure-unavailable'],
+      ['queued-too', 'skipped', 'infrastructure-unavailable'],
+      ['running', 'skipped', 'infrastructure-unavailable'],
+    ]);
+    expect(collected.runErrors).toEqual([]);
+  });
+
+  it('reports every pair once when interrupted before it starts, dispatching nothing', async () => {
     const target = makeTarget('web', 0);
     const pairs = ['a', 'b'].map((name) =>
       makePair(makeTest(`tests/${name}.e2e.ts`, name), target),
@@ -731,7 +768,41 @@ describe('scheduler fault handling', () => {
     );
 
     expect(fleet.spawned).toHaveLength(0);
-    expect(collected.results).toHaveLength(0);
+    expect(collected.results.map((result) => [result.test.title, result.status, result.skip?.reason])).toEqual([
+      ['a', 'skipped', 'run interrupted before execution'],
+      ['b', 'skipped', 'run interrupted before execution'],
+    ]);
+  });
+
+  it('reports a non-run pair once when the signal is already aborted', async () => {
+    const target = makeTarget('web', 0);
+    const skipped = makePair(makeTest('tests/a.e2e.ts', 'skipped', { id: 'skip-me' }), target, {
+      disposition: 'skip',
+      skip: { cause: 'explicit', reason: 'test.skip' },
+    });
+    const filtered = makePair(makeTest('tests/a.e2e.ts', 'filtered', { id: 'filter-me' }), target, {
+      disposition: 'filtered',
+      skip: undefined,
+    });
+    const queued = makePair(makeTest('tests/b.e2e.ts', 'queued'), target);
+    const fleet = new FakeFleet();
+    const controller = new AbortController();
+    controller.abort();
+
+    const collected = await run(
+      makeSelection([{ target, pairs: [skipped, filtered, queued] }]),
+      makeCollection(['tests/a.e2e.ts', 'tests/b.e2e.ts'], [skipped, filtered, queued]),
+      fleet,
+      { workers: 2, interruptSignal: controller.signal },
+    );
+
+    expect(fleet.spawned).toHaveLength(0);
+    expect(collected.results.map((result) => [result.test.id, result.selected, result.status, result.skip])).toEqual([
+      ['skip-me', true, 'skipped', { cause: 'explicit', reason: 'test.skip' }],
+      ['filter-me', false, 'skipped', { cause: 'filtered', reason: 'not selected' }],
+      ['tests/b.e2e.ts::queued', true, 'skipped', { cause: 'infrastructure-unavailable', reason: 'run interrupted before execution' }],
+    ]);
+    expect(collected.runErrors).toEqual([]);
   });
 
   it('reports non-run pairs without dispatching them', async () => {
