@@ -78,6 +78,25 @@ describe('explainModuleError', () => {
     expect(explainModuleError(other, importer)).toBe(other.message);
   });
 
+  it('names the removal for a dropped export without a release number, never the type-only import that fails the same way', () => {
+    const missing = (specifier: string, name: string) =>
+      new SyntaxError(`The requested module '${specifier}' does not provide an export named '${name}'`);
+    for (const name of ['BLOCKABLE_CODES', 'RUNTIME_CODES', 'buildTraceEntry', 'readTraceEntry']) {
+      const explained = explainModuleError(missing('e2e', name), importer);
+      expect(explained).toContain(`${name} was removed from e2e:`);
+      expect(explained).not.toMatch(/\d+\.\d+/);
+      expect(explained).not.toContain('import type');
+    }
+    for (const name of ['isDefinedTool', 'toolAppliesTo']) {
+      expect(explainModuleError(missing('e2e/agent', name), importer)).toContain(`${name} was removed from e2e/agent:`);
+    }
+    expect(explainModuleError(missing('e2e', 'BLOCKABLE_CODES'), importer)).toBe(
+      "The requested module 'e2e' does not provide an export named 'BLOCKABLE_CODES'; BLOCKABLE_CODES was removed from e2e: a blocked verdict carries any code the errors reference marks blocked, and the set was never usable outside the runner",
+    );
+    const unknown = missing('e2e/agent', 'somethingElse');
+    expect(explainModuleError(unknown, importer)).toBe(unknown.message);
+  });
+
   it('puts the hint on its own line after a multi-line loader message', () => {
     writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ packageManager: 'npm@11.0.0', devDependencies: { ai: '^7' } }));
     const cause = nodeError(
