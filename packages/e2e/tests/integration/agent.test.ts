@@ -10,6 +10,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFixtureApp, type FixtureApp } from '../helpers/fixture-app.ts';
 import { fakeCalls, installFakeModel, judgment, type FakeCall } from '../helpers/fake-model.ts';
+import { installFakeLoopModel, nodeIdFor } from '../helpers/fake-loop-model.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 import { resultByTitle, runProject, type FixtureProject } from '../helpers/run-project.ts';
 import type { RunOutcome } from '../helpers/run-project.ts';
@@ -49,6 +50,23 @@ test('a false judgment fails the assertion', async ({ app, agent }) => {
 test('an inconclusive judgment fails the assertion too', async ({ app, agent }) => {
   await app.open();
   await agent.assert('the order total equals the sum of the line items');
+});
+
+test('an inconclusive judgment that saw pixels is not pointed at vision', async ({ app, agent }) => {
+  await app.open();
+  await agent.assert('the order total equals the sum of the line items', { vision: true });
+});
+
+test('an inconclusive judgment after a pixel judgment names vision outright', async ({ app, agent }) => {
+  await app.open();
+  await agent.assert('the Home heading is visible', { vision: true });
+  await agent.assert('the order total equals the sum of the line items');
+});
+
+test('a waitFor whose rounds stay inconclusive times out pointing at vision', async ({ app, agent, screen }) => {
+  await app.open('/about');
+  await expect(screen.getByRole('heading')).toHaveText('About');
+  await agent.waitFor('the order total on the About page adds up', { interval: 100, timeout: 1500 });
 });
 
 test('waits without re-judging a page that has not changed', async ({
@@ -94,6 +112,9 @@ test('two judgments in the retired agent-judgment-1 shape exhaust the repair bud
 
 const FALSE_ASSERTION = 'the checkout page is visible';
 const INCONCLUSIVE_ASSERTION = 'the order total equals the sum of the line items';
+const INCONCLUSIVE_CONDITION = 'the order total on the About page adds up';
+const VISION_HINT = 'the judge saw the semantic tree only; pass vision: true when the answer is in pixels';
+const VISION_HINT_UNPROVEN = 'the judge saw the semantic tree only; if the engine captures pixels, pass vision: true when the answer is in pixels';
 const LATE_BUTTON_CONDITION = 'the Late arrival button exists';
 const NEVER_CONDITION = 'a checkout button is on the About page';
 const REPAIRED_ASSERTION = 'the Home heading is visible after a malformed first answer';
@@ -118,6 +139,9 @@ function respond(call: FakeCall): unknown {
       }
       if (call.instruction === INCONCLUSIVE_ASSERTION) {
         return judgment('inconclusive', 'no order total or line items are on this screen');
+      }
+      if (call.instruction === INCONCLUSIVE_CONDITION) {
+        return judgment('inconclusive', 'no order total is on the About page');
       }
       if (call.instruction === NEVER_CONDITION) return judgment(false, 'no checkout button here');
       if (call.instruction === LATE_BUTTON_CONDITION) {
@@ -287,6 +311,37 @@ describe('agent judgment tier', () => {
     expect(error.code).toBe('ASSERTION_INCONCLUSIVE');
     expect(error.category).toBe('test');
     expect(error.message).toContain('no order total');
+    // The judge read the tree alone on an engine that declares screenshots,
+    // but no step of this attempt has received pixels yet: the remedy the
+    // docs give is named where the failure is read, as a condition.
+    expect(error.message).toContain(VISION_HINT_UNPROVEN);
+  });
+
+  it('names vision outright once a step of the attempt has received pixels', () => {
+    const result = resultByTitle(outcome, 'an inconclusive judgment after a pixel judgment names vision outright');
+    expect(result.status).toBe('failed');
+    const attempt = result.attempts.at(-1)!;
+    expect(attempt.steps.find((step) => step.api === 'agent.assert')!.visionInput).toBe(true);
+    expect(attempt.error!.code).toBe('ASSERTION_INCONCLUSIVE');
+    expect(attempt.error!.message).toContain(VISION_HINT);
+    expect(attempt.error!.message).not.toContain('if the engine');
+  });
+
+  it('leaves the vision hint off an inconclusive judgment that already saw pixels', () => {
+    const result = resultByTitle(outcome, 'an inconclusive judgment that saw pixels is not pointed at vision');
+    expect(result.status).toBe('failed');
+    const error = result.attempts.at(-1)!.error!;
+    expect(error.code).toBe('ASSERTION_INCONCLUSIVE');
+    expect(error.message).toContain('no order total');
+    expect(error.message).not.toContain('vision: true');
+  });
+
+  it('points a waitFor timeout at vision when its last round was inconclusive', () => {
+    const result = resultByTitle(outcome, 'a waitFor whose rounds stay inconclusive times out pointing at vision');
+    expect(result.status).toBe('failed');
+    const error = result.attempts.at(-1)!.error!;
+    expect(error.code).toBe('STEP_TIMEOUT');
+    expect(error.message).toContain(`last judgment: no order total is on the About page; ${VISION_HINT_UNPROVEN}`);
   });
 
   it('routes every judgment to the judge model, never the act model', () => {
@@ -409,5 +464,64 @@ test('the judge judges createAgent assertions', async ({ app, agent }) => {
     const steps = result.attempts.at(-1)!.steps.filter((step) => step.api === 'agent.assert');
     expect(steps.map((step) => step.status)).toEqual(['passed', 'failed']);
     for (const step of steps) expect(step.model).toMatchObject({ model: 'judge', calls: 1 });
+  });
+});
+
+describe('an inconclusive judgment after a secret fill', () => {
+  const SUITE = `import { test, credentials } from 'e2e';
+
+test('the judge is not pointed at vision once a secret was filled', async ({ app, agent }) => {
+  await app.open();
+  await agent.act('sign in as the member', { params: { password: credentials.user('member').password } });
+  await agent.assert('the order total equals the sum of the line items');
+});
+`;
+  let app: FixtureApp;
+  let outcome: RunOutcome;
+  let project: FixtureProject;
+
+  beforeAll(async () => {
+    app = await startFixtureApp();
+    // The act model fills the password through type_secret; from then on the
+    // attempt is pixel-tainted, and no screenshot could reach a judge.
+    const model = installFakeLoopModel((call) => {
+      if (call.toolNames.includes('type_secret') && call.lastToolResult === '') {
+        return [{ toolName: 'type_secret', input: { target: nodeIdFor(call.prompt, /textbox "Password"/), name: 'member' } }];
+      }
+      return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'filled the password' } }];
+    });
+    const judge = installFakeModel(respond, { modelId: 'judge' });
+    const result = await runProject(
+      { 'tests/tainted.e2e.ts': SUITE },
+      {
+        appUrl: app.url,
+        config: {
+          tests: 'tests/**/*.e2e.ts',
+          agents: { default: { model, judge } },
+          credentials: { member: { username: 'ada', password: 'hunter2-secret' } },
+        },
+      },
+    );
+    outcome = result.outcome;
+    project = result.project;
+  }, 120_000);
+
+  afterAll(async () => {
+    project?.cleanup();
+    await app?.close();
+  });
+
+  it('carries the explanation alone: vision: true could add nothing while pixels are withheld', () => {
+    const result = resultByTitle(outcome, 'the judge is not pointed at vision once a secret was filled');
+    expect(result.status).toBe('failed');
+    const attempt = result.attempts.at(-1)!;
+    const filled = attempt.steps.find((step) => step.api === 'agent.act')!;
+    expect(filled.status).toBe('passed');
+    expect(filled.events.some((event) => event.kind === 'engine' && event.name === 'typeSecret' && event.status === 'passed')).toBe(true);
+    expect(attempt.steps.find((step) => step.api === 'agent.assert')!.status).toBe('failed');
+    expect(attempt.error!.code).toBe('ASSERTION_INCONCLUSIVE');
+    // The same judgment on an untainted attempt carries the hint (the suite above); here the engine
+    // declares screenshots and no pixel request was degraded, so the fill is the only gate closing it.
+    expect(attempt.error!.message).toBe('no order total or line items are on this screen');
   });
 });

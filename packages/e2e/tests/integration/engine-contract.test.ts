@@ -593,6 +593,85 @@ test('consumes session', { session: 'acct' }, async ({ app }) => {
   );
 
   it(
+    'leaves vision out of an inconclusive judgment on an engine that declares no screenshot capture',
+    async () => {
+      const fake = createFakeEngine();
+      const model = installFakeModel(() => judgment('inconclusive', 'the tree lists no state for the Submit button'));
+      const { outcome, project } = await runProject(
+        { 'tests/observe-inconclusive.e2e.ts': OBSERVE_TEST },
+        { appUrl: APP_URL, config: fakeConfig(fake, { agents: { default: { model } } }) },
+      );
+      const result = resultByTitle(outcome, 'asserts a node');
+      expect(result.status).toBe('failed');
+      const error = result.attempts.at(-1)!.error!;
+      expect(error.code).toBe('ASSERTION_INCONCLUSIVE');
+      // A retry with vision: true could only record UNSUPPORTED_CAPABILITY here.
+      expect(error.message).toBe('the tree lists no state for the Submit button');
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'words the vision hint as a condition on an engine that declares screenshots but has produced no pixels',
+    async () => {
+      // The SPI has no pixel-capture declaration: an engine with the artifacts
+      // capability may still return no pixels from observe, as this one does.
+      const fake = createFakeEngine({ artifacts: true });
+      const model = installFakeModel(() => judgment('inconclusive', 'the tree lists no state for the Submit button'));
+      const { outcome, project } = await runProject(
+        { 'tests/observe-inconclusive-artifacts.e2e.ts': OBSERVE_TEST },
+        { appUrl: APP_URL, config: fakeConfig(fake, { agents: { default: { model } } }) },
+      );
+      const error = resultByTitle(outcome, 'asserts a node').attempts.at(-1)!.error!;
+      expect(error.code).toBe('ASSERTION_INCONCLUSIVE');
+      expect(error.message).toBe(
+        'the tree lists no state for the Submit button; the judge saw the semantic tree only; if the engine captures pixels, pass vision: true when the answer is in pixels',
+      );
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'leaves vision out of an inconclusive judgment once a pixel request of the attempt was degraded',
+    async () => {
+      // The engine declares screenshots and returns no pixels: the first
+      // judgment asked for them, got the tree, and recorded the degradation.
+      // Asking again could only degrade again, so the hint would send the
+      // user down a path this attempt has already seen fail.
+      const fake = createFakeEngine({ artifacts: true });
+      const model = installFakeModel((call) =>
+        call.instruction === 'the Submit button is visible'
+          ? judgment(true, 'the Submit button is listed')
+          : judgment('inconclusive', 'the tree lists no state for the Submit button'),
+      );
+      const { outcome, project } = await runProject(
+        {
+          'tests/observe-degraded.e2e.ts': `import { test } from 'e2e';
+
+test('asserts after a degraded pixel request', async ({ app, agent }) => {
+  await app.open('/');
+  await agent.assert('the Submit button is visible', { vision: true });
+  await agent.assert('the Submit button is enabled');
+});
+`,
+        },
+        { appUrl: APP_URL, config: fakeConfig(fake, { agents: { default: { model } } }) },
+      );
+      const attempt = resultByTitle(outcome, 'asserts after a degraded pixel request').attempts.at(-1)!;
+      const [first, second] = attempt.steps.filter((step) => step.api === 'agent.assert');
+      expect(first!.visionDegraded).toBe('UNSUPPORTED_CAPABILITY');
+      expect(first!.visionInput).toBeUndefined();
+      expect(second!.status).toBe('failed');
+      expect(attempt.error!.code).toBe('ASSERTION_INCONCLUSIVE');
+      expect(attempt.error!.message).toBe('the tree lists no state for the Submit button');
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
     'reports the step timeout when an observation outlives the deadline that bounded it',
     async () => {
       // An observation is handed whatever remains of the invocation deadline,
