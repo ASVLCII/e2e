@@ -11,6 +11,7 @@ import { createFixtures } from '../../src/run/fixtures.ts';
 import { StepRecorder } from '../../src/run/steps.ts';
 import { WorkerModels } from '../../src/run/worker-models.ts';
 import { createAgent } from '../../src/agent/default-agent.ts';
+import type { StepExecutor } from '../../src/agent/executor.ts';
 import { defineTool, getToolContext } from '../../src/agent/tool.ts';
 import type { E2EConfig } from '../../src/types.ts';
 import { installFakeLoopModel } from '../helpers/fake-loop-model.ts';
@@ -18,7 +19,7 @@ import { installFakeModel, judgment } from '../helpers/fake-model.ts';
 import { snapshot } from '../helpers/snapshot.ts';
 
 /** A real fixture graph with an in-memory engine and no runner process or model provider. */
-function runtime(engine: EngineHandle, overrides: E2EConfig = {}) {
+function runtime(engine: EngineHandle, overrides: Partial<E2EConfig> = {}) {
   const config = resolveConfig({ targets: [{ name: 'fake', platform: 'custom', engine }], cache: 'off', ...overrides }, {
     projectRoot: process.cwd(), env: {},
   });
@@ -662,5 +663,49 @@ describe('coordinate input', () => {
     });
     await expect(fixtures.screen.swipe({ direction: 'up' })).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
     expect(performedAt).toEqual(['swipeTo @ 10,20 -> 10,300']);
+  });
+});
+
+describe('assert evidence under a custom executor', () => {
+  const judging: StepExecutor = {
+    name: 'judging',
+    version: '1',
+    runStep: async () => ({ status: 'passed', summary: 'holds' }),
+  };
+  const engineWith = (screenshot: () => Promise<string>) =>
+    defineEngine({ name: 'fake', version: '1', spiVersion: 1, observe: async () => snapshot([]), artifacts: { screenshot } });
+
+  it('attaches the screenshot the engine delivers after the verdict', async () => {
+    const screenshot = vi.fn(async () => 'screenshots/assert.png');
+    const { fixtures, steps, registerArtifact } = runtime(engineWith(screenshot), { agents: { default: judging } });
+    await fixtures.agent.assert('the screen holds');
+    expect(screenshot).toHaveBeenCalledExactlyOnceWith('assert', expect.objectContaining({ origin: 'agent' }));
+    expect(registerArtifact).toHaveBeenCalledExactlyOnceWith('screenshot', 'screenshots/assert.png');
+    expect(steps.all().at(-1)).toMatchObject({ api: 'agent.assert', status: 'passed', artifacts: ['artifact'] });
+  });
+
+  it('abandons a screenshot the engine never delivers at the operation budget, not the step timeout, and keeps the verdict', async () => {
+    vi.useFakeTimers();
+    try {
+      const screenshot = vi.fn(() => new Promise<never>(() => {}));
+      const { fixtures, steps, registerArtifact } = runtime(engineWith(screenshot), {
+        agents: { default: judging },
+        actionTimeout: 200,
+      });
+      let settled = false;
+      const asserting = fixtures.agent.assert('the screen holds', { timeout: 2_000 }).then(() => {
+        settled = true;
+      });
+      // The capture is bounded by the operation budget: actionTimeout, capped by the step clock.
+      await vi.advanceTimersByTimeAsync(199);
+      expect(screenshot).toHaveBeenCalledExactlyOnceWith('assert', expect.objectContaining({ origin: 'agent', timeoutMs: 200 }));
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await asserting;
+      expect(registerArtifact).not.toHaveBeenCalled();
+      expect(steps.all().at(-1)).toMatchObject({ api: 'agent.assert', status: 'passed', artifacts: [] });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
