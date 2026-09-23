@@ -10,10 +10,10 @@ import {
   E2EError,
   InfrastructureError,
   serializeError,
+  TestError,
   TestTimeoutError,
   translateEngineError,
   type SerializedError,
-  type TestError,
 } from '../internal/errors.ts';
 import { isRuntimeSkip, type RuntimeSkip } from '../internal/skip.ts';
 import type { ExecutorAttempt } from '../agent/executor.ts';
@@ -48,7 +48,7 @@ import { isFailedStatus } from './records.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialHost, type SharedSerialSession } from './serial.ts';
 import { interruptedSkip, pairKey, pairResult, repeatSegment, unstartedResult } from './units.ts';
-import { sessionSecrecy } from './secrecy.ts';
+import { processSecrets, sessionSecrecy } from './secrecy.ts';
 import { SessionStaging, SessionStore, type SessionIdentity } from './sessions.ts';
 import { redactTraceArchives } from './trace-redaction.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -132,6 +132,10 @@ export class TargetExecutor implements SerialHost {
   readonly debug: DebugTrace;
 
   private readonly runErrors: RunError[] = [];
+  /** Fails the attempt in flight from outside it, while one is; see `strayRejection`. */
+  private strayFailure: ((cause: unknown) => void) | undefined;
+  /** The last test whose attempt ended here: the likely source of a rejection that surfaces between attempts. */
+  private lastAttemptTestId: string | undefined;
   private readonly models: WorkerModels;
   private readonly sessionIdentity: SessionIdentity;
   /** Resolves once the engine's init hook completed for this worker. */
@@ -199,6 +203,35 @@ export class TargetExecutor implements SerialHost {
   /** Run-level errors recorded so far, in order. */
   collectedRunErrors(): readonly RunError[] {
     return this.runErrors;
+  }
+
+  /**
+   * Takes a rejection nobody in this process caught: a promise a test started
+   * and never awaited. Node cannot say which test created it, so it is
+   * charged to the attempt in flight: a running body is cut short the way a
+   * timeout cuts it, a body that already returned has it recorded against the
+   * phase it landed in. Between attempts it becomes a run error naming the
+   * last test that finished here, the likely source. False before any test
+   * has finished, when nothing can be named and the rejection is the
+   * process's own.
+   */
+  strayRejection(cause: unknown): boolean {
+    const fail = this.strayFailure;
+    if (fail !== undefined) {
+      fail(cause);
+      return true;
+    }
+    const testId = this.lastAttemptTestId;
+    if (testId === undefined) return false;
+    const error = new TestError(
+      'UNHANDLED_REJECTION',
+      `a promise rejected between tests, most likely left by "${testId}", the last test to finish in this worker: ${classifyError(cause).message}`,
+      { cause },
+    );
+    this.runErrors.push({
+      error: serializeError(error, { projectRoot: this.config.projectRoot, redact: (text) => processSecrets.redact(text) }),
+    });
+    return true;
   }
 
   /**
@@ -775,8 +808,16 @@ export class TargetExecutor implements SerialHost {
     // afterEach cleanup, teardown — must not confirm traces the failure
     // implicated (a cleanup assertion says nothing about the failed flow).
     let lastVerifiedAtFailure = -1;
+    // The first failure is the verdict; whatever lands after it, a teardown
+    // that also threw or a rejection surfacing late, is kept beside it.
     const recordFailure = (cause: unknown, atPhase: AttemptPhase): void => {
-      if (failure === undefined) lastVerifiedAtFailure = steps.lastVerifiedStepIndex;
+      if (failure !== undefined) {
+        secondaryErrors.push(
+          serializeError(classifyError(cause), { phase: atPhase, projectRoot: this.config.projectRoot, redact }),
+        );
+        return;
+      }
+      lastVerifiedAtFailure = steps.lastVerifiedStepIndex;
       failure = classifyError(cause);
       failurePhase = atPhase;
     };
@@ -803,6 +844,20 @@ export class TargetExecutor implements SerialHost {
       target: this.sessionIdentity,
       attemptIndex,
     });
+
+    // A rejection nobody caught, handed in by the process while this attempt
+    // is in flight. Set while the body's race is pending, so the rejection
+    // ends the body like a timeout; at any other point it is recorded against
+    // the phase it landed in, beside a failure already there.
+    let cutBody: ((cause: unknown) => void) | undefined;
+    this.strayFailure = (cause) => {
+      if (cutBody !== undefined) {
+        attemptAbort.abort();
+        cutBody(cause);
+        return;
+      }
+      recordFailure(cause, phase);
+    };
 
     try {
       const session =
@@ -920,13 +975,19 @@ export class TargetExecutor implements SerialHost {
       // own timeout — minutes, on a device target. The abandoned body goes
       // down with the worker process; the attempt records the interrupt and
       // moves to cleanup.
-      const body = this.options.isolated
+      const work = this.options.isolated
         ? withAbort(
             mainWork(),
             this.interruptSignal,
             () => new E2EError('interrupted', 'INTERRUPTED', `run interrupted in phase ${phase}`),
           )
         : mainWork();
+      const body = Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          cutBody = reject;
+        }),
+      ]);
       try {
         await this.debug.time('test.body', () =>
           withTimeout(
@@ -942,6 +1003,9 @@ export class TargetExecutor implements SerialHost {
           ),
         );
       } catch (cause) {
+        // The race has settled: a rejection surfacing while the evidence is
+        // captured is recorded, not aimed at it.
+        cutBody = undefined;
         // `skipRunningTest` has already refused the cases that may not skip.
         if (isRuntimeSkip(cause)) skipped = cause;
         else {
@@ -949,6 +1013,12 @@ export class TargetExecutor implements SerialHost {
           await captureEvidence();
         }
       }
+      cutBody = undefined;
+      // A promise the body rejected and never awaited reaches the process
+      // once the microtasks drain, which is after the body settled but before
+      // the next turn of the event loop; waiting that turn out lands it on
+      // this attempt instead of between two.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       // A body that timed out or was interrupted never closed its soft
       // failures; they are noted here so teardown starts with the collection
       // closed either way, and a soft matcher in a hook throws.
@@ -977,16 +1047,14 @@ export class TargetExecutor implements SerialHost {
             hookAbort.abort(),
           );
         } catch (cause) {
-          if (failure === undefined) {
-            recordFailure(cause, 'afterEach');
-          } else {
-            secondaryErrors.push(serializeError(classifyError(cause), { phase: 'afterEach' }));
-          }
+          recordFailure(cause, 'afterEach');
         }
       }
     } catch (cause) {
       recordFailure(cause, phase);
     } finally {
+      this.strayFailure = undefined;
+      this.lastAttemptTestId = pair.test.id;
       attemptEnd.abort();
       this.interruptSignal.removeEventListener('abort', onInterrupt);
       // The verdict is reached before the session closes: nothing after this
