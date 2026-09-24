@@ -1,6 +1,6 @@
 {
   "name": "@e2edev/web",
-  "version": "0.11.0-canary-20260922135036",
+  "version": "0.11.0-canary-20260922161512",
   "description": "Web engine for e2e agentic end-to-end testing, built on Playwright",
   "keywords": [
     "e2e",

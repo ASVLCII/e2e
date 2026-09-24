@@ -1,5 +1,15 @@
 # @e2edev/github
 
+## 0.3.0-canary-20260922161512
+
+### Patch Changes
+
+- [#422](https://github.com/tester-army/e2e/pull/422) [`b71ecc0`](https://github.com/tester-army/e2e/commit/b71ecc0f09bd49801c2f4ff27a8822de846e7c3e) Thanks [@okwasniewski](https://github.com/okwasniewski)! - Source links in the pull request comment resolve for a project below the checkout root. The report's files are relative to the project root, so a suite in `packages/e2e-tests` linked to `blob/<sha>/tests/...` and 404ed; the link now carries the project's path inside `GITHUB_WORKSPACE`.
+  
+  Evidence links open the run page's Artifacts section (`actions/runs/<id>#artifacts`) and the page names each file's path inside the upload, so a reader finds the screenshot or trace in the downloaded artifact instead of landing on the run page.
+- Updated dependencies [[`707c894`](https://github.com/tester-army/e2e/commit/707c8942fd13a9f67d0212c340c662ad152971d0), [`b71ecc0`](https://github.com/tester-army/e2e/commit/b71ecc0f09bd49801c2f4ff27a8822de846e7c3e)]:
+  - e2e@0.15.0-canary-20260922161512
+
 ## 0.3.0-canary-20260922135036
 
 ### Patch Changes

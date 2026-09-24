@@ -1,5 +1,13 @@
 # e2e
 
+## 0.15.0-canary-20260922161512
+
+### Patch Changes
+
+- [#419](https://github.com/tester-army/e2e/pull/419) [`707c894`](https://github.com/tester-army/e2e/commit/707c8942fd13a9f67d0212c340c662ad152971d0) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The skill's `writing-tests` topic and the guide show API tests: a test that takes only `app` calls `fetch` against `app.baseUrl` and checks the response with the value matchers, with no page and no model call.
+
+- [#422](https://github.com/tester-army/e2e/pull/422) [`b71ecc0`](https://github.com/tester-army/e2e/commit/b71ecc0f09bd49801c2f4ff27a8822de846e7c3e) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A test the selection left out (a file no positional named, a tag filter, a platform it does not declare) no longer appears as skipped on the markdown page or in JUnit: `e2e run tests/regression` reported every agent test as `skipped: file not selected by a positional argument` and counted them in the headline. Each result in `report.json` now carries `selected`, the flag the summary's `selected` count and the terminal already used; the page and JUnit render only selected results, and read a document without the flag as all selected. `toBeHidden` reports `visible` as what it observed instead of the node's states.
+
 ## 0.15.0-canary-20260922135036
 
 ### Minor Changes

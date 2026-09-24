@@ -1,5 +1,12 @@
 # @e2edev/mobile
 
+## 0.8.0-canary-20260922161512
+
+### Patch Changes
+
+- Updated dependencies [[`707c894`](https://github.com/tester-army/e2e/commit/707c8942fd13a9f67d0212c340c662ad152971d0), [`b71ecc0`](https://github.com/tester-army/e2e/commit/b71ecc0f09bd49801c2f4ff27a8822de846e7c3e)]:
+  - e2e@0.15.0-canary-20260922161512
+
 ## 0.8.0-canary-20260922135036
 
 ### Minor Changes
