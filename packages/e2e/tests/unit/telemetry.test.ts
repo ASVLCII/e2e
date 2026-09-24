@@ -1,7 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runsFromCheckout } from '../../src/telemetry/checkout.ts';
 import { EVENT_CLI_SESSION, EVENT_RUN_COMPLETED, runCompletedEvent } from '../../src/telemetry/events.ts';
 import { POSTHOG_HOST, POSTHOG_PROJECT_KEY } from '../../src/telemetry/posthog.ts';
 import { collectEnvironment, fleetName, statedIdentity } from '../../src/telemetry/environment.ts';
@@ -68,6 +70,18 @@ function create(overrides: Partial<TelemetryOptions> = {}) {
 }
 
 describe('Telemetry', () => {
+  it('is off in a source checkout of the repository: no notice, no events, and the reason names it', async () => {
+    const { telemetry, output, sent } = create({ checkout: true });
+    expect(telemetry.enabled).toBe(false);
+    expect(telemetry.disabledBy).toBe('checkout');
+    telemetry.notice();
+    telemetry.session('run');
+    telemetry.endSession(0);
+    await telemetry.flush();
+    expect(output).toEqual([]);
+    expect(sent.calls).toEqual([]);
+  });
+
   it('is on by default, prints the notice once, and sends one batch with identity and environment', async () => {
     const { telemetry, output, sent, configDir } = create();
     expect(telemetry.enabled).toBe(true);
@@ -449,5 +463,26 @@ describe('Telemetry', () => {
     prompt.telemetry.session('run', []);
     await prompt.telemetry.flush();
     expect(prompt.sent.calls[0]!.body.batch[0]!.properties['project_id']).toBe('f'.repeat(64));
+  });
+});
+
+describe('runsFromCheckout', () => {
+  it('is true only where the CLI source sits beside the build: this repository, not an install or an unpacked package', () => {
+    // The real thing: this test runs from the checkout, whose src/cli/index.ts is two directories up from dist/cli or src/cli.
+    expect(runsFromCheckout(new URL('../../dist/cli/index.js', import.meta.url).href)).toBe(true);
+    expect(runsFromCheckout(new URL('../../src/cli/index.ts', import.meta.url).href)).toBe(true);
+    // A package installed under node_modules, or unpacked anywhere else, ships dist without src.
+    const root = tempDir();
+    for (const packageDir of ['node_modules/e2e', 'node_modules/.pnpm/e2e@0.15.0/node_modules/e2e', 'opt/e2e']) {
+      const dist = path.join(root, packageDir, 'dist', 'cli');
+      mkdirSync(dist, { recursive: true });
+      writeFileSync(path.join(dist, 'index.js'), '', 'utf8');
+      expect(runsFromCheckout(pathToFileURL(path.join(dist, 'index.js')).href)).toBe(false);
+    }
+    // The same layout with the source beside it is a checkout, wherever it lives.
+    mkdirSync(path.join(root, 'opt', 'e2e', 'src', 'cli'), { recursive: true });
+    writeFileSync(path.join(root, 'opt', 'e2e', 'src', 'cli', 'index.ts'), '', 'utf8');
+    expect(runsFromCheckout(pathToFileURL(path.join(root, 'opt', 'e2e', 'dist', 'cli', 'index.js')).href)).toBe(true);
+    expect(runsFromCheckout('data:text/javascript,export%20default%201')).toBe(false);
   });
 });
