@@ -14,7 +14,7 @@ import { aiSdk, asSdkLanguageModel, loadAiSdk, type SdkLanguageModel } from '../
 import { packageVersion } from '../../internal/package-version.ts';
 import { AgentError } from '../error.ts';
 import { isContextOverflow } from './overflow.ts';
-import { promptCacheHints, type CacheModelRef } from './prompt-cache.ts';
+import { providerHints, type ProviderModelRef } from './provider-hints.ts';
 import {
   imageTokenUpperBound,
   ModelOutputInvalidError,
@@ -61,7 +61,7 @@ export function createModelAdapter(model: ResolvedModel | undefined): ModelAdapt
     },
     async generate<Value>(call: ModelCall<Value>): Promise<ModelResult<Value>> {
       const { generateText, jsonSchema, Output } = await loadAiSdk();
-      const cache = promptCacheHints(languageModel as CacheModelRef);
+      const hints = providerHints(languageModel as ProviderModelRef);
       const images = call.images ?? [];
       const inputBound =
         tokenUpperBound(call.system) +
@@ -77,10 +77,10 @@ export function createModelAdapter(model: ResolvedModel | undefined): ModelAdapt
       const schema = call.schema;
       // The policy prefix is what every judgment call of a run shares, so it
       // is where the prompt cache is addressed; the prompt itself is one-off.
-      const providerOptions = cache.providerOptions(call.providerOptions, call.system);
+      const providerOptions = hints.providerOptions(call.providerOptions, call.system);
       const settings = {
         model: languageModel,
-        instructions: cache.instructions(call.system),
+        instructions: hints.instructions(call.system),
         // Text-only calls keep the plain prompt form; images require the
         // multi-part message form, and both must carry the same instruction
         // text in the same position relative to the system policy.
@@ -295,7 +295,7 @@ function translateModelError(
   if (APICallError.isInstance(cause)) {
     return new AgentError(
       'MODEL_PROVIDER_FAILED',
-      withHint(`model provider failed: ${cause.message}`, credentialHint(cause)),
+      withHint(`model provider failed: ${cause.message}`, failureHint(cause)),
       { cause },
     );
   }
@@ -307,16 +307,24 @@ function translateModelError(
 }
 
 /**
+ * The remedy a provider failure points at, when its shape names one: a
+ * rejected credential, or a conversation the provider kept no state for.
+ * Requires the SDK to be loaded, which every caller has done by the time a
+ * provider call has failed.
+ */
+export function failureHint(cause: unknown): string {
+  const failure = unwrapRetry(cause);
+  if (!(failure instanceof Error)) return '';
+  return credentialHint(failure) || statelessHint(failure);
+}
+
+/**
  * A rejected credential is named for what it is. The model instance owns its
  * credential, read from the provider package's own variable
  * (`AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, ...) or passed at
  * construction, so the runner can only say that the provider refused it.
- * Requires the SDK to be loaded, which every caller has done by the time a
- * provider call has failed.
  */
-export function credentialHint(cause: unknown): string {
-  const failure = unwrapRetry(cause);
-  if (!(failure instanceof Error)) return '';
+function credentialHint(failure: Error): string {
   // Gateways raise their own authentication error classes and a raw provider
   // an APICallError; both carry the HTTP status, so that is what is read.
   const statusCode = (failure as { statusCode?: unknown }).statusCode;
@@ -326,6 +334,17 @@ export function credentialHint(cause: unknown): string {
     /unauthenticated|unauthorized|authentication/i.test(`${failure.name} ${failure.message}`);
   if (!rejected) return '';
   return 'the provider rejected the credential the model instance was created with: check the variable the provider package reads, or the key passed at construction';
+}
+
+/**
+ * An earlier turn referenced by item id that the provider never stored. The
+ * provider hints send `store: false` to keep the conversation inline, so this
+ * survives only when a caller turned storage back on or a gateway dropped the
+ * option.
+ */
+function statelessHint(failure: Error): string {
+  if (!/not persisted when .?store.? is set to false|item with id .+ not found/i.test(failure.message)) return '';
+  return 'the provider kept no earlier turn to refer back to: leave store off in the agent providerOptions (the default), or call the provider directly instead of through a gateway';
 }
 
 /**
