@@ -14,7 +14,7 @@
 
 import { anchorsPresent } from '../cache/anchors.ts';
 import { MAIN_LIST_SHARE, relocateDescriptor, type RelocationFailure, type RelocationResult } from '../cache/relocate.ts';
-import type { ActionTrace, DerivedReason, RecordedAction, TraceTargetDescriptor, TraceViewport } from '../cache/trace.ts';
+import { isNodeAction, type ActionTrace, type DerivedReason, type RecordedAction, type TraceTargetDescriptor, type TraceViewport } from '../cache/trace.ts';
 import type { SemanticNode, ViewportPoint } from '../engine/surface.ts';
 import { hasCause } from '../internal/errors.ts';
 import { containsPoint, type Box } from '../internal/geometry.ts';
@@ -115,8 +115,10 @@ type PlannedCall =
       readonly times: number;
       readonly list?: ScrolledList;
     }
+  /** A drag whose two nodes are re-found on one screen before the drag joins them. */
+  | { readonly kind: 'drag'; readonly source: TraceTargetDescriptor; readonly destination: TraceTargetDescriptor }
   /** A bare point, replayed as given once the viewport is the recorded size. */
-  | { readonly kind: 'point'; readonly point: ViewportPoint; readonly viewport: TraceViewport }
+  | { readonly kind: 'point'; readonly point: ViewportPoint; readonly viewport: TraceViewport; readonly invoke: PointInvoke }
   /** A bare point placed inside a re-found node's live box. */
   | {
       readonly kind: 'within';
@@ -126,18 +128,29 @@ type PlannedCall =
       /**
        * The recorded point and its viewport: among look-alikes of the node,
        * the one the point lies in on a viewport of the same size is it. The
-       * bare point is never tapped on its own.
+       * bare point is never acted on on its own.
        */
       readonly point: ViewportPoint;
       readonly viewport: TraceViewport;
+      readonly invoke: PointInvoke;
     };
 
+/** The point verb a recorded bare point replays through: `tapAt` or `hoverAt`. */
+type PointInvoke = (point: ViewportPoint) => Promise<unknown>;
+
 function planCall(action: RecordedAction, actions: ExecutorActions): PlannedCall {
+  if (isNodeAction(action)) return { kind: 'targeted', descriptor: action.target, invoke: (t) => actions[action.name](t) };
   switch (action.name) {
     case 'tool':
       return { kind: 'gap', ...(action.derived === undefined ? {} : { derived: action.derived }) };
-    case 'tap':
-      return { kind: 'targeted', descriptor: action.target, invoke: (t) => actions.tap(t) };
+    case 'check':
+      return { kind: 'targeted', descriptor: action.target, invoke: (t) => actions.check(t, action.checked) };
+    case 'upload':
+      return { kind: 'targeted', descriptor: action.target, invoke: (t) => actions.upload(t, action.paths) };
+    case 'drag':
+      return { kind: 'drag', source: action.target, destination: action.destination };
+    case 'back':
+      return { kind: 'free', invoke: () => actions.back() };
     case 'type':
       return {
         kind: 'targeted',
@@ -180,8 +193,10 @@ function planCall(action: RecordedAction, actions: ExecutorActions): PlannedCall
     case 'dismissKeyboard':
       return { kind: 'free', invoke: () => actions.dismissKeyboard() };
     case 'tapAt':
+    case 'hoverAt': {
+      const invoke: PointInvoke = (point) => actions[action.name](point);
       return action.within === undefined
-        ? { kind: 'point', point: action.point, viewport: action.viewport }
+        ? { kind: 'point', point: action.point, viewport: action.viewport, invoke }
         : {
             kind: 'within',
             descriptor: action.within.target,
@@ -189,7 +204,9 @@ function planCall(action: RecordedAction, actions: ExecutorActions): PlannedCall
             fy: action.within.fy,
             point: action.point,
             viewport: action.viewport,
+            invoke,
           };
+    }
   }
 }
 
@@ -266,6 +283,12 @@ export async function replayTrace(
           }
           break;
         }
+        case 'drag': {
+          const pair = await relocatePair(host, planned.source, planned.destination, look);
+          if (pair.kind === 'failed') return stop(pair.failure);
+          await host.actions.drag({ id: pair.source }, { id: pair.destination });
+          break;
+        }
         case 'point': {
           const screen = await firstLook(host, look);
           if (screen.kind === 'pixels') return stop('action-failed');
@@ -273,14 +296,14 @@ export async function replayTrace(
           if (viewport.width !== planned.viewport.width || viewport.height !== planned.viewport.height) {
             return stop('viewport-changed');
           }
-          await host.actions.tapAt(planned.point);
+          await planned.invoke(planned.point);
           break;
         }
         case 'within': {
           const relocated = await relocate(host, planned.descriptor, look);
           const box = boxWithin(relocated, planned);
           if (box === undefined) return stop(relocated.kind === 'failed' ? relocated.failure : 'target-not-found');
-          await host.actions.tapAt({ x: box.x + planned.fx * box.width, y: box.y + planned.fy * box.height });
+          await planned.invoke({ x: box.x + planned.fx * box.width, y: box.y + planned.fy * box.height });
           break;
         }
       }
@@ -346,14 +369,7 @@ const END_WAIT_POLL_MS = 1_000;
 /** Step clock kept back from that wait, so a hand-off still has room to act. */
 const END_WAIT_RESERVE_MS = 20_000;
 
-/**
- * Relocates one descriptor against the settling screen. A missing target is
- * worth another look. So is ambiguity for a descriptor that recorded its
- * position among twins: a form still rendering shows fewer of them than the
- * recording counted, and the count catches up. Ambiguity for a descriptor
- * without a position never retries — two matching nodes will not become one
- * by waiting, and acting on either would be a guess.
- */
+/** Relocates one descriptor against the settling screen, looking again while `retryable` says the failure may pass. */
 async function relocate(
   host: ReplayHost,
   descriptor: TraceTargetDescriptor,
@@ -365,12 +381,54 @@ async function relocate(
     const result = relocateDescriptor(descriptor, screen.nodes, options);
     if (result.kind === 'failed') {
       last = result.failure === 'target-not-found' ? result : { ...result, screen };
-      return result.failure === 'target-not-found' || descriptor.position !== undefined ? undefined : last;
+      return retryable(result.failure, descriptor) ? undefined : last;
     }
     const node = screen.nodes.get(result.id);
     return node === undefined ? undefined : { ...result, node };
   }, look);
   return settled ?? last;
+}
+
+/**
+ * Re-finds a drag's two nodes on one screen, so the ids the drag joins name
+ * the same look at the app: an engine that renumbers its tree per
+ * observation would otherwise hand the drag a source from one screen and a
+ * destination from the next. Waits like `relocate` does, and gives up the
+ * same way: a missing node or a positioned twin is worth another look, an
+ * unpositioned ambiguity is not.
+ */
+async function relocatePair(
+  host: ReplayHost,
+  source: TraceTargetDescriptor,
+  destination: TraceTargetDescriptor,
+  look: Look,
+): Promise<{ readonly kind: 'found'; readonly source: string; readonly destination: string } | { readonly kind: 'failed'; readonly failure: RelocationFailure }> {
+  const options = { redact: host.redact };
+  let last: RelocationFailure = 'target-not-found';
+  const failed = (descriptor: TraceTargetDescriptor, failure: RelocationFailure) => {
+    last = failure;
+    return retryable(failure, descriptor) ? undefined : { kind: 'failed' as const, failure };
+  };
+  const settled = await pollSettled(host, (screen) => {
+    const from = relocateDescriptor(source, screen.nodes, options);
+    if (from.kind === 'failed') return failed(source, from.failure);
+    const to = relocateDescriptor(destination, screen.nodes, options);
+    if (to.kind === 'failed') return failed(destination, to.failure);
+    return { kind: 'found' as const, source: from.id, destination: to.id };
+  }, look);
+  return settled ?? { kind: 'failed', failure: last };
+}
+
+/**
+ * Whether a failed relocation is worth another look. A missing target is: the
+ * screen may still be settling. So is ambiguity for a descriptor that recorded
+ * its position among twins: a form still rendering shows fewer of them than
+ * the recording counted, and the count catches up. Ambiguity for a descriptor
+ * without a position never is: two matching nodes will not become one by
+ * waiting, and acting on either would be a guess.
+ */
+function retryable(failure: RelocationFailure, descriptor: TraceTargetDescriptor): boolean {
+  return failure === 'target-not-found' || descriptor.position !== undefined;
 }
 
 /** A relocation with the node it found, or with the screen its look-alikes are on, for a replay that needs boxes. */

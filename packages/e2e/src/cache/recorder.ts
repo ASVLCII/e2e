@@ -16,7 +16,7 @@
  * state. A poisoned trace still documents what happened; it never replays.
  */
 
-import { describeAction, type RecordableAction } from '../agent/actions.ts';
+import { describeAction, type DescribedAction, type RecordableAction } from '../agent/actions.ts';
 import {
   bound,
   DESCRIPTOR_FIELDS,
@@ -25,6 +25,7 @@ import {
   MAX_TRACE_END_WAIT_MS,
   MAX_TRACE_INPUT_CHARS,
   MAX_TRACE_SUMMARY_CHARS,
+  isNodeAction,
   type ActionTrace,
   type DerivedReason,
   type RecordedAction,
@@ -67,8 +68,7 @@ export class TraceRecorder {
 
   /** Records one committed grammar action. */
   record(action: RecordableAction): void {
-    const { target, summary } = describeAction(action, this.redact);
-    this.push(this.toRecorded(action, target, summary));
+    this.push(this.toRecorded(action, describeAction(action, this.redact)));
     this.lastActionAt = Date.now();
   }
 
@@ -157,21 +157,25 @@ export class TraceRecorder {
    * whose poisoning marks the trace non-replayable when a value cannot be
    * kept whole.
    */
-  private toRecorded(
-    action: RecordableAction,
-    target: TraceTargetDescriptor | undefined,
-    summary: string,
-  ): RecordedAction {
+  private toRecorded(action: RecordableAction, { target, summary, destination }: DescribedAction): RecordedAction {
     // A targeted commit whose node yields no durable descriptor cannot be
     // re-found; the trace stays honest by poisoning instead of guessing.
-    const requireTarget = (): TraceTargetDescriptor => {
-      if (target !== undefined) return target;
+    const require = (descriptor: TraceTargetDescriptor | undefined): TraceTargetDescriptor => {
+      if (descriptor !== undefined) return descriptor;
       this.truncated = true;
       return { role: 'unknown' };
     };
+    const requireTarget = (): TraceTargetDescriptor => require(target);
+    if (isNodeAction(action)) return { name: action.name, summary, target: requireTarget() };
     switch (action.name) {
-      case 'tap':
-        return { name: 'tap', summary, target: requireTarget() };
+      case 'check':
+        return { name: 'check', summary, target: requireTarget(), checked: action.checked };
+      case 'upload':
+        return { name: 'upload', summary, target: requireTarget(), paths: action.paths.map((path) => this.verbatim(path)) };
+      case 'drag':
+        return { name: 'drag', summary, target: requireTarget(), destination: require(destination) };
+      case 'back':
+        return { name: 'back', summary };
       case 'type':
         return { name: 'type', summary, target: requireTarget(), value: this.verbatim(action.value) };
       case 'typeSecret':
@@ -196,7 +200,8 @@ export class TraceRecorder {
         return { name: 'pressKey', summary, key: this.verbatim(action.key) };
       case 'dismissKeyboard':
         return { name: 'dismissKeyboard', summary };
-      case 'tapAt': {
+      case 'tapAt':
+      case 'hoverAt': {
         // The point replays as given on a same-sized viewport. When a listed
         // node with a durable descriptor contained it, its place inside that
         // node's box is kept too, so replay can follow the node instead.
@@ -206,7 +211,7 @@ export class TraceRecorder {
             ? undefined
             : { target, fx: fraction((action.point.x - box.x) / box.width), fy: fraction((action.point.y - box.y) / box.height) };
         return {
-          name: 'tapAt',
+          name: action.name,
           summary,
           point: action.point,
           viewport: { width: action.viewport.width, height: action.viewport.height },
