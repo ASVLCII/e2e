@@ -210,6 +210,40 @@ jobs:
             (cd android && ./gradlew :app:assembleRelease)
             mkdir -p .build/android
             cp android/app/build/outputs/apk/release/app-release.apk .build/android/benchmark.apk
+      # The system image is a 1.5 GB download the runner does not carry, and a
+      # cold boot of the AVD comes after it: together about 100 s of every
+      # job before the first test. Both are cached under one key: the image
+      # in the SDK, and the AVD with the boot snapshot the step below saves on
+      # a miss, so a hit restores the image and boots from the snapshot in a
+      # few seconds. The emulator-runner action's own recipe, with the image
+      # added; `force-avd-creation: false` keeps the restored AVD. Bump the
+      # key's suffix to rebuild the snapshot on purpose.
+      - name: Android SDK path
+        run: echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
+      - name: Restore the system image and AVD
+        id: avd-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+            ${{ env.ANDROID_SDK }}/system-images/android-36
+          key: avd-android-36-google_apis-x86_64-pixel_7-v1
+      # A miss boots the emulator once with snapshots on and stops it, so the
+      # save-on-exit snapshot is what the cache keeps; the run below then
+      # boots from it and saves nothing back.
+      - name: Create the AVD and its boot snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-metrics
+          disable-animations: false
+          script: echo "Generated AVD snapshot for caching."
       # The emulator lives for this step only (the action terminates it when
       # the step ends) and runs each `script` line in its own shell, so the
       # suite and its second pass over the failed tests are one line. Same
@@ -222,7 +256,8 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_7
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot-save -noaudio -no-boot-anim -no-metrics
           disable-animations: true
           working-directory: packages/mobile-benchmark
           script: $E2E_RUN || $E2E_RUN --last-failed

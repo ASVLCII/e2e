@@ -84,7 +84,8 @@ descriptions and commit bodies; `git log` and `gh pr view` are the archive.
   (`tests/` locators only, `tests-agent/` one `agent.act` per scenario).
   Both suites run in CI on an iOS simulator and an Android emulator
   (`.github/workflows/mobile.yml`; the Expo build is cached per native
-  fingerprint and its JS repacked on a hit); the agentic one replays
+  fingerprint and its JS repacked on a hit, and the Android system image and
+  AVD boot snapshot are cached under one key); the agentic one replays
   committed recordings and calls the model for a step with none, see
   "Committed recordings" under Gotchas. Scenario files are copies: keep
   diffs against the source minimal, and name no company a scenario was
