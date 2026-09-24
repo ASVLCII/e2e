@@ -58,6 +58,25 @@ export function formatTime(ms: number): string {
   return ms > 1_000 ? `${(ms / 1_000).toFixed(2)}s` : `${Math.round(ms)}ms`;
 }
 
+/** A span as `11m 23s`. Rounds to whole seconds first, so 119.5 s is `2m 0s` and never `1m 60s`. */
+export function formatMinutes(ms: number): string {
+  const total = Math.round(ms / 1_000);
+  return `${Math.floor(total / 60)}m ${total % 60}s`;
+}
+
+/**
+ * The summary's `Duration` cell: the seconds, then dimmed in parentheses the
+ * same span in minutes once it has one and the startup split when a process
+ * started (`64.89s (1m 5s, startup 86ms)`).
+ */
+export function durationText(pc: Colors, elapsedMs: number, startupMs: number): string {
+  const aside: string[] = [];
+  if (elapsedMs >= 60_000) aside.push(formatMinutes(elapsedMs));
+  if (startupMs > 0) aside.push(`startup ${formatTime(startupMs)}`);
+  const time = formatTime(elapsedMs);
+  return aside.length === 0 ? time : `${time} ${pc.dim(`(${aside.join(', ')})`)}`;
+}
+
 /** Wall-clock `HH:MM:SS` for the summary's `Start at` row. */
 export function formatClock(date: Date): string {
   return date.toTimeString().split(' ')[0] ?? '';

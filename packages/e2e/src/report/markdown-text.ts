@@ -5,7 +5,7 @@
  */
 
 import { collapseText } from '../internal/text.ts';
-import { ellipsize } from './format.ts';
+import { ellipsize, formatMinutes } from './format.ts';
 
 /** Text widths, in code points. */
 export const MAX_CELL_CHARS = 240;
@@ -93,9 +93,7 @@ export function link(text: string, url: string): string {
 export function formatDuration(ms: number): string {
   if (ms < 1_000) return `${Math.round(ms)}ms`;
   if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
-  // Round to whole seconds first, so 119.5 s is 2m 0s and never 1m 60s.
-  const total = Math.round(ms / 1_000);
-  return `${Math.floor(total / 60)}m ${total % 60}s`;
+  return formatMinutes(ms);
 }
 
 export function plural(count: number, noun: string): string {

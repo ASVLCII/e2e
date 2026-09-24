@@ -21,6 +21,7 @@ import {
   aiSegment,
   bounded,
   cacheText,
+  durationText,
   fitColumns,
   emptyCacheTally,
   emptyCounters,
@@ -806,8 +807,7 @@ export class ListReporter implements Reporter {
     const startedAt = this.startedAt ?? (final ? this.launchedAt : undefined);
     if (startedAt !== undefined) {
       rows.push(padTitle(pc, 'Start at') + formatClock(startedAt));
-      const startup = this.startupMs > 0 ? pc.dim(` (startup ${formatTime(this.startupMs)})`) : '';
-      rows.push(padTitle(pc, 'Duration') + formatTime(Date.now() - startedAt.getTime()) + startup);
+      rows.push(padTitle(pc, 'Duration') + durationText(pc, Date.now() - startedAt.getTime(), this.startupMs));
     }
     return rows;
   }

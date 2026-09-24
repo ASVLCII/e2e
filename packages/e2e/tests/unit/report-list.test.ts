@@ -742,6 +742,40 @@ describe('ListReporter', () => {
       }
     });
 
+    it('repeats a duration past a minute as minutes and seconds', () => {
+      vi.useFakeTimers({ now: new Date('2026-09-08T10:00:00.000Z') });
+      try {
+        const { lines, output } = capture();
+        const reporter = plainReporter(output);
+        reporter.handle(runStarted());
+        reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 1 }]));
+        vi.advanceTimersByTime(682_970);
+        reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts' })));
+        reporter.handle(runFinished({ reportPath: 'r.json' }));
+        expect(lines).toContain('   Duration  682.97s (11m 23s)');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shares the parenthetical between the minutes and the startup split', () => {
+      vi.useFakeTimers({ now: new Date('2026-09-08T10:00:00.000Z') });
+      try {
+        const { lines, output } = capture();
+        const reporter = plainReporter(output);
+        reporter.handle(runStarted());
+        reporter.handle({ type: 'setup', step: { kind: 'service', label: 'service "compose"' }, state: 'started' });
+        reporter.handle({ type: 'setup', step: { kind: 'service', label: 'service "compose"' }, state: 'finished', durationMs: 43_000 });
+        reporter.handle(plan([{ file: 'tests/a.e2e.ts', tests: 1 }]));
+        vi.advanceTimersByTime(119_500);
+        reporter.handle(finished(result({ status: 'passed', file: 'tests/a.e2e.ts' })));
+        reporter.handle(runFinished({ reportPath: 'r.json' }));
+        expect(lines).toContain('   Duration  119.50s (2m 0s, startup 43.00s)');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('reports model usage per file and for the run, naming the one model the steps reported without a count', () => {
       const { lines, output } = capture();
       const reporter = plainReporter(output);
