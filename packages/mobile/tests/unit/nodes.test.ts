@@ -203,6 +203,7 @@ describe('snapshot projection', () => {
       { ref: 'e9', index: 8, parentIndex: 0, depth: 1, type: 'androidx.appcompat.widget.Toolbar' },
       { ref: 'e10', index: 9, parentIndex: 0, depth: 1, type: 'android.widget.NumberPicker' },
       { ref: 'e11', index: 10, parentIndex: 0, depth: 1, type: 'android.widget.TabWidget' },
+      { ref: 'e12', index: 11, parentIndex: 0, depth: 1, type: 'android.widget.AbsListView', identifier: 'fruit-list' },
     ]);
     expect(projected.index.map((entry) => entry.kind)).toEqual([
       'frame-layout',
@@ -216,6 +217,7 @@ describe('snapshot projection', () => {
       'toolbar',
       'number-picker',
       'tab-widget',
+      'abs-list-view',
     ]);
     expect(projected.index.map((entry) => entry.node.role)).toEqual([
       'group',
@@ -229,6 +231,7 @@ describe('snapshot projection', () => {
       'toolbar',
       'spinbutton',
       'tablist',
+      'list',
     ]);
   });
 
@@ -306,6 +309,10 @@ describe('snapshot projection', () => {
     const field = project([{ ref: 'e1', type: 'TextField', label: 'Kind', value: 'checkbox, unchecked' }]);
     expect(field.index[0]?.node).toMatchObject({ role: 'textbox', value: 'checkbox, unchecked' });
     expect(field.index[0]?.node.states?.checked).toBeUndefined();
+    // An empty field shows its placeholder, which XCTest reports as the value; the hint flag says it is empty.
+    const empty = project([{ ref: 'e1', type: 'TextField', label: 'Name field', value: 'Type your name', hintShowing: true }]);
+    expect(empty.index[0]?.node.role).toBe('textbox');
+    expect(empty.index[0]?.node.value).toBeUndefined();
     expect(android.index[0]?.node.states).toBeUndefined();
   });
 

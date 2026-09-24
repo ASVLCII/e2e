@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Device } from '@e2edev/mobile';
-import type { Agent, AgentParam, Screen } from 'e2e';
+import type { Agent, AgentParam, App, Screen } from 'e2e';
 import { credentials } from 'e2e';
 import { expect, openScenario, test } from '../tests/fixtures.ts';
 
@@ -131,6 +131,7 @@ const SCENARIOS: readonly Scenario[] = [
     goal: 'scroll to Row 0512 and tap it; the list has 600 rows of equal height and off-screen rows are not in the tree, so scroll many screens at a time',
     success: 'Found Row 0512',
     maxSteps: 80,
+    gap: 'the agent scrolls blind: iOS renumbers the rows on every observation, the scroll target goes stale around row 460 of 512, and the loop guard stops the step; a scroll to a named node is #486',
   },
   {
     name: 'Flattened Registration Form',
@@ -163,6 +164,9 @@ const SCENARIOS: readonly Scenario[] = [
     name: 'Photo Picker',
     goal: 'choose a photo and pick the most recent one from the library so it is attached as the receipt',
     success: /^Receipt attached/,
+    // The receipt is seeded with `xcrun simctl addmedia`; the emulator's
+    // seeding (adb push and a media scan) is not written yet.
+    platforms: ['ios'],
     prepare: seedReceiptPhoto,
   },
   {
@@ -180,16 +184,21 @@ const SCENARIOS: readonly Scenario[] = [
     goal: 'order a Medium pizza with exactly Cheese and Olives, enable rush delivery, dismiss the keyboard, and place the order',
     success: 'Order placed: Medium with Cheese, Olives (rush)',
   },
+  // On Android the sheet is Stripe's Compose UI: the agent fills the card,
+  // expiry, and CVC, but the postal-code field takes no input from
+  // agent-device 0.21.13's fill and Pay stays disabled, on every run.
   {
     name: 'Stripe PaymentSheet',
     goal: 'open the checkout and pay with the Stripe test card 4242 4242 4242 4242, any future expiry, any CVC',
     success: 'Stripe test payment completed',
     maxSteps: 40,
+    platforms: ['ios'],
   },
   {
     name: 'Sequential Onboarding',
     goal: 'complete the signup wizard with the email, name, and phone the screen asks for, dismissing the keyboard before each Continue',
     success: 'Onboarding complete',
+    gap: 'the third step keeps its Continue under the keyboard; the agent dismisses the keyboard and taps, and the wizard stays on step 3 in one run out of three, on a Mac and on CI alike, so the gate would flake on it until the tap after a keyboard dismissal is understood',
   },
   {
     name: 'Apple Pay',
@@ -203,15 +212,21 @@ const SCENARIOS: readonly Scenario[] = [
     success: 'Payment complete: $8.99',
     platforms: ['ios'],
     maxSteps: 40,
+    // On the CI simulator the Apple Pay sheet completes without its
+    // billing-address step (a fresh simulator has no Wallet state), so the
+    // scenario's own check cannot hold there; a Mac at a desk passes.
+    ...(process.env.CI === 'true'
+      ? { gap: "the CI simulator's Apple Pay sheet skips the billing-address step, so the scenario cannot be completed there" }
+      : {}),
   },
 ];
 
 async function complete(
   scenario: Scenario,
-  { agent, device, screen }: { agent: Agent; device: Device; screen: Screen },
+  { agent, app, device, screen }: { agent: Agent; app: App; device: Device; screen: Screen },
 ): Promise<void> {
   scenario.prepare?.();
-  await openScenario({ device, screen }, scenario.name);
+  await openScenario({ app, device, screen }, scenario.name);
   const instruction = scenario.pixels === true
     ? `Complete this scenario as the screen instructs: ${scenario.goal}. The screen lists nothing useful; take a screenshot and work from it.`
     : `Complete this scenario as the screen instructs: ${scenario.goal}`;

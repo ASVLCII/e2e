@@ -39,9 +39,11 @@ afterEach(() => {
   rmSync(artifactsDir, { recursive: true, force: true });
 });
 
+/** Boots, starts an attempt, and launches the pinned app the way a test's `app.open()` does. */
 async function openAttempt(h: Harness, attemptId = 'a1'): Promise<void> {
   await boot(h.engine);
   await h.engine.startAttempt!({ attemptId, artifactsDir, signal: new AbortController().signal });
+  if (h.engine.session?.restart !== undefined) await h.engine.session.restart(operation());
 }
 
 /** The observed node with this name, from a fresh observation. */
@@ -98,7 +100,7 @@ describe('manifest', () => {
 });
 
 describe('lifecycle', () => {
-  it('boots once per init under a session named after the target and worker slot, opens the app fresh per attempt, and closes on dispose', async () => {
+  it('boots once per init under a session named after the target and worker slot, launches the app only when asked, and closes on dispose', async () => {
     const h = harness();
     await openAttempt(h);
     expect(h.sessions).toEqual(['e2e-ios-simulator-0']);
@@ -108,8 +110,9 @@ describe('lifecycle', () => {
 
     await h.engine.endAttempt!(cleanup());
     await h.engine.endAttempt!(cleanup());
+    // An attempt launches nothing on its own: the app is where the last test left it.
     await h.engine.startAttempt!({ attemptId: 'a2', artifactsDir, signal: new AbortController().signal });
-    expect(h.fake.methods().filter((m) => m === 'apps.open')).toHaveLength(2);
+    expect(h.fake.methods().filter((m) => m === 'apps.open')).toHaveLength(1);
 
     await h.engine.dispose!(cleanup());
     expect(h.fake.methods().at(-1)).toBe('sessions.close');
@@ -136,6 +139,7 @@ describe('lifecycle', () => {
     expect(first.sessions).toEqual(['e2e-ios-0']);
     expect(first.fake.lastArgs('devices.boot')).toEqual({ platform: 'ios', device: 'iPhone 17' });
     await first.engine.startAttempt!({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
+    await first.engine.session!.restart!(operation());
     expect(first.fake.lastArgs('apps.open')).toEqual({ app: 'Settings', platform: 'ios', device: 'iPhone 17', relaunch: true });
 
     const second = harness({ device: pool, session: 'qa' });
@@ -924,6 +928,7 @@ describe('session hooks, viewport swipe, location, artifacts', () => {
       expect(opened).toBe(false);
       finishCapture!();
       await next;
+      await h.engine.session!.restart!(operation());
       expect(opened).toBe(true);
       expect(temporaryFilesRemoved).toBe(true);
       expect(existsSync(path.join(artifactsDir, 'screenshots'))).toBe(false);
@@ -933,7 +938,7 @@ describe('session hooks, viewport swipe, location, artifacts', () => {
     }
   });
 
-  it('waits for an abandoned command to settle before the next attempt opens anything', async () => {
+  it('waits for an abandoned command to settle before the next attempt starts and its launch goes out', async () => {
     const h = harness();
     let release: (() => void) | undefined;
     let settled = false;
@@ -965,6 +970,7 @@ describe('session hooks, viewport swipe, location, artifacts', () => {
     expect(nextDone).toBe(false);
     release!();
     await next;
+    await h.engine.session!.restart!(operation());
     expect(openedAfterSettle).toBe(true);
 
     // A command that never settles fails the launch within its budget instead of racing it.
@@ -1398,8 +1404,10 @@ describe('deterministic actions', () => {
     // Two looks at the screen: the second is the one the action resolves from, the first stands for the screen before the launch.
     await observed(h, 'About');
     await h.engine.perform!((await observed(h, 'Back')).ref, { kind: 'tap' }, test());
+    const looks = h.fake.methods().filter((method) => method === 'capture.snapshot').length;
     await tapsAtOnce(h, await observed(h, 'About'), { ref: '@e4' });
-    expect(h.fake.methods().filter((method) => method === 'capture.snapshot')).toHaveLength(3);
+    // The observation the tap resolves from is the only new look: nothing is waited out or found again.
+    expect(h.fake.methods().filter((method) => method === 'capture.snapshot')).toHaveLength(looks + 1);
   });
 
   it('gives a control that came with the last action the transition budget before acting on it', async () => {
@@ -1419,6 +1427,35 @@ describe('deterministic actions', () => {
     await h.engine.perform!(submit.ref, { kind: 'tap' }, test());
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(100);
     expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e11' });
+  });
+
+  it('acts on a control that came with the last action where a fresh snapshot lists it once the budget has passed', async () => {
+    const h = harness({ transition: 120 });
+    await openAttempt(h);
+    await h.engine.perform!((await observed(h, 'Back')).ref, { kind: 'tap' }, test());
+    // Android reports a sliding modal's frames in flight: the button is first
+    // seen below the screen, and lands on it with a new ref by the time the
+    // budget has passed.
+    const submit = (y: number, ref: string) => ({
+      ...SETTINGS_SNAPSHOT,
+      nodes: [
+        ...SETTINGS_NODES,
+        { ref, index: 10, parentIndex: 0, depth: 1, type: 'android.widget.Button', label: 'Submit', identifier: 'submit', rect: { x: 0, y, width: 390, height: 44 } },
+      ],
+    });
+    h.fake.respond('capture.snapshot', () => submit(2000, '@e11'));
+    const inFlight = await observed(h, 'Submit');
+    h.fake.respond('capture.snapshot', () => submit(600, '@e42'));
+    await h.engine.perform!(inFlight.ref, { kind: 'tap' }, test());
+    expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e42' });
+
+    // A control the fresh snapshot no longer lists is acted on as it was.
+    await h.engine.perform!((await observed(h, 'Back')).ref, { kind: 'tap' }, test());
+    h.fake.respond('capture.snapshot', () => submit(600, '@e42'));
+    const landed = await observed(h, 'Submit');
+    h.fake.respond('capture.snapshot', () => SETTINGS_SNAPSHOT);
+    await h.engine.perform!(landed.ref, { kind: 'tap' }, test());
+    expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e42' });
   });
 
   it('gives a control that moved with the last action the budget too, and skips it once the budget has elapsed', async () => {

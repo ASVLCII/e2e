@@ -7,12 +7,18 @@ import type { Screen } from 'e2e';
 import { expect, openScenario, test } from './fixtures.ts';
 
 test.describe('permission prompt', () => {
-  test.beforeEach(async ({ device, screen }) => {
+  test.beforeEach(async ({ app, device, screen }) => {
     await device.setPermission('microphone', 'reset');
-    await openScenario({ device, screen }, 'Permission Prompt');
+    await openScenario({ app, device, screen }, 'Permission Prompt');
   });
 
-  test('allowing the system dialog enables the microphone', async ({ device, screen }) => {
+  const ALERT_PLATFORMS = process.env.CI === 'true' ? { platforms: ['android'] } : {};
+  // On the CI Mac (blacksmith-6vcpu-macos-26) the microphone alert makes the
+  // iOS runner's main thread overrun its watchdog on `device.alert`, on every
+  // run so far, and a wedged runner fails whatever follows; a Mac at a desk
+  // passes. In CI both alert tests run on Android only until agent-device's
+  // runner takes a system alert on that host.
+  test('allowing the system dialog enables the microphone', ALERT_PLATFORMS, async ({ device, screen }) => {
     await screen.getByTestId('request-permission').tap();
     await device.alert('accept');
     await expect(screen.getByTestId('success-message')).toHaveText('Microphone enabled');
@@ -20,13 +26,13 @@ test.describe('permission prompt', () => {
 
   // Changing a permission terminates the app on iOS, so the grant made "in
   // settings" is picked up by a fresh visit rather than by Check again.
-  test('a denied prompt recovers once the permission is granted outside', async ({ device, screen }) => {
+  test('a denied prompt recovers once the permission is granted outside', ALERT_PLATFORMS, async ({ app, device, screen }) => {
     await screen.getByTestId('request-permission').tap();
     await device.alert('dismiss');
     await expect(screen.getByTestId('denied-banner')).toBeVisible();
     await device.setPermission('microphone', 'grant');
     await device.openApp('dev.e2e.benchmark', { relaunch: true });
-    await openScenario({ device, screen }, 'Permission Prompt');
+    await openScenario({ app, device, screen }, 'Permission Prompt');
     await screen.getByTestId('request-permission').tap();
     await expect(screen.getByTestId('success-message')).toHaveText('Microphone enabled');
   });
@@ -44,8 +50,8 @@ async function dismissKeyboardByTapping(screen: Screen, title: string): Promise<
 
 // Every step auto-focuses its field, so the keyboard covers Continue from the
 // start; the success screen echoes the values, so a stray key press fails it.
-test('sequential onboarding echoes the exact values', async ({ device, screen }) => {
-  await openScenario({ device, screen }, 'Sequential Onboarding');
+test('sequential onboarding echoes the exact values', async ({ app, device, screen }) => {
+  await openScenario({ app, device, screen }, 'Sequential Onboarding');
   await screen.getByTestId('email-input').fill('jane@example.com');
   await dismissKeyboardByTapping(screen, 'Step 1 of 3');
   await screen.getByTestId('continue-button').tap();
@@ -66,8 +72,8 @@ test('sequential onboarding echoes the exact values', async ({ device, screen })
   await expect(screen.getByTestId('echo-phone')).toHaveText('0612435678');
 });
 
-test('onboarding rejects a malformed email before advancing', async ({ device, screen }) => {
-  await openScenario({ device, screen }, 'Sequential Onboarding');
+test('onboarding rejects a malformed email before advancing', async ({ app, device, screen }) => {
+  await openScenario({ app, device, screen }, 'Sequential Onboarding');
   await screen.getByTestId('email-input').fill('jane');
   await dismissKeyboardByTapping(screen, 'Step 1 of 3');
   await screen.getByTestId('continue-button').tap();
