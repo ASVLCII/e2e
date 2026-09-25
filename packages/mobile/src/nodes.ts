@@ -34,6 +34,8 @@ export interface RawNode {
   readonly hittable?: boolean;
   readonly appName?: string;
   readonly windowTitle?: string;
+  /** The package (Android) or bundle id (iOS) of the window the node belongs to, when agent-device reports it. */
+  readonly bundleId?: string;
 }
 
 /** One projected node with what the surface needs to act on it and to answer selector terms. */
@@ -342,11 +344,38 @@ function parentPositions(raw: readonly RawNode[]): (number | undefined)[] {
   });
 }
 
+/** The package that owns Android's system bars, and the share of the screen a bar stays under. */
+const SYSTEM_UI_PACKAGE = 'com.android.systemui';
+const SYSTEM_BAR_MAX_SHARE = 0.25;
+const SYSTEM_BAR_MIN_WIDTH_SHARE = 0.9;
+
+/**
+ * Whether a top-level element is one of Android's system bars: the status
+ * bar along the top edge (clock, signal, battery) or the three-button
+ * navigation bar along the bottom, each a window of `com.android.systemui`.
+ * Neither belongs to the app under test, and what they show follows the
+ * device's clock and radio: an end anchor on "T-Mobile, three bars" handed
+ * every replay of a recording off to the model once the emulator read
+ * "signal full". The notification shade, quick settings, and a system dialog
+ * are systemui windows too, but they cover the screen instead of hugging an
+ * edge, and stay. So does a heads-up notification or any other compact
+ * systemui popup: a bar spans the screen edge to edge, a popup sits inset
+ * from the sides, and its controls are worth acting on.
+ */
+function isSystemBar(node: RawNode, screen: ViewportSize | undefined): boolean {
+  if (node.bundleId !== SYSTEM_UI_PACKAGE || node.rect === undefined || screen === undefined) return false;
+  const { y, width, height } = node.rect;
+  if (height >= screen.height * SYSTEM_BAR_MAX_SHARE || width < screen.width * SYSTEM_BAR_MIN_WIDTH_SHARE) return false;
+  return y <= 0 || y + height >= screen.height;
+}
+
 /**
  * Projects one snapshot. `mintId` is called once per node in document order,
- * so the surface's id space stays unique across observations.
+ * so the surface's id space stays unique across observations. Android's
+ * system bars are left out with their children, see `isSystemBar`.
  */
 export function projectSnapshot(raw: readonly RawNode[], options: { readonly mintId: () => string }): ProjectedSnapshot {
+  const viewport = viewportOf(raw);
   const parents = parentPositions(raw);
   const children = new Map<number, number[]>();
   const roots: number[] = [];
@@ -429,8 +458,10 @@ export function projectSnapshot(raw: readonly RawNode[], options: { readonly min
     projected.node = node;
     return node;
   };
-  const rootNodes = roots.map((position) => build(position, undefined));
-  return { roots: rootNodes, index, viewport: viewportOf(raw) };
+  const rootNodes = roots
+    .filter((position) => !isSystemBar(raw[position] as RawNode, viewport))
+    .map((position) => build(position, undefined));
+  return { roots: rootNodes, index, viewport };
 }
 
 /** Quotes one selector term value the way agent-device's parser reads it back. */
@@ -444,10 +475,16 @@ function quoteTerm(value: string): string {
  * snapshot with no geometry at all.
  */
 export function viewportOf(raw: readonly RawNode[]): ViewportSize | undefined {
-  const screen = raw.find((node) => SCREEN_KINDS.has(kindOf(node)) && node.rect !== undefined);
-  if (screen?.rect !== undefined && screen.rect.width > 0 && screen.rect.height > 0) {
-    return { width: screen.rect.width, height: screen.rect.height };
+  // The largest window, not the first: a system bar can be a window too, and
+  // a 63-pixel screen would keep every bar as "too tall to be a bar".
+  let screen: ViewportSize | undefined;
+  for (const node of raw) {
+    if (!SCREEN_KINDS.has(kindOf(node)) || node.rect === undefined) continue;
+    const { width, height } = node.rect;
+    if (width <= 0 || height <= 0) continue;
+    if (screen === undefined || width * height > screen.width * screen.height) screen = { width, height };
   }
+  if (screen !== undefined) return screen;
   let width = 0;
   let height = 0;
   for (const node of raw) {
