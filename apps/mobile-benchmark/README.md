@@ -81,7 +81,10 @@ node node_modules/e2e/dist/cli/bin.js run tests/login-form.e2e.ts --target ios-s
 ```
 
 Android note: the Android Gradle Plugin's prefab step fails on very new JDKs
-(observed on JDK 26). Build with JDK 17 through 21.
+(observed on JDK 26). Build with JDK 17 through 21. A debug build fetches its
+bundle from Metro and cold-starts in about ten seconds on the emulator, longer
+than the budget a suite that reopens the app per test allows; run it against
+a release build (`npx expo run:android --variant release`), as CI does.
 
 ## Scenario contract
 

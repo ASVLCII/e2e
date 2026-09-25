@@ -5,6 +5,7 @@
  * and `foregroundApp` says which app is in front.
  */
 
+import { execFileSync } from 'node:child_process';
 import { expect, openScenario, test } from './fixtures.ts';
 
 const APP_ID = 'dev.e2e.benchmark';
@@ -148,23 +149,59 @@ test.describe('device fixture', () => {
     await readsBack(/^location: (unavailable|permission denied)/);
   });
 
-  // The Device section has the prompt, but neither device can answer it from
-  // the outside yet: agent-device 0.21.13 refuses Face ID simulation on the
-  // iOS 26 runtime, and the emulator's fingerprint answers only once a lock
-  // screen and a fingerprint are enrolled by hand.
+  // The Device section has the prompt; whether the fixture can answer it is
+  // decided at collection, from the simctl the Mac has. Face ID is the sensor
+  // of every current iPhone simulator, CI's iPhone 17 Pro included, and the
+  // simulator is left unenrolled again.
+  const biometricGap = simctlBiometricGap();
   test(
     'enrollBiometrics and setBiometrics answer a biometric prompt',
-    {
-      skip: 'agent-device 0.21.13 refuses Face ID simulation on the iOS 26 runtime ("not supported on this simulator runtime"), and the emulator fingerprint needs a lock screen and an enrolled finger first',
-    },
+    { platforms: ['ios'], ...(biometricGap === undefined ? {} : { skip: biometricGap }) },
     async ({ device, screen }) => {
       await screen.getByTestId('tab-device').tap();
       const status = screen.getByTestId('biometrics-status');
-      await device.enrollBiometrics('faceid', true);
+      try {
+        await device.enrollBiometrics('faceid', true);
+        await screen.getByTestId('unlock-biometrics').tap();
+        await expect(status).toHaveText('biometrics: authenticating');
+        await device.setBiometrics('faceid', 'match');
+        await expect(status).toHaveText('biometrics: unlocked');
+      } finally {
+        await device.enrollBiometrics('faceid', false);
+      }
+    },
+  );
+
+  test(
+    'setBiometrics answers a fingerprint prompt',
+    {
+      platforms: ['android'],
+      skip: "the emulator's fingerprint answers only once a lock screen and a finger are enrolled by hand, and enrollBiometrics takes faceid or touchid only",
+    },
+    async ({ device, screen }) => {
+      await screen.getByTestId('tab-device').tap();
       await screen.getByTestId('unlock-biometrics').tap();
-      await expect(status).toHaveText('biometrics: authenticating');
-      await device.setBiometrics('faceid', 'match');
-      await expect(status).toHaveText('biometrics: unlocked');
+      await device.setBiometrics('fingerprint', 'match');
+      await expect(screen.getByTestId('biometrics-status')).toHaveText('biometrics: unlocked');
     },
   );
 });
+
+/**
+ * Why the device fixture cannot drive the simulator's Face ID on this Mac, or
+ * undefined when it can. agent-device 0.21.13 goes through `simctl biometric`
+ * and reports the runtime as unsupported when the subcommand is missing; no
+ * shipped Xcode declares it (27.0 included), while the simulator still takes
+ * `notifyutil` on com.apple.BiometricKit, which the fixture does not send.
+ * The probe runs on a Mac only; elsewhere the iOS test is not collected.
+ */
+function simctlBiometricGap(): string | undefined {
+  if (process.platform !== 'darwin') return undefined;
+  try {
+    const help = execFileSync('xcrun', ['simctl', 'help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (/^\s*biometric\b/m.test(help)) return undefined;
+  } catch {
+    return 'xcrun simctl is not answering, so the Face ID prompt cannot be driven';
+  }
+  return "agent-device 0.21.13 drives the simulator's Face ID through `simctl biometric`, a subcommand this Xcode's simctl does not declare (Xcode 27.0 included)";
+}
