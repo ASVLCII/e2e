@@ -52,6 +52,14 @@
     }
   },
   "navigation": {
+    "global": {
+      "anchors": [
+        {
+          "anchor": "Shipping faster than you can test?",
+          "href": "https://tester.army/?utm_source=e2e&utm_medium=docs&utm_campaign=docs_sidebar_banner"
+        }
+      ]
+    },
     "tabs": [
       {
         "tab": "Documentation",
