@@ -29,6 +29,7 @@ import { resolveScrollTarget } from './scroll-target.ts';
 import type { OperationQueue } from './operation-queue.ts';
 import { instrumentPhase, recordPolicyEvent } from './phases.ts';
 import { describePointAction, describePointHit, hitTest, POINT_VERBS, type PointProse } from './point-tap.ts';
+import { nodeReading, normalizeReading, readingShape } from './reading.ts';
 import type { AgentObservation, SemanticAgentObservation } from './observation.ts';
 import { authorizeSecretFill } from './secrets.ts';
 import { SETTLE_AFTER } from './settle-policy.ts';
@@ -51,6 +52,27 @@ const MAX_STALE_RELOCATIONS = 2;
  * screen at least once while covering a long feed in fewer actions.
  */
 const SCROLL_MOMENTUM: Momentum = 'slow';
+
+/**
+ * How many pages a scroll to a text may turn. Each page moves as a grammar
+ * scroll does (`SCROLL_MOMENTUM`): three quarters of the list, so every row
+ * is on screen in at least one look and none is skipped between pages, and a
+ * drag that starts inside the list, not in the chrome under it, which a
+ * longer flick on a full-screen list lands in and loses. A windowed table of
+ * five thousand short rows is over four hundred pages on a browser; the cap
+ * bounds a text that never shows, the step's own clock bounds the time, and a
+ * screen that stops moving ends the paging before either.
+ */
+const MAX_SCROLL_UNTIL_SCREENS = 800;
+const MAX_SCROLL_UNTIL_TEXT_CHARS = 200;
+/**
+ * Pages that must leave the screen exactly as it was before the list counts
+ * as ended, and before that, before the list named as the target is given
+ * up for the viewport: a loaded device drops a swipe now and then, and one
+ * unchanged look is that as often as it is the end or the wrong list.
+ */
+const SCROLL_UNTIL_STILL_PAGES = 3;
+const SCROLL_UNTIL_WRONG_LIST_PAGES = 2;
 
 /** The engine action each node verb performs; also the name its engine event carries. */
 const NODE_ACTION_KINDS = {
@@ -104,6 +126,7 @@ export class ActionDispatcher {
       scrollTo: (target) => this.nodeVerb('scrollTo', target),
       upload: (target, paths) => this.upload(target, paths),
       scroll: (direction, target) => this.scroll(direction, target),
+      scrollUntil: (text, direction, list) => this.scrollUntil(text, direction, list),
       navigate: (url) => this.navigate(url),
       back: () => this.back(),
       tapAt: (point) => this.pointVerb('tapAt', point),
@@ -372,6 +395,103 @@ export class ActionDispatcher {
     });
   }
 
+  /**
+   * Pages a list, or the viewport, until a node reading `text` is in view,
+   * as one action: the model names what it is after, the harness turns the
+   * pages, reading each settled screen for it, and brings the node into the
+   * viewport when the engine can. A screen that stops changing means the
+   * list ended without it; the cap means the text is not where the model
+   * thought. Either is `LOCATOR_NOT_FOUND`, an action failure the model
+   * reads and re-aims from. The list is re-found before every page, since a
+   * device renumbers its tree on each look, and a list that filled the
+   * screen and left the tree pages as the viewport (`scroll-target.ts`), as
+   * does one the pages leave nothing to re-find by: a device names a scroll
+   * view after its first visible row, and twenty pages down neither name nor
+   * place is what it was. A list whose page moves nothing is not the list
+   * either: a device shows two scroll views per screen, the navigator's
+   * wrapper and the app's, and a model picks the wrong one now and then. The
+   * viewport takes over in both cases, scrolling whatever is under the
+   * finger, and the record says so.
+   */
+  private async scrollUntil(text: string, direction: ScrollDirection, list: ExecutorTarget | undefined): Promise<void> {
+    if (typeof text !== 'string' || text.trim() === '' || text.length > MAX_SCROLL_UNTIL_TEXT_CHARS) {
+      throw new TestError('INVALID_ARGUMENT', `scroll to a text requires the text to reach, up to ${String(MAX_SCROLL_UNTIL_TEXT_CHARS)} characters`);
+    }
+    if (!['up', 'down', 'left', 'right'].includes(direction)) {
+      throw new TestError('INVALID_ARGUMENT', `invalid scroll direction "${String(direction)}"`);
+    }
+    const needle = normalizeReading(text);
+    const notFound = (why: string) => new TestError('LOCATOR_NOT_FOUND', `nothing reading ${JSON.stringify(text)} came into view ${why}`);
+    await this.runAction('scrollUntil', async () => {
+      let observation = this.feed.requireLatest();
+      let paged: Pick<Extract<RecordableAction, { name: 'scrollUntil' }>, 'node' | 'spans'> = {};
+      let previous: string | undefined;
+      let still = 0;
+      let within = list;
+      for (let screens = 0; ; screens += 1) {
+        // Only the list being paged is read while it is on screen; once it is
+        // gone the whole screen is, as the paging itself falls back to the viewport.
+        const scope = within === undefined || observation.kind !== 'semantic' ? undefined : observation.nodes.get(within.id);
+        const found = observation.kind === 'semantic' ? nodeReading(observation, needle, scope) : undefined;
+        if (found !== undefined) {
+          // An engine that can bring a node in does, whatever the box says: a
+          // windowed list renders a row a little before it is visible. One
+          // that cannot, a device lists what it draws, takes one more page
+          // for a row still past the edge.
+          if (this.verbs.has('scrollTo')) {
+            await this.session.perform(found.ref, { kind: 'scrollIntoView' }, this.accounting.actionOperation());
+            return { name: 'scrollUntil', text, direction, screens, ...paged };
+          }
+          if (isInViewport(found.rect, observation.viewport)) return { name: 'scrollUntil', text, direction, screens, ...paged };
+        }
+        if (screens >= MAX_SCROLL_UNTIL_SCREENS) throw notFound(`within ${String(MAX_SCROLL_UNTIL_SCREENS)} screens ${direction}`);
+        const shape = observation.kind === 'semantic' ? readingShape(observation) : undefined;
+        still = shape !== undefined && shape === previous ? still + 1 : 0;
+        if (still >= SCROLL_UNTIL_STILL_PAGES) throw notFound(`before the screen stopped moving ${direction}, after ${String(screens)} screens`);
+        if (still >= SCROLL_UNTIL_WRONG_LIST_PAGES && within !== undefined) {
+          within = undefined;
+          still = 0;
+        }
+        previous = shape;
+        const turned = await this.page(direction, within);
+        paged = turned.paged;
+        within = turned.within;
+        // A settled look: a browser scrolls on a later frame than the wheel
+        // event, and a raw read right after it sees the page as it was.
+        observation = await this.feed.look('held-still');
+      }
+    });
+  }
+
+  /**
+   * One page of a scroll to a text: on the re-found list, else on the
+   * viewport, which also takes over for good once the list cannot be
+   * re-found. What was paged goes into the record, and the list to page next.
+   */
+  private async page(
+    direction: ScrollDirection,
+    list: ExecutorTarget | undefined,
+  ): Promise<{ paged: Pick<Extract<RecordableAction, { name: 'scrollUntil' }>, 'node' | 'spans'>; within: ExecutorTarget | undefined }> {
+    const resolved = list === undefined ? undefined : this.scrollTargetOrLost(list);
+    if (resolved === undefined) {
+      await this.session.swipe(direction, SCROLL_MOMENTUM, this.accounting.actionOperation());
+      return { paged: {}, within: undefined };
+    }
+    const { node, observation } = resolved;
+    await this.session.perform(node.ref, { kind: 'swipe', direction, momentum: SCROLL_MOMENTUM }, this.accounting.actionOperation());
+    return { paged: { node, ...(node.rect === undefined ? {} : { spans: viewportShare(node.rect, observation.viewport) }) }, within: list };
+  }
+
+  /** The list a scroll to a text pages, or undefined once neither the newest screen nor its old place has it. */
+  private scrollTargetOrLost(list: ExecutorTarget): Resolved | undefined {
+    try {
+      return resolveScrollTarget(this.feed, list);
+    } catch (cause) {
+      if (cause instanceof AgentError && cause.code === 'LOCATOR_NOT_FOUND') return undefined;
+      throw cause;
+    }
+  }
+
   private async navigate(url: string): Promise<void> {
     if (typeof url !== 'string' || url.trim() === '') {
       throw new TestError('INVALID_ARGUMENT', 'navigate requires a URL');
@@ -539,3 +659,10 @@ export class ActionDispatcher {
   }
 
 }
+
+/** Whether a box lies at least partly inside the viewport; a node without a box counts as shown. */
+function isInViewport(rect: SemanticNode['rect'], viewport: { readonly width: number; readonly height: number }): boolean {
+  if (rect === undefined) return true;
+  return rect.x < viewport.width && rect.y < viewport.height && rect.x + rect.width > 0 && rect.y + rect.height > 0;
+}
+
