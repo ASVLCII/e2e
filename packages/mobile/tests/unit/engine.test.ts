@@ -199,6 +199,25 @@ describe('lifecycle', () => {
     expect(single.fake.lastArgs('devices.boot')).toEqual({ platform: 'ios', device: 'iPhone 16e' });
   });
 
+  it('warms each device with a plain open, no launch arguments, and hands the worker the app its session is on', async () => {
+    const h = harness({ device: 'iPhone 16e', launchArguments: ['-e2e', 'YES'], permissions: { camera: 'grant' } });
+    const result = await h.engine.prepare!({ runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
+    expect(h.fake.methods()).toEqual(['devices.boot', 'apps.open']);
+    expect(h.fake.lastArgs('apps.open')).toEqual({ app: 'Settings', platform: 'ios', device: 'iPhone 16e' });
+    const handed = result?.env ?? {};
+    expect(handed[poolVariableIn(handed, 'IOS')]).toBe(JSON.stringify([{ device: 'iPhone 16e', sessionApp: 'Settings' }]));
+
+    // The worker resumes a session that is on the app: its first fresh launch presets the permissions without an open to bind it.
+    await boot(h.engine, 'ios', 0);
+    await h.engine.startAttempt!({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
+    const before = h.fake.calls.length;
+    await h.engine.session!.restart!(operation());
+    expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
+      ['settings.update', { setting: 'permission', permission: 'camera', state: 'grant' }],
+      ['apps.open', { app: 'Settings', platform: 'ios', device: 'iPhone 16e', relaunch: true, launchArgs: ['-e2e', 'YES'] }],
+    ]);
+  });
+
   it('logs a runner that does not warm up in prepare instead of failing the run; a device that cannot boot does fail it', async () => {
     const h = harness({ device: 'iPhone 16e' });
     h.fake.respond('apps.open', () => {
@@ -206,8 +225,11 @@ describe('lifecycle', () => {
     });
     const lines: string[] = [];
     const info = { runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: (line: string) => lines.push(line) };
-    await h.engine.prepare!(info);
+    const result = await h.engine.prepare!(info);
     expect(lines[1]).toMatch(/runner not warmed up.*runner still installing/);
+    // Nothing put the session on the app, and the binding says so: the worker's first launch binds it itself.
+    const handed = result?.env ?? {};
+    expect(handed[poolVariableIn(handed, 'IOS')]).toBe(JSON.stringify([{ device: 'iPhone 16e' }]));
 
     h.fake.respond('devices.boot', () => {
       throw new Error('no such device');
@@ -249,7 +271,10 @@ describe('lifecycle', () => {
     const handed = result?.env ?? {};
     const variable = poolVariableIn(handed, 'IOS');
     expect(handed[variable]).toBe(
-      JSON.stringify([{ deviceId: '2BBF3F07-AF66-4F95-82AB-BF442506FC89' }, { deviceId: '8A2DC8D6-7B20-44FA-ADBB-47D3EAE6E8F3' }]),
+      JSON.stringify([
+        { deviceId: '2BBF3F07-AF66-4F95-82AB-BF442506FC89', sessionApp: 'Settings' },
+        { deviceId: '8A2DC8D6-7B20-44FA-ADBB-47D3EAE6E8F3', sessionApp: 'Settings' },
+      ]),
     );
     expect(env).toEqual({});
     // A worker reads the pool from the environment it was started with, never process.env.
@@ -272,13 +297,13 @@ describe('lifecycle', () => {
     expect(first?.workers).toBe(1);
     const firstEnv = first?.env ?? {};
     expect(h.fake.calls.filter((call) => call.method === 'devices.boot').map((call) => call.args)).toEqual([{ platform: 'ios', udid: 'A' }]);
-    expect(firstEnv[poolVariableIn(firstEnv, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'A' }]));
+    expect(firstEnv[poolVariableIn(firstEnv, 'IOS')]).toBe(JSON.stringify([{ deviceId: 'A', sessionApp: 'Settings' }]));
     // The same handle prepared again, for another target, discovers afresh and hands back that target's own variable.
     h.fake.respond('devices.list', () => [{ platform: 'ios', id: 'C', name: 'C', booted: true }]);
     const second = await h.engine.prepare!({ ...info, targetName: 'ios.a', env });
     const secondEnv = second?.env ?? {};
     expect(h.fake.methods().filter((method) => method === 'devices.list')).toHaveLength(2);
-    expect(secondEnv[poolVariableIn(secondEnv, 'IOS_A')]).toBe(JSON.stringify([{ deviceId: 'C' }]));
+    expect(secondEnv[poolVariableIn(secondEnv, 'IOS_A')]).toBe(JSON.stringify([{ deviceId: 'C', sessionApp: 'Settings' }]));
     // Names that sanitize alike keep distinct variables.
     const third = await h.engine.prepare!({ ...info, targetName: 'ios-a', env });
     expect(Object.keys(third?.env ?? {})[0]).not.toBe(Object.keys(secondEnv)[0]);
@@ -292,7 +317,7 @@ describe('lifecycle', () => {
     expect(cold.fake.lastArgs('devices.boot')).toEqual({ platform: 'ios' });
     const coldHanded = coldResult?.env ?? {};
     // One slot bound to no device in particular: the daemon picks.
-    expect(coldHanded[poolVariableIn(coldHanded, 'IOS')]).toBe('[{}]');
+    expect(coldHanded[poolVariableIn(coldHanded, 'IOS')]).toBe(JSON.stringify([{ sessionApp: 'Settings' }]));
     expect(coldEnv).toEqual({});
   });
 
@@ -324,7 +349,7 @@ describe('lifecycle', () => {
     expect(h.fake.lastArgs('devices.boot')).toEqual({ platform: 'android', serial: 'emulator-5554' });
     const handed = result?.env ?? {};
     const variable = poolVariableIn(handed, 'ANDROID');
-    expect(handed[variable]).toBe(JSON.stringify([{ deviceId: 'emulator-5554' }]));
+    expect(handed[variable]).toBe(JSON.stringify([{ deviceId: 'emulator-5554', sessionApp: 'Settings' }]));
     const worker = harness({ device: undefined, platform: 'android' });
     await boot(worker.engine, 'android', 0, { [variable]: handed[variable] });
     expect(worker.fake.lastArgs('devices.boot')).toEqual({ platform: 'android', serial: 'emulator-5554' });
@@ -1364,6 +1389,85 @@ describe('device fixture', () => {
     expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
       ['apps.open', { app: 'com.apple.mobilesafari', platform: 'ios' }],
     ]);
+  });
+
+  it('presets the configured permissions and passes the launch arguments on every fresh launch of the pinned app, and on no other open', async () => {
+    const h = harness({ app: 'com.example.app', launchArguments: ['-e2e', 'YES'], permissions: { camera: 'grant', location: 'deny' } });
+    h.fake.respond('apps.open', () => ({ session: 's', appName: 'Example', appBundleId: 'com.example.app', identifiers: {} }));
+    await boot(h.engine);
+    await h.engine.startAttempt!({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
+    const device = fixture(h);
+    const before = h.fake.calls.length;
+    await h.engine.session!.restart!(operation());
+    await h.engine.session!.restart!(operation());
+    await h.engine.session!.reset!(operation());
+    await device.openApp('com.example.app');
+    await device.openApp('com.other', { relaunch: true });
+    await device.closeApp();
+    await h.engine.session!.restart!(operation());
+    const open = (extra: Record<string, unknown>): [string, unknown] => ['apps.open', { platform: 'ios', ...extra }];
+    const permission = (name: string, state: string): [string, unknown] => ['settings.update', { setting: 'permission', permission: name, state }];
+    const fresh = open({ app: 'com.example.app', relaunch: true, launchArgs: ['-e2e', 'YES'] });
+    expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
+      // This worker has opened nothing in its session yet: a foreground open puts the session on the app first.
+      open({ app: 'com.example.app' }),
+      permission('camera', 'grant'),
+      permission('location', 'deny'),
+      fresh,
+      // The session is on the app now, so the permissions go straight in.
+      permission('camera', 'grant'),
+      permission('location', 'deny'),
+      fresh,
+      // A state clear resets the permissions with the data; they are put back before the relaunch.
+      ['settings.update', { setting: 'clear-app-state', state: 'clear', app: 'com.example.app' }],
+      permission('camera', 'grant'),
+      permission('location', 'deny'),
+      fresh,
+      // A foreground-only open, and another app, take none of the engine's options.
+      open({ app: 'com.example.app' }),
+      open({ app: 'com.other', relaunch: true }),
+      ['apps.close', { app: 'com.example.app' }],
+      // The close ended the session: the next launch brings it back onto the app first.
+      open({ app: 'com.example.app' }),
+      permission('camera', 'grant'),
+      permission('location', 'deny'),
+      fresh,
+    ]);
+  });
+
+  it('launches any app with its own arguments and permissions, moving the session onto it first', async () => {
+    const h = harness();
+    await openAttempt(h);
+    const device = fixture(h);
+    const before = h.fake.calls.length;
+    await device.openApp('com.other', { relaunch: true, launchArguments: ['--reset-onboarding'], permissions: { photos: 'reset' } });
+    // The session is on that app now, so a second preset needs no foreground open; no arguments and an empty map send nothing.
+    await device.openApp('com.other', { launchArguments: [], permissions: { photos: 'reset' } });
+    await device.openApp('com.other', { permissions: {} });
+    expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
+      ['apps.open', { platform: 'ios', app: 'com.other' }],
+      ['settings.update', { setting: 'permission', permission: 'photos', state: 'reset' }],
+      ['apps.open', { platform: 'ios', app: 'com.other', relaunch: true, launchArgs: ['--reset-onboarding'] }],
+      ['settings.update', { setting: 'permission', permission: 'photos', state: 'reset' }],
+      ['apps.open', { platform: 'ios', app: 'com.other' }],
+      ['apps.open', { platform: 'ios', app: 'com.other' }],
+    ]);
+  });
+
+  it('resets the simulator keychain on iOS and refuses on Android before any device command', async () => {
+    const ios = harness();
+    await openAttempt(ios);
+    const before = ios.fake.calls.length;
+    await fixture(ios).clearKeychain();
+    expect(ios.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
+      ['settings.update', { setting: 'reset-keychain', state: 'clear' }],
+    ]);
+
+    const android = harness({ platform: 'android', app: 'com.example.app' });
+    await openAttempt(android);
+    const count = android.fake.calls.length;
+    await expect(fixture(android).clearKeychain()).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(android.fake.calls.length).toBe(count);
   });
 
   it('labels openApp and openLink steps without the link query, so a magic-link token never enters the report', () => {
