@@ -121,6 +121,27 @@ const FLOWS: readonly Flow[] = [
       calls === 0 ? [{ toolName: 'scroll_to', input: { text: 'Row 333', target: nodeIdFor(call.prompt, /list "Ledger"/) } }] : undefined,
   },
   {
+    title: 'selects one word with a repeated press and sees the selection',
+    instruction: 'select the last word of the memo',
+    check: `await expect(screen.getByRole('status', { name: 'Gesture state' })).toHaveText('selected: approved');`,
+    replays: true,
+    script: (calls, call) => {
+      const memo = nodeIdFor(call.prompt, /textbox "Memo"/);
+      if (calls === 0) return [{ toolName: 'tap', input: { target: memo } }];
+      if (calls === 1) return [{ toolName: 'press', input: { target: memo, key: 'Shift+ArrowLeft', times: 8 } }];
+      return undefined;
+    },
+  },
+  {
+    title: 'tabs from the terms checkbox to the memo with one repeated press',
+    instruction: 'tab from the terms checkbox to the memo',
+    // Tabbing into a text input selects its contents, which the page's select listener echoes.
+    check: `await expect(screen.getByRole('status', { name: 'Gesture state' })).toHaveText('selected: release approved');`,
+    replays: true,
+    script: (calls, call) =>
+      calls === 0 ? [{ toolName: 'press', input: { target: nodeIdFor(call.prompt, /checkbox "Agree to terms"/), key: 'Tab', times: 2 } }] : undefined,
+  },
+  {
     title: 'opens a page and comes back',
     instruction: 'open the about page and come back',
     check: `await expect(screen.getByRole('heading', { name: 'Gestures' })).toBeVisible();`,
@@ -304,6 +325,30 @@ describe('agent.act grammar verbs', () => {
     expect(step.metrics!.actionSteps).toBe(1);
     expect(turnsOf('scroll the ledger')[1]!.lastToolResult).toMatch(/^Scrolled down until "Row 333" was in view\./);
     expect(turnsOf('scroll the ledger')[1]!.lastToolResult).toMatch(/Row 333 · Golden/);
+  });
+
+  it('repeats a key in one call, one engine action per press, and shows the selection it made', () => {
+    const title = 'selects one word with a repeated press and sees the selection';
+    expect(resultByTitle(outcome, title).status).toBe('passed');
+    const actions = engineEvents(title);
+    // The first press addresses the node; the seven after it ride the focus it took.
+    expect(actions.map((event) => event.name)).toEqual(['tap', 'press', ...Array.from({ length: 7 }, () => 'pressKey')]);
+    expect(actions[1]!.detail).toBe('press "Shift+ArrowLeft" on textbox "Memo"');
+    expect(stepOf(title).metrics!.actionSteps).toBe(9);
+    const [, , third] = turnsOf('select the last word of the memo');
+    expect(third!.lastToolResult).toMatch(/^Pressed Shift\+ArrowLeft 8 times on #\S+\./);
+    expect(third!.lastToolResult).toMatch(/changed #\S+ textbox "Memo" value="release approved" selection="approved"/);
+  });
+
+  it('walks focus on with a repeated Tab instead of returning to the node each time', () => {
+    const title = 'tabs from the terms checkbox to the memo with one repeated press';
+    expect(resultByTitle(outcome, title).status).toBe('passed');
+    const actions = engineEvents(title);
+    expect(actions.map((event) => event.name)).toEqual(['press', 'pressKey']);
+    expect(actions[0]!.detail).toBe('press "Tab" on checkbox "Agree to terms"');
+    const [, second] = turnsOf('tab from the terms checkbox');
+    expect(second!.lastToolResult).toMatch(/^Pressed Tab 2 times on #\S+\./);
+    expect(second!.lastToolResult).toMatch(/changed #\S+ textbox "Memo" value="release approved" selection="release approved"/);
   });
 
   it('goes back through the engine session and reports the screen it returned to', () => {
