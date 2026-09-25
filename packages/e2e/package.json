@@ -108,14 +108,14 @@
     }
   },
   "devDependencies": {
-    "@ai-sdk/openai": "4.0.71",
+    "@ai-sdk/openai": "4.0.72",
     "@ai-sdk/openai-compatible": "3.0.53",
-    "@ai-sdk/xai": "5.0.4",
+    "@ai-sdk/xai": "5.0.5",
     "@e2edev/web": "workspace:*",
     "@openrouter/ai-sdk-provider": "3.1.0",
     "@types/node": "26.6.2",
     "@types/pngjs": "6.0.5",
-    "ai": "7.0.107",
+    "ai": "7.0.109",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "playwright": "1.63.0",

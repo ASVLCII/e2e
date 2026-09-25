@@ -14,8 +14,8 @@
     "@e2edev/web": "workspace:*",
     "@types/node": "26.6.2",
     "agent-device": "0.21.6",
-    "ai": "7.0.107",
-    "mint": "4.2.909",
+    "ai": "7.0.109",
+    "mint": "4.2.917",
     "playwright": "1.63.0",
     "typescript": "7.0.2"
   },
