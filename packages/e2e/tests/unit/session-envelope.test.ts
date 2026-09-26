@@ -1,9 +1,10 @@
 /** Session envelope wire format. */
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { EngineState } from '../../src/engine/surface.ts';
 import { uuidv7 } from '../../src/internal/ids.ts';
 import { SessionStore, type SessionIdentity } from '../../src/run/sessions.ts';
 import {
@@ -31,7 +32,9 @@ async function saveEnvelope(): Promise<{ store: SessionStore; envelope: Record<s
     version: 1,
     data: { cookies: [{ name: 'sid', value: 'abc' }] },
   });
-  const raw = await readFile(path.join(root, runId, 'web--member.json'), 'utf8');
+  const [file] = await readdir(path.join(root, runId));
+  expect(file).toMatch(/^web--member-[0-9a-f]{16}\.json$/);
+  const raw = await readFile(path.join(root, runId, file!), 'utf8');
   return { store, envelope: JSON.parse(raw) as Record<string, unknown> };
 }
 
@@ -62,5 +65,92 @@ describe('session envelope', () => {
 
   it('rejects the canonical invalid fixture', () => {
     expect(isValidSessionEnvelope(specFixture('session-v1.invalid.json'))).toBe(false);
+  });
+});
+
+describe('session file names', () => {
+  /** Opens a store on a fresh temporary root. */
+  async function openStore(): Promise<{ store: SessionStore; root: string; runId: string }> {
+    const root = await mkdtemp(path.join(tmpdir(), 'e2e-sessions-'));
+    const runId = uuidv7();
+    return { store: SessionStore.create(runId, root), root, runId };
+  }
+
+  /** A state whose payload names the pair that produced it. */
+  function stateFor(targetId: string, name: string): EngineState {
+    return { format: 'state', version: 1, data: { pair: `${targetId}/${name}` } };
+  }
+
+  it('keeps two pairs whose joined names collide apart', async () => {
+    const { store } = await openStore();
+    const first: SessionIdentity = { ...identity, targetId: 'a--b' };
+    const second: SessionIdentity = { ...identity, targetId: 'a' };
+    try {
+      await store.save('c', first, stateFor('a--b', 'c'));
+      await store.save('b--c', second, stateFor('a', 'b--c'));
+      const one = await store.load('c', first);
+      const two = await store.load('b--c', second);
+      expect(one.data).toEqual({ pair: 'a--b/c' });
+      expect(two.data).toEqual({ pair: 'a/b--c' });
+    } finally {
+      store.cleanup();
+    }
+  });
+
+  it('keeps a dot-joined and a dash-joined pair apart', async () => {
+    const { store } = await openStore();
+    const first: SessionIdentity = { ...identity, targetId: 'a.b' };
+    const second: SessionIdentity = { ...identity, targetId: 'a-b' };
+    try {
+      await store.save('c', first, stateFor('a.b', 'c'));
+      await store.save('c', second, stateFor('a-b', 'c'));
+      expect((await store.load('c', first)).data).toEqual({ pair: 'a.b/c' });
+      expect((await store.load('c', second)).data).toEqual({ pair: 'a-b/c' });
+    } finally {
+      store.cleanup();
+    }
+  });
+
+  it('keeps the longest allowed names within the file name limit', async () => {
+    const { store, root, runId } = await openStore();
+    const longName = '-'.repeat(128);
+    const longTarget = `${'a.b-'.repeat(60)}end`;
+    const wide: SessionIdentity = { ...identity, targetId: longTarget };
+    const twin: SessionIdentity = { ...identity, targetId: `${longTarget}x` };
+    try {
+      await store.save(longName, wide, stateFor(longTarget, longName));
+      await store.save(longName, twin, stateFor(`${longTarget}x`, longName));
+      const files = await readdir(path.join(root, runId));
+      expect(files).toHaveLength(2);
+      for (const file of files) {
+        expect(Buffer.byteLength(file)).toBeLessThan(200);
+      }
+      expect((await store.load(longName, wide)).data).toEqual({
+        pair: `${longTarget}/${longName}`,
+      });
+      expect((await store.load(longName, twin)).data).toEqual({
+        pair: `${longTarget}x/${longName}`,
+      });
+    } finally {
+      store.cleanup();
+    }
+  });
+
+  it('keeps every session file inside the run directory', async () => {
+    const { store, root, runId } = await openStore();
+    const hostile: SessionIdentity = { ...identity, targetId: '../../escape' };
+    try {
+      await store.save('..', hostile, stateFor('../../escape', '..'));
+      await store.save('x/y\\z', hostile, stateFor('../../escape', 'x/y\\z'));
+      const files = await readdir(path.join(root, runId));
+      expect(files).toHaveLength(2);
+      for (const file of files) {
+        expect(file).toMatch(/^[A-Za-z0-9_%-]+\.json$/);
+      }
+      expect(await readdir(root)).toEqual([runId]);
+      expect((await store.load('..', hostile)).data).toEqual({ pair: '../../escape/..' });
+    } finally {
+      store.cleanup();
+    }
   });
 });
