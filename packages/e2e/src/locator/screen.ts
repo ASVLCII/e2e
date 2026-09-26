@@ -3,7 +3,7 @@
 import nodePath from 'node:path';
 import type { LocatorExpression, SemanticNode } from '../engine/surface.ts';
 import { locatorBrand, secretBrand } from '../internal/brands.ts';
-import { ConfigurationError, TestError } from '../internal/errors.ts';
+import { asEngineError, ConfigurationError, TestError } from '../internal/errors.ts';
 import { requireFinitePoint } from '../internal/geometry.ts';
 import { rejectUnknownOptions } from '../internal/options.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
@@ -101,6 +101,16 @@ export function createScopedScreen(
 /** Creates a public locator from a raw expression (a contributed fixture's platform selector). */
 export function createLocator(context: ScreenContext, expression: LocatorExpression): Locator {
   return new LocatorImpl(context, expression);
+}
+
+/**
+ * Whether a swipe failed because the operation budget it was given ran out:
+ * the engine's `OPERATION_TIMEOUT` as a viewport swipe raises it, or wrapped
+ * as the `ACTION_FAILED` the locator engine translates it into.
+ */
+function timedOut(cause: unknown): boolean {
+  const engineError = asEngineError(cause) ?? asEngineError(cause instanceof Error ? cause.cause : undefined);
+  return engineError?.code === 'OPERATION_TIMEOUT';
 }
 
 class ScreenImpl implements Screen {
@@ -206,8 +216,13 @@ class ScreenImpl implements Screen {
         try {
           await swipeStep(deadline);
         } catch (cause) {
-          // A swipe cut by the scroll's deadline is the scroll timing out.
-          if (deadline.expired()) throw notVisible(cause);
+          // A swipe cut by the scroll's deadline is the scroll timing out. The
+          // engine's timer can wake a millisecond before this clock reads the
+          // deadline, so a swipe that ran out of its budget within a poll
+          // interval of the deadline is the deadline too, whichever timer fired first.
+          if (deadline.expired() || (timedOut(cause) && deadline.remaining() < POLL_INTERVAL_MS)) {
+            throw notVisible(cause);
+          }
           throw cause;
         }
         await sleep(Math.min(POLL_INTERVAL_MS, deadline.remaining()), engine.signal);
