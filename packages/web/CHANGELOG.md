@@ -1,5 +1,16 @@
 # @e2edev/web
 
+## 0.11.0-canary-20260925150007
+
+### Minor Changes
+
+- [#516](https://github.com/tester-army/e2e/pull/516) [`ec503c2`](https://github.com/tester-army/e2e/commit/ec503c2ea3e031c457509b93195f608cb8fd0a73) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An observed node carries `selection`, the text selected inside the focused field or editing host, and the screen the agent reads renders it as `selection="..."` beside the value. A `press` of `Shift+ArrowLeft` now shows what it selected, and `press` takes `times` (1 to 20, each press one recorded action, as a scroll repeat is), so the agent extends a selection to exactly one word in one more call, where before it pressed blind, one key per turn, and bolded the wrong span. A secure field reports no selection, as it reports no value. The web engine reads it from an input's or textarea's selection range and from the document selection inside a `contenteditable` host; a collapsed caret reports none.
+
+### Patch Changes
+
+- Updated dependencies [[`43d76ce`](https://github.com/tester-army/e2e/commit/43d76ce760b4d62148d4e129c77cbedd8a6aec7c), [`d6a1a30`](https://github.com/tester-army/e2e/commit/d6a1a30519951a3e588d7fe6d73d4ff0ef433b89), [`c1547c9`](https://github.com/tester-army/e2e/commit/c1547c9deb9619b6f90e4a98712ea080551e61cc), [`ec503c2`](https://github.com/tester-army/e2e/commit/ec503c2ea3e031c457509b93195f608cb8fd0a73), [`38e152a`](https://github.com/tester-army/e2e/commit/38e152a4aab06b4a1ce2ef46967b8f1931b3e35a)]:
+  - e2e@0.15.0-canary-20260925150007
+
 ## 0.11.0-canary-20260924194828
 
 ### Patch Changes

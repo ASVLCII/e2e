@@ -1,5 +1,23 @@
 # e2e
 
+## 0.15.0-canary-20260925150007
+
+### Minor Changes
+
+- [#514](https://github.com/tester-army/e2e/pull/514) [`43d76ce`](https://github.com/tester-army/e2e/commit/43d76ce760b4d62148d4e129c77cbedd8a6aec7c) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `scroll_to` reaches a node the screen does not list yet. Given `text` instead of a node id, it pages the list (or the viewport) screen by screen in `direction` until a visible node reading that text shows, then brings it into the viewport when the engine can: for a row deep in a long or windowed list, which the tree lists only once it is drawn. One action of the budget however many screens it takes, up to 800; a screen that stops moving or the cap ends it as `LOCATOR_NOT_FOUND`, an action failure the model re-aims from. The step records it as one `scrollUntil` action with the list it paged, and the trace cache replays it by paging again. A device engine, which declares no `scrollIntoView`, now gets `scroll_to` in its text form. The text is read as a whole label or at a word boundary, never inside a longer number, and only inside the list being paged while it is on screen; a list whose rows keep one name while their text moves on counts as moving.
+
+- [#516](https://github.com/tester-army/e2e/pull/516) [`ec503c2`](https://github.com/tester-army/e2e/commit/ec503c2ea3e031c457509b93195f608cb8fd0a73) Thanks [@okwasniewski](https://github.com/okwasniewski)! - An observed node carries `selection`, the text selected inside the focused field or editing host, and the screen the agent reads renders it as `selection="..."` beside the value. A `press` of `Shift+ArrowLeft` now shows what it selected, and `press` takes `times` (1 to 20, each press one recorded action, as a scroll repeat is), so the agent extends a selection to exactly one word in one more call, where before it pressed blind, one key per turn, and bolded the wrong span. A secure field reports no selection, as it reports no value. The web engine reads it from an input's or textarea's selection range and from the document selection inside a `contenteditable` host; a collapsed caret reports none.
+
+### Patch Changes
+
+- [#519](https://github.com/tester-army/e2e/pull/519) [`d6a1a30`](https://github.com/tester-army/e2e/commit/d6a1a30519951a3e588d7fe6d73d4ff0ef433b89) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e init` writes the agent skill once. With `.agents/skills` and `.claude/skills` both chosen, the `--yes` default, the copy goes to `.agents/skills/e2e` and `.claude/skills/e2e` is a relative symlink to it (`../../.agents/skills/e2e`), the layout `npx skills add` produces, so one copy serves every agent. A project with two copies from an earlier version gets the link on its next `init` when the Claude Code copy holds nothing but the shipped files; one with other files in it stays a copy and is refreshed. A `.claude/skills/e2e` that already leads to the copy, itself or through a linked `.claude/skills`, needs nothing. A link elsewhere keeps its rules: skipped with a warning under `--yes`, and offered a replacement when asked, now the link rather than a second copy.
+
+- [#520](https://github.com/tester-army/e2e/pull/520) [`c1547c9`](https://github.com/tester-army/e2e/commit/c1547c9deb9619b6f90e4a98712ea080551e61cc) Thanks [@szymonrybczak](https://github.com/szymonrybczak)! - Stop printing the one-time telemetry notice before `e2e init`; the first command after the scaffold prints it instead.
+  
+  `e2e init` lists the planned file changes one per line before asking to apply them, instead of joining them into one sentence.
+
+- [#512](https://github.com/tester-army/e2e/pull/512) [`38e152a`](https://github.com/tester-army/e2e/commit/38e152a4aab06b4a1ce2ef46967b8f1931b3e35a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A point tap or hover recorded on a screen the tree lists poorly replays instead of handing off as `target-ambiguous` or `target-not-found`. When several nested look-alikes of the recorded container hold the point, a React Native host view and the view inside it under one label, the recorded point on a viewport of the recorded size names the same pixel whichever of them was recorded, and it is tapped as a bare point would be. Look-alikes that merely overlap under the point without nesting still hand off, since which one is on top may have changed. A container with nothing to re-find it by, a group among groups on a screen merged into one accessibility node, is no longer recorded at all: the point stands alone, and an entry that still carries one replays the point. A container that is gone still hands off.
+
 ## 0.15.0-canary-20260924194828
 
 ### Minor Changes
