@@ -384,13 +384,13 @@ interface SettleClock {
 }
 
 /**
- * The shape the screen had when the preceding action was resolved, and how
- * long to wait for the screen to leave it: the action's settle policy
+ * The shape the screen had when the preceding action was resolved, and
+ * the deadline for the screen to leave it: the action's settle policy
  * (`settle-policy.ts`) decides the window, armed once the action commits.
  */
 export interface PendingChange {
   readonly shape: string;
-  readonly waitMs: number;
+  readonly deadlineMs: number;
 }
 
 /** The waits of one settle, decided by the caller; the loop itself keeps no defaults for them. */
@@ -405,8 +405,8 @@ export interface SettleOptions<T> {
   readonly changeShapeOf?: ((value: T) => string | undefined) | undefined;
   /**
    * Whether a capture is a screen in transition rather than a screen: an
-   * empty document between two pages, say. Such a capture never satisfies
-   * the change wait and never counts as stable while the change wait lasts.
+   * empty document between two pages, say. After an action, such a capture
+   * satisfies neither the change wait nor the subsequent stability check.
    */
   readonly transitional?: ((value: T) => boolean) | undefined;
   /**
@@ -449,10 +449,9 @@ export async function settleObservation<T>(
   if (shape === undefined) return value;
   if (options.changedFrom !== undefined) {
     const changeShapeOf = options.changeShapeOf ?? shapeOf;
-    const changeDeadlineMs = Date.now() + options.changedFrom.waitMs;
     while (
       (changeShapeOf(value) === options.changedFrom.shape || transitional(value)) &&
-      Date.now() < changeDeadlineMs &&
+      Date.now() < options.changedFrom.deadlineMs &&
       clock.remainingMs() > pollMs
     ) {
       await sleep(pollMs, clock.signal);
@@ -469,18 +468,21 @@ export async function settleObservation<T>(
     if (next === undefined) return value;
     const stable = next === shape;
     shape = next;
-    if (stable) break;
+    if (stable && (options.changedFrom === undefined || !transitional(value))) break;
   }
   return value;
 }
 
 /**
- * Whether an observation shows a screen in transition: nothing but the
- * document itself, as a page reads between the old body being torn down and
- * the new one arriving. Acting or judging on it would be acting on nothing.
+ * Whether an observation shows a screen in transition: only an empty root,
+ * with no permitted screenshot to describe content absent from the tree.
+ * A canvas can have an empty tree while its pixels show the action's effect.
  */
 export function isTransitionalObservation(observation: AgentObservation): boolean {
-  return observation.kind === 'semantic' && observation.nodes.size <= 1;
+  return observation.kind === 'semantic' &&
+    observation.pixels === undefined &&
+    (observation.tree.role === 'document' || observation.tree.role === 'screen' || observation.tree.role === 'window') &&
+    observation.nodes.size <= 1;
 }
 
 function indexNodes(

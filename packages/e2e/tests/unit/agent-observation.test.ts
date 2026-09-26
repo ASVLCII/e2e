@@ -1,6 +1,6 @@
-import { assert, describe, expect, it } from 'vitest';
+import { assert, describe, expect, it, vi } from 'vitest';
 import type { Observation, SemanticNode } from '../../src/engine/surface.ts';
-import { interactiveNodeCount, observationShape, prepareObservation, settleObservation } from '../../src/agent/observation.ts';
+import { changeShape, interactiveNodeCount, isTransitionalObservation, observationShape, prepareObservation, settleObservation } from '../../src/agent/observation.ts';
 import { createRedactor } from '../../src/internal/redact.ts';
 
 function node(id: string, extra: Partial<SemanticNode> = {}): SemanticNode {
@@ -368,7 +368,7 @@ describe('settleObservation', () => {
   const clock = { remainingMs: () => 60_000, signal: new AbortController().signal };
   const fast = { pollMs: 5, stableWaitMs: 30 };
   /** The pre-action shape and the window to leave it in. */
-  const leaving = { shape: 'old', waitMs: 150 };
+  const leaving = () => ({ shape: 'old', deadlineMs: Date.now() + 150 });
 
   /** Captures the scripted values in order, then the last one forever. */
   function scripted(values: readonly string[]): { capture: () => Promise<string>; calls: () => number } {
@@ -381,14 +381,14 @@ describe('settleObservation', () => {
 
   it('waits for the screen to leave the pre-action shape before settling on it', async () => {
     const source = scripted(['old', 'old', 'old', 'new', 'new', 'new']);
-    const value = await settleObservation(source.capture, (v) => v, clock, { ...fast, changedFrom: leaving });
+    const value = await settleObservation(source.capture, (v) => v, clock, { ...fast, changedFrom: leaving() });
     expect(value).toBe('new');
   });
 
   it('returns the unchanged screen once the change wait runs out', async () => {
     const source = scripted(['old']);
     const started = Date.now();
-    const value = await settleObservation(source.capture, (v) => v, clock, { ...fast, changedFrom: leaving });
+    const value = await settleObservation(source.capture, (v) => v, clock, { ...fast, changedFrom: leaving() });
     expect(value).toBe('old');
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);
   });
@@ -397,7 +397,7 @@ describe('settleObservation', () => {
     const source = scripted(['old', '', '', 'new', 'new']);
     const value = await settleObservation(source.capture, (v) => v, clock, {
       ...fast,
-      changedFrom: leaving,
+      changedFrom: leaving(),
       transitional: (v) => v === '',
     });
     expect(value).toBe('new');
@@ -408,6 +408,142 @@ describe('settleObservation', () => {
     const value = await settleObservation(source.capture, (v) => v, clock, fast);
     expect(value).toBe('b');
     expect(source.calls()).toBe(3);
+  });
+
+  it('accepts a stable empty screen when no action is pending', async () => {
+    const source = scripted(['', '', 'new']);
+    const value = await settleObservation(source.capture, (v) => v, clock, {
+      ...fast,
+      transitional: (v) => v === '',
+    });
+    expect(value).toBe('');
+    expect(source.calls()).toBe(2);
+  });
+
+  it('counts a slow first capture toward the change window, then still checks stability', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      let captures = 0;
+      const pending = settleObservation(async () => {
+        captures += 1;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return 'old';
+      }, (value) => value, clock, {
+        changedFrom: { shape: 'old', deadlineMs: started + 500 },
+        stableWaitMs: 1_000,
+        pollMs: 100,
+      });
+      await vi.runAllTimersAsync();
+      expect(await pending).toBe('old');
+      expect(Date.now() - started).toBe(1_400);
+      expect(captures).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a fresh stability check when the action window expired before observation', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const source = scripted(['old', 'new', 'new']);
+      const pending = settleObservation(source.capture, (value) => value, clock, {
+        changedFrom: { shape: 'old', deadlineMs: started - 1 },
+        stableWaitMs: 1_000,
+        pollMs: 100,
+      });
+      await vi.runAllTimersAsync();
+      expect(await pending).toBe('new');
+      expect(Date.now() - started).toBe(200);
+      expect(source.calls()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not treat matching empty navigation captures as stable after the action deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const source = scripted(['', '', 'new', 'new']);
+      const pending = settleObservation(source.capture, (value) => value, clock, {
+        changedFrom: { shape: 'old', deadlineMs: started - 1 },
+        transitional: (value) => value === '',
+        stableWaitMs: 1_000,
+        pollMs: 100,
+      });
+      await vi.runAllTimersAsync();
+      expect(await pending).toBe('new');
+      expect(Date.now() - started).toBe(300);
+      expect(source.calls()).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds the stability check when navigation stays empty after the action deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const source = scripted(['']);
+      const pending = settleObservation(source.capture, (value) => value, clock, {
+        changedFrom: { shape: 'old', deadlineMs: started - 1 },
+        transitional: (value) => value === '',
+        stableWaitMs: 1_000,
+        pollMs: 100,
+      });
+      await vi.runAllTimersAsync();
+      expect(await pending).toBe('');
+      expect(Date.now() - started).toBe(1_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles a changed canvas from matching permitted screenshots instead of waiting out both windows', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const prepare = (data: number) => prepareObservation({
+        ...observation(node('root', { role: 'screen' }), {
+          data: new Uint8Array([data]), mediaType: 'image/png', width: 1, height: 1, scale: 1,
+        }),
+        redaction: { secureNodeCount: 0, maskedRegionCount: 0 },
+      }, { redact: NO_REDACT, maxBytes: 4_096 });
+      const before = prepare(1);
+      const after = prepare(2);
+      const capture = vi.fn(async () => after);
+      const pending = settleObservation(capture, observationShape, clock, {
+        changedFrom: { shape: changeShape(before)!, deadlineMs: started + 2_000 },
+        changeShapeOf: changeShape,
+        transitional: isTransitionalObservation,
+        stableWaitMs: 1_000,
+        pollMs: 100,
+      });
+      await vi.runAllTimersAsync();
+      expect(await pending).toBe(after);
+      expect(capture).toHaveBeenCalledTimes(2);
+      expect(Date.now() - started).toBe(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('isTransitionalObservation', () => {
+  it.each(['document', 'screen', 'window'])('recognizes an empty %s without treating a lone control as an empty screen', (role) => {
+    const prepare = (tree: SemanticNode) => prepareObservation(observation(tree), { redact: NO_REDACT, maxBytes: 4_096 });
+    expect(isTransitionalObservation(prepare(node('root', { role })))).toBe(true);
+    expect(isTransitionalObservation(prepare(node('root', { role: 'button', name: 'Continue' })))).toBe(false);
+    expect(isTransitionalObservation(prepare(node('root', { role: 'textbox', name: 'Password', states: { secure: true } })))).toBe(false);
+    expect(isTransitionalObservation(prepare(node('root', { role, children: [node('child', { role: 'text', text: 'Ready' })] })))).toBe(false);
+    const unproven = observation(node('root', { role }), {
+      data: new Uint8Array([1]), mediaType: 'image/png', width: 1, height: 1, scale: 1,
+    });
+    const withheld = prepareObservation(unproven, { redact: NO_REDACT, maxBytes: 4_096 });
+    expect(withheld.pixels).toBeUndefined();
+    expect(isTransitionalObservation(withheld)).toBe(true);
   });
 });
 
