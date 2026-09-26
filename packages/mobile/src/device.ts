@@ -32,11 +32,16 @@ export interface Device {
   setNetwork(state: 'online' | 'offline'): Promise<void>;
   /** Toggles airplane mode. */
   setAirplaneMode(enabled: boolean): Promise<void>;
-  /** Grants, denies, or resets one permission for the open app. */
+  /**
+   * Grants, denies, or resets one permission for the pinned app, brought to
+   * the foreground first when the session is on no app. A change terminates
+   * a running app on iOS, a revoke one on Android, so it goes before the
+   * `app.open()` a test starts with.
+   */
   setPermission(permission: DevicePermission, state: PermissionState): Promise<void>;
-  /** Sets the simulated location. */
+  /** Sets the simulated location, switching location services on first on Android. */
   setLocation(coordinates: { latitude: number; longitude: number }): Promise<void>;
-  /** Turns simulated location off. */
+  /** Turns simulated location off; on Android that is location services off, until the next `setLocation`. */
   clearLocation(): Promise<void>;
   /** Sets the system appearance. */
   setAppearance(mode: 'light' | 'dark'): Promise<void>;
@@ -48,11 +53,15 @@ export interface Device {
   enrollBiometrics(sensor: 'faceid' | 'touchid', enrolled: boolean): Promise<void>;
   /**
    * Installs a build (an iOS `.app` bundle or an Android `.apk`, resolved
-   * against the project root) on the device. `reinstall: true` removes
-   * the app first so it starts with no data; a plain install replaces the
-   * binary and keeps its data. Resolves to the identity to `openApp` it by.
+   * against the project root) on the device; without a path, the engine's
+   * `appPath`. The engine installs nothing on its own, so a suite that runs
+   * against a build calls this once per device, in a fixture or a test.
+   * `reinstall: true` removes the app first so it starts with no data; a
+   * plain install replaces the binary and keeps its data. Resolves to the
+   * identity to `openApp` it by, which becomes the app `app.open()` launches
+   * when the engine's build is installed and no `app` is pinned.
    */
-  installApp(appPath: string, options?: InstallAppOptions): Promise<InstalledApp>;
+  installApp(appPath?: string, options?: InstallAppOptions): Promise<InstalledApp>;
   /**
    * Brings an app to the foreground; `relaunch` restarts it fresh.
    * `launchArguments` and `permissions` apply to this launch alone; the
@@ -124,13 +133,19 @@ export function createDeviceFixture(surface: AgentDeviceSurface, context: Engine
       );
     },
     async setPermission(permission, state) {
-      await surface.command(
-        'device.setPermission',
-        (client) => client.settings.update({ setting: 'permission', permission, state }),
-        context.signal,
-      );
+      await surface.setPermission(permission, state, context.signal);
     },
     async setLocation({ latitude, longitude }) {
+      // Android reads a fix only while location services are on, and
+      // `clearLocation` switched them off for good on the emulator (the
+      // setting outlives the app); iOS has no such switch.
+      if (surface.options.platform === 'android') {
+        await surface.command(
+          'device.setLocation',
+          (client) => client.settings.update({ setting: 'location', state: 'on' }),
+          context.signal,
+        );
+      }
       await surface.command(
         'device.setLocation',
         (client) => client.settings.update({ setting: 'location', state: 'set', latitude, longitude }),
@@ -229,7 +244,7 @@ export function createDeviceFixture(surface: AgentDeviceSurface, context: Engine
     setOrientation: { ...action, label: (orientation) => orientation },
     setBiometrics: action,
     enrollBiometrics: action,
-    installApp: { ...action, label: (appPath) => appPath },
+    installApp: { ...action, label: (appPath) => appPath ?? surface.options.appPath ?? 'appPath' },
     openApp: { ...action, label: (app) => linkLabel(app) },
     openLink: { ...action, label: (url) => linkLabel(url) },
     closeApp: action,

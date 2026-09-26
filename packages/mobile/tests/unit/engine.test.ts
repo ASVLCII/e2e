@@ -176,13 +176,22 @@ describe('lifecycle', () => {
     expect(h.fake.calls[2]!.args).toEqual({ platform: 'ios', device: 'iPhone 17 Pro' });
     expect(lines).toEqual(['booting iPhone 17 (1 of 2)', 'booting iPhone 17 Pro (2 of 2)']);
 
-    // Without a pinned app there is nothing to open; a build `appPath` installs in init, so it boots only too.
+    // Without a pinned app there is nothing to open, so it boots only; so does
+    // a build `appPath` nobody has installed and no `app`, since the engine
+    // installs nothing on its own and the suite's `device.installApp()` comes
+    // later. A pinned `app` whose build is not on yet is not opened either,
+    // and the log says why.
     const bare = harness({ device: 'iPhone 16e' }, false);
     await bare.engine.prepare!({ runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
     expect(bare.fake.methods()).toEqual(['devices.boot']);
-    const build = harness({ device: 'iPhone 16e', appPath: 'build/App.app' });
+    const build = harness({ device: 'iPhone 16e', appPath: 'build/App.app' }, false);
     await build.engine.prepare!({ runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: () => undefined });
     expect(build.fake.methods()).toEqual(['devices.boot']);
+    const pinnedBuild = harness({ device: 'iPhone 16e', appPath: 'build/App.app' });
+    const pinnedLines: string[] = [];
+    await pinnedBuild.engine.prepare!({ runId: 'run-1', targetName: 'ios', projectRoot: PROJECT_ROOT, slots: 1, env: {}, signal: new AbortController().signal, log: (line) => pinnedLines.push(line) });
+    expect(pinnedBuild.fake.methods()).toEqual(['devices.boot']);
+    expect(pinnedLines[1]).toMatch(/Settings awaits the suite's device.installApp\(\)/);
 
     const single = harness({ device: 'iPhone 16e', session: 'qa' });
     expect(single.engine.workers).toBe(1);
@@ -424,7 +433,7 @@ describe('lifecycle', () => {
     expect(h.fake.lastArgs('devices.boot')).toEqual({ platform: 'ios' });
   });
 
-  it('installs the build once per init and opens what it installed when no app is pinned', async () => {
+  it('installs nothing on its own; device.installApp() with no path installs the engine build and pins what it installed', async () => {
     const h = harness({ appPath: './build/App.app' }, false);
     h.fake.respond('apps.install', () => ({
       app: './build/App.app',
@@ -434,28 +443,34 @@ describe('lifecycle', () => {
       identifiers: {},
     }));
     expect(Object.keys(h.engine.session!).toSorted()).toEqual(['back', 'reset', 'restart']);
-    await openAttempt(h);
-    expect(h.fake.methods()).toEqual(['devices.boot', 'apps.install', 'apps.open']);
+    await boot(h.engine);
+    await h.engine.startAttempt!({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
+    expect(h.fake.methods()).toEqual(['devices.boot']);
+
+    const signal = new AbortController().signal;
+    expect(await h.surface.installApp(undefined, {}, signal)).toEqual({ app: 'com.example.app', bundleId: 'com.example.app' });
     expect(h.fake.lastArgs('apps.install')).toEqual({ platform: 'ios', appPath: '/project/build/App.app' });
+    // From here on the installed bundle is the pinned app: app.open() launches it, reset clears it.
+    await h.engine.session!.restart!(operation());
     expect(h.fake.lastArgs('apps.open')).toEqual({ app: 'com.example.app', platform: 'ios', relaunch: true });
-
-    await h.engine.endAttempt!(cleanup());
-    await h.engine.startAttempt!({ attemptId: 'a2', artifactsDir, signal: new AbortController().signal });
-    expect(h.fake.methods().filter((m) => m === 'apps.install')).toHaveLength(1);
-
     await h.engine.session!.reset!(operation());
     expect(h.fake.lastArgs('settings.update')).toEqual({ setting: 'clear-app-state', state: 'clear', app: 'com.example.app' });
+    expect(h.fake.methods().filter((m) => m === 'apps.install')).toHaveLength(1);
 
-    // A new worker installs again: the build on the device is the worker's.
-    await h.engine.dispose!(cleanup());
-    await openAttempt(h);
-    expect(h.fake.methods().filter((m) => m === 'apps.install')).toHaveLength(2);
+    // A build named by path that is the engine's own counts the same; another path pins nothing.
+    await h.surface.installApp('build/App.app', {}, signal);
+    expect(h.fake.lastArgs('apps.install')).toEqual({ platform: 'ios', appPath: '/project/build/App.app' });
+    await h.surface.installApp('other/Other.app', {}, signal);
+    expect(h.fake.lastArgs('apps.install')).toEqual({ platform: 'ios', appPath: '/project/other/Other.app' });
+    expect(h.surface.pinnedApp).toBe('com.example.app');
   });
 
-  it('installs under the pinned app and device, and keeps opening the pinned app', async () => {
+  it('installs the engine build under the pinned app and device, and keeps opening the pinned app', async () => {
     const h = harness({ app: 'com.example.app', appPath: '/builds/app.apk', device: 'Pixel 8', platform: 'android' });
     h.fake.respond('apps.install', () => ({ app: 'com.example.app', appPath: '/builds/app.apk', platform: 'android', identifiers: {} }));
     await openAttempt(h);
+    expect(h.fake.methods()).toEqual(['devices.boot', 'apps.open']);
+    await h.surface.installApp(undefined, {}, new AbortController().signal);
     expect(h.fake.lastArgs('apps.install')).toEqual({
       platform: 'android',
       device: 'Pixel 8',
@@ -465,12 +480,16 @@ describe('lifecycle', () => {
     expect(h.fake.lastArgs('apps.open')).toEqual({ app: 'com.example.app', platform: 'android', device: 'Pixel 8', relaunch: true });
   });
 
-  it('fails init when the install fails, before anything is opened', async () => {
+  it('refuses installApp() without a build, and reports a build that does not install as the install step', async () => {
+    const none = harness();
+    await openAttempt(none);
+    await expect(none.surface.installApp(undefined, {}, new AbortController().signal)).rejects.toMatchObject({ code: 'INVALID_STATE' });
     const h = harness({ appPath: './missing.app' }, false);
     h.fake.respond('apps.install', () => {
       throw new Error('no such file: missing.app');
     });
-    await expect(openAttempt(h)).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
+    await boot(h.engine);
+    await expect(h.surface.installApp(undefined, {}, new AbortController().signal)).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
     expect(h.fake.methods()).toEqual(['devices.boot', 'apps.install']);
   });
 
@@ -707,6 +726,7 @@ describe('perform', () => {
     await h.engine.perform!(about!.ref, { kind: 'tap' }, op);
     await h.engine.perform!(about!.ref, { kind: 'doubleTap' }, op);
     await h.engine.perform!(about!.ref, { kind: 'longPress', durationMs: 900 }, op);
+    await h.engine.perform!(about!.ref, { kind: 'longPress' }, op);
     await h.engine.perform!(search!.ref, { kind: 'focus' }, op);
     await h.engine.perform!(about!.ref, { kind: 'hover' }, op);
     await h.engine.perform!(search!.ref, { kind: 'fill', value: 'blue', sensitive: false }, op);
@@ -723,6 +743,8 @@ describe('perform', () => {
       ['interactions.press', { ref: '@e4', settle: true, settleQuietMs: 150 }],
       ['interactions.press', { ref: '@e4', count: 2, settle: true, settleQuietMs: 150 }],
       ['interactions.longPress', { ref: '@e4', settle: true, settleQuietMs: 150, durationMs: 900 }],
+      // No duration named: the engine's one-second hold, past a Pressable's delayLongPress.
+      ['interactions.longPress', { ref: '@e4', settle: true, settleQuietMs: 150, durationMs: 1000 }],
       ['interactions.press', { ref: '@e7', settle: true, settleQuietMs: 150 }],
       ['interactions.hover', { ref: '@e4' }],
       ['interactions.fill', { ref: '@e7', text: 'blue', settle: true, settleQuietMs: 150 }],
@@ -1316,6 +1338,55 @@ describe('device fixture', () => {
     ]);
   });
 
+  it('brings the pinned app to the foreground before a permission change when the session is on no app', async () => {
+    // Nothing opened in this worker yet: the open goes first, as a foreground open, then the change.
+    const h = harness();
+    await boot(h.engine);
+    await h.engine.startAttempt!({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
+    const before = h.fake.calls.length;
+    await fixture(h).setPermission('microphone', 'reset');
+    expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
+      ['apps.open', { app: 'Settings', platform: 'ios' }],
+      ['settings.update', { setting: 'permission', permission: 'microphone', state: 'reset' }],
+    ]);
+
+    // The session lost its app since the open (a failed attempt left it on none): agent-device's refusal gets one open and one more try.
+    let refusals = 0;
+    h.fake.respond('settings.update', () => {
+      if (refusals++ === 0) throw new Error('permission setting requires an active app in session');
+      return {};
+    });
+    const again = h.fake.calls.length;
+    await fixture(h).setPermission('microphone', 'grant');
+    expect(h.fake.calls.slice(again).map((call) => call.method)).toEqual(['settings.update', 'apps.open', 'settings.update']);
+
+    // Any other refusal, and a refusal met again after the open, propagate.
+    h.fake.respond('settings.update', () => {
+      throw new Error('permission setting requires an active app in session');
+    });
+    await expect(fixture(h).setPermission('camera', 'deny')).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
+    h.fake.respond('settings.update', () => {
+      throw new Error('permission camera is not known');
+    });
+    const other = h.fake.calls.length;
+    await expect(fixture(h).setPermission('camera', 'deny')).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
+    expect(h.fake.calls.slice(other).map((call) => call.method)).toEqual(['settings.update']);
+  });
+
+  it('switches Android location services on before a fix, since clearLocation leaves them off', async () => {
+    const h = harness({ platform: 'android', app: 'com.android.settings' });
+    await openAttempt(h);
+    const before = h.fake.calls.length;
+    const device = fixture(h);
+    await device.setLocation({ latitude: 52.2297, longitude: 21.0122 });
+    await device.clearLocation();
+    expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
+      ['settings.update', { setting: 'location', state: 'on' }],
+      ['settings.update', { setting: 'location', state: 'set', latitude: 52.2297, longitude: 21.0122 }],
+      ['settings.update', { setting: 'location', state: 'off' }],
+    ]);
+  });
+
   it('reads an Android foreground package', async () => {
     const h = harness({ platform: 'android', app: 'com.android.settings' });
     await openAttempt(h);
@@ -1736,6 +1807,8 @@ describe('deterministic actions', () => {
     expect(h.fake.lastArgs('interactions.press')).toEqual({ x: 10, y: 20, count: 2 });
     await h.engine.performAt!({ x: 10, y: 20 }, { kind: 'longPress', durationMs: 700 }, test());
     expect(h.fake.lastArgs('interactions.longPress')).toEqual({ x: 10, y: 20, durationMs: 700 });
+    await h.engine.performAt!({ x: 10, y: 20 }, { kind: 'longPress' }, test());
+    expect(h.fake.lastArgs('interactions.longPress')).toEqual({ x: 10, y: 20, durationMs: 1000 });
     await h.engine.performAt!({ x: 10, y: 20 }, { kind: 'swipeTo', target: { x: 10, y: 300 } }, test());
     expect(h.fake.lastArgs('interactions.swipe')).toEqual({ from: { x: 10, y: 20 }, to: { x: 10, y: 300 } });
     expect(h.engine.pointerActions).toEqual(['tap', 'doubleTap', 'longPress', 'swipeTo']);

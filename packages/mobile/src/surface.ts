@@ -39,8 +39,8 @@ import {
   ConfigurationError,
   TestError,
 } from 'e2e/engine';
-import { isSnapshotPresentationFailure, runCommand, staleOr } from './errors.ts';
-import { pointerInteraction } from './actions.ts';
+import { isNoSessionApp, isSnapshotPresentationFailure, runCommand, staleOr } from './errors.ts';
+import { pointerInteraction, DEFAULT_LONG_PRESS_MS } from './actions.ts';
 import { resolveExpression } from './locate.ts';
 import {
   isWithin,
@@ -89,6 +89,17 @@ export interface InstalledApp {
   readonly bundleId?: string;
 }
 
+/** Why nothing is pinned with `appPath` alone: the install is the suite's. */
+const UNINSTALLED_BUILD = 'the build `appPath` names installed first with `device.installApp()`';
+
+/** The install fields this engine reads off agent-device's response. */
+interface RawInstallResult {
+  readonly app: string;
+  readonly appId?: string;
+  readonly bundleId?: string;
+  readonly package?: string;
+}
+
 /** How `device.openApp` launches an app. */
 export interface OpenAppOptions {
   /** Terminate the app first, so it starts fresh; without it a running app is brought forward as it is. */
@@ -105,14 +116,6 @@ export interface OpenAppOptions {
    * app.
    */
   readonly permissions?: LaunchPermissions;
-}
-
-/** The install fields this engine reads off agent-device's response. */
-interface RawInstallResult {
-  readonly app: string;
-  readonly appId?: string;
-  readonly bundleId?: string;
-  readonly package?: string;
 }
 
 /** The snapshot fields this engine reads off agent-device's response. */
@@ -409,11 +412,10 @@ export class AgentDeviceSurface {
     this.where = `session ${session}${label === undefined ? '' : ` on ${label}`}`;
     this.client ??= this.createClient(session, binding);
     await this.command('boot', (client) => client.devices.boot(this.selection()), info.signal);
-    if (this.options.appPath === undefined) return;
-    // A provider that installed the build itself says so on the binding; the worker then installs nothing.
-    this.installedApp =
-      binding?.installedApp ??
-      (await this.installApp(this.options.appPath, this.options.app === undefined ? {} : { app: this.options.app }, info.signal)).app;
+    // Nothing is installed here: a device provider that installed the build
+    // from `appPath` says so on the binding, and otherwise the suite installs
+    // it where it wants to, with `device.installApp()`.
+    this.installedApp = binding?.installedApp;
   }
 
   async startAttempt(context: EngineAttemptContext): Promise<void> {
@@ -562,13 +564,35 @@ export class AgentDeviceSurface {
     );
     if (entries.length === 0) return;
     if (this.sessionApp !== app) await this.open(app, false, undefined, signal);
-    for (const [permission, state] of entries) {
-      await this.command(
-        `permission ${permission} ${state}`,
-        (client) => client.settings.update({ setting: 'permission', permission, state }),
-        signal,
-      );
+    for (const [permission, state] of entries) await this.permission(permission, state, signal);
+  }
+
+  /**
+   * One permission change for `device.setPermission`: on the app the session
+   * is on, which is what agent-device acts on. With none known here (nothing
+   * opened yet, `closeApp`, a worker resumed on a bare session) the pinned
+   * app is brought to the foreground first. agent-device's own refusal, met
+   * when its session lost the app since (a failed attempt left it on none),
+   * gets the same foreground open and the command once more.
+   */
+  async setPermission(permission: DevicePermission, state: PermissionState, signal: AbortSignal): Promise<void> {
+    const app = this.pinnedApp;
+    if (this.sessionApp === undefined && app !== undefined) await this.open(app, false, undefined, signal);
+    try {
+      await this.permission(permission, state, signal);
+    } catch (cause) {
+      if (signal.aborted || app === undefined || !isNoSessionApp(cause)) throw cause;
+      await this.open(app, false, undefined, signal);
+      await this.permission(permission, state, signal);
     }
+  }
+
+  private async permission(permission: DevicePermission, state: PermissionState, signal: AbortSignal): Promise<void> {
+    await this.command(
+      `permission ${permission} ${state}`,
+      (client) => client.settings.update({ setting: 'permission', permission, state }),
+      signal,
+    );
   }
 
   /**
@@ -647,10 +671,13 @@ export class AgentDeviceSurface {
    * named by `options.app` (else the pinned app) first, so the build starts
    * with no data; a plain install replaces the binary and keeps its data.
    */
-  async installApp(appPath: string, options: InstallAppOptions, signal: AbortSignal): Promise<InstalledApp> {
-    const resolved = path.resolve(this.projectRoot, appPath);
+  async installApp(appPath: string | undefined, options: InstallAppOptions, signal: AbortSignal): Promise<InstalledApp> {
+    const build = appPath ?? this.options.appPath;
+    if (build === undefined) throw invalidState('installApp needs a build: pass a path, or name one with the engine option `appPath`');
+    const resolved = path.resolve(this.projectRoot, build);
     const selection = this.selection();
-    const app = options.app ?? (options.reinstall === true ? this.pinnedApp : undefined);
+    const engineBuild = appPath === undefined || (this.options.appPath !== undefined && resolved === path.resolve(this.projectRoot, this.options.appPath));
+    const app = options.app ?? (engineBuild ? this.options.app : undefined) ?? (options.reinstall === true ? this.pinnedApp : undefined);
     if (options.reinstall === true && app === undefined) {
       throw invalidState('reinstall needs an app: pass `app`, or pin one with the engine option `app` or `appPath`');
     }
@@ -663,7 +690,10 @@ export class AgentDeviceSurface {
       signal,
     )) as RawInstallResult;
     const identity = result.bundleId ?? result.package ?? result.appId;
-    return { app: identity ?? result.app, ...(identity === undefined ? {} : { bundleId: identity }) };
+    const installed: InstalledApp = { app: identity ?? result.app, ...(identity === undefined ? {} : { bundleId: identity }) };
+    // The engine's own build, installed: without `app`, this is what `app.open()` launches from here on.
+    if (engineBuild) this.installedApp = installed.app;
+    return installed;
   }
 
   private async snapshot(signal: AbortSignal, interactiveOnly: boolean): Promise<RawSnapshot> {
@@ -946,11 +976,7 @@ export class AgentDeviceSurface {
         case 'doubleTap':
           return client.interactions.press({ ...this.actionTarget(target), count: 2, ...settle });
         case 'longPress':
-          return client.interactions.longPress({
-            ...this.actionTarget(target),
-            ...settle,
-            ...(action.durationMs === undefined ? {} : { durationMs: action.durationMs }),
-          });
+          return client.interactions.longPress({ ...this.actionTarget(target), ...settle, durationMs: action.durationMs ?? DEFAULT_LONG_PRESS_MS });
         case 'hover':
           return client.interactions.hover(this.actionTarget(target));
         case 'fill':
@@ -1169,14 +1195,14 @@ export class AgentDeviceSurface {
 
   async restart(operation: OperationContext): Promise<void> {
     const app = this.pinnedApp;
-    if (app === undefined) throw unsupported('app.restart needs the engine option `app` or `appPath`');
+    if (app === undefined) throw unsupported(`app.restart needs the engine option \`app\`, or ${UNINSTALLED_BUILD}`);
     await this.openApp(app, { relaunch: true }, operation.signal);
   }
 
   /** Clears the pinned app's persisted state and relaunches it: the device equivalent of a fresh context. */
   async reset(operation: OperationContext): Promise<void> {
     const app = this.pinnedApp;
-    if (app === undefined) throw unsupported('app.clearState needs the engine option `app` or `appPath`');
+    if (app === undefined) throw unsupported(`app.clearState needs the engine option \`app\`, or ${UNINSTALLED_BUILD}`);
     await this.command(
       'clear app state',
       (client) => client.settings.update({ setting: 'clear-app-state', state: 'clear', app }),
