@@ -199,21 +199,22 @@ async function measure(absolute: string): Promise<{ size: number; sha256: string
 
 /** Longest report path segment the runner writes: a name every common filesystem accepts. */
 const MAX_SEGMENT_CHARS = 120;
-/** Hex characters of the digest a cut segment ends in. */
+/** Hex characters of the digest a rewritten or cut segment ends in. */
 const SEGMENT_DIGEST_CHARS = 8;
 
 /**
  * Restricts a report path segment to a safe filename alphabet and length. A
- * value that is only dots would name the directory or its parent, so it
- * becomes `_`. A value within the cap is unchanged. One past it is cut and
- * ends in a digest of the whole original, so two long test ids that share a
- * prefix (a monorepo path, a describe, a long title) get directories of
+ * value that is already safe and within the cap is unchanged. Any other value
+ * ends in a digest of the whole original: one the alphabet rewrote (a test id
+ * with a `/`, a `::`, a percent-encoded space), one that is only dots (which
+ * would name the directory or its parent), or one past the cap, which is cut
+ * first. The digest is what keeps two ids that sanitize alike (`artifact%20a`
+ * and `artifact_20a`, or two long ids with a shared prefix) in directories of
  * their own instead of writing over each other's evidence.
  */
 export function sanitizePathSegment(value: string): string {
-  if (/^\.+$/.test(value)) return '_';
-  const sanitized = value.replaceAll(/[^A-Za-z0-9._-]/g, '_');
-  if (sanitized.length <= MAX_SEGMENT_CHARS) return sanitized;
+  const sanitized = /^\.+$/.test(value) ? '_' : value.replaceAll(/[^A-Za-z0-9._-]/g, '_');
+  if (sanitized === value && sanitized.length <= MAX_SEGMENT_CHARS) return sanitized;
   const digest = createHash('sha256').update(value).digest('hex').slice(0, SEGMENT_DIGEST_CHARS);
   return `${sanitized.slice(0, MAX_SEGMENT_CHARS - SEGMENT_DIGEST_CHARS - 1)}-${digest}`;
 }
