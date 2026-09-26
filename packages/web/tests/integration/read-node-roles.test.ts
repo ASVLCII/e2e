@@ -246,6 +246,33 @@ describe('contenteditable editing hosts', () => {
     expect(await page.getByRole('textbox', { name: 'Message' }).getAttribute('data-testid')).toBe('explicit');
   });
 
+  it('keeps the whitespace an editor renders as its value, and reads an empty editor as an empty value', async () => {
+    await page.setContent(`
+      <div contenteditable style="white-space: pre-wrap" aria-label="Code" data-testid="pre">  keep spaces  </div>
+      <div contenteditable style="white-space: pre-wrap" aria-label="Lines" data-testid="lines"><p>line1</p><p>  line2</p></div>
+      <div contenteditable aria-label="Prose" data-testid="prose">  collapsed   text  </div>
+      <div contenteditable style="white-space: pre-wrap" aria-label="Spaces" data-testid="spaces">   </div>
+      <div contenteditable aria-label="Empty" data-testid="empty"><p><br></p></div>
+      <div contenteditable style="white-space: pre-wrap" aria-label="Empty pre" data-testid="empty-pre"><p><br></p></div>
+      <div contenteditable aria-label="Blank" data-testid="blank"></div>
+      <div contenteditable style="white-space: pre-wrap" aria-label="Slate" data-testid="slate"><div><span>﻿<br></span></div></div>
+      <div contenteditable style="white-space: pre-wrap" aria-label="Slate lines" data-testid="slate-lines"><div><span>hi</span></div><div><span>﻿<br></span></div></div>
+      <input aria-label="Field" value="  keep spaces  " data-testid="field">
+    `);
+    const nodes = await rolesByTestId();
+    expect(nodes.get('pre')?.value).toBe('  keep spaces  ');
+    expect(nodes.get('lines')?.value).toBe('line1\n\n  line2');
+    // Under white-space: normal the browser renders no leading or trailing space, so none is read.
+    expect(nodes.get('prose')?.value).toBe('collapsed text');
+    expect(nodes.get('spaces')?.value).toBe('   ');
+    expect(nodes.get('empty')?.value).toBe('');
+    expect(nodes.get('empty-pre')?.value).toBe('');
+    expect(nodes.get('blank')?.value).toBe('');
+    expect(nodes.get('slate')?.value).toBe('');
+    expect(nodes.get('slate-lines')?.value).toBe('hi\n\n');
+    expect(nodes.get('field')?.value).toBe('  keep spaces  ');
+  });
+
   it('makes an editing host a textbox whatever role its tag carries, and leaves a native control its own', async () => {
     await page.setContent(`
       <article contenteditable data-testid="article"><p>Post</p></article>
