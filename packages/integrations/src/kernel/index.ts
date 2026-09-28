@@ -7,4 +7,4 @@
 
 export { kernel } from './provider.ts';
 export type { KernelOptions } from './provider.ts';
-export type { KernelBrowserParams } from './client.ts';
+export type { KernelBrowserParams, KernelReplayParams } from './client.ts';

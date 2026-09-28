@@ -1,8 +1,16 @@
 /** Kernel's hosted Chromium as a `BrowserProvider` for the web engine. */
 
-import type { BrowserLease, BrowserProvider, BrowserProviderScope, BrowserReleaseContext, BrowserRequest } from '@e2e-dev/web';
+import path from 'node:path';
+import type {
+  BrowserLease,
+  BrowserProvider,
+  BrowserProviderScope,
+  BrowserReleaseContext,
+  BrowserRequest,
+} from '@e2e-dev/web';
+import type { ProviderRecordContext, ProviderRecording } from 'e2e/engine';
 import { envValue } from '../env.ts';
-import { kernelBrowsers, type KernelBrowserParams, type KernelBrowsers } from './client.ts';
+import { kernelBrowsers, type KernelBrowserParams, type KernelBrowsers, type KernelReplayParams } from './client.ts';
 
 const KERNEL_API_KEY = 'KERNEL_API_KEY';
 
@@ -25,7 +33,18 @@ export interface KernelOptions extends KernelBrowserParams {
    * reattached after a CDP transport drop; rules out `headers` and `basicAuth`.
    */
   readonly scope?: BrowserProviderScope | undefined;
+  /**
+   * How an attempt that records video is recorded. On (the default), or
+   * Kernel's start-replay body (`framerate`, `max_duration_in_seconds`,
+   * `record_audio`): a Kernel replay of the browser's screen, saved as the
+   * attempt's `video/replay.mp4`. `false`: the web engine's screencast of
+   * the page. A headless browser, which Kernel cannot replay, always gets
+   * the screencast.
+   */
+  readonly replay?: boolean | KernelReplayParams | undefined;
 }
+
+const REPLAY_FILE = 'replay.mp4';
 
 /**
  * Kernel browsers for `web({ browser: kernel() })`: one hosted Chromium per
@@ -35,7 +54,7 @@ export interface KernelOptions extends KernelBrowserParams {
  * from the run's environment.
  */
 export function kernel(options: KernelOptions = {}): BrowserProvider {
-  const { scope, ...params } = options;
+  const { scope, replay = true, ...params } = options;
   const clients = new Map<string, KernelBrowsers>();
   const clientFor = (env: BrowserRequest['env']): KernelBrowsers => {
     const apiKey = envValue(env, KERNEL_API_KEY);
@@ -46,6 +65,21 @@ export function kernel(options: KernelOptions = {}): BrowserProvider {
       clients.set(apiKey, client);
     }
     return client;
+  };
+  // Kernel replays headful browsers only; without `record` the engine records the screencast.
+  const replayParams = replay === false || params.headless === true ? undefined : replay === true ? {} : replay;
+  /** Records each attempt as a Kernel replay of the lease's screen, started with `body` and saved as `replay.mp4`. */
+  const replays = (body: KernelReplayParams) => async (lease: BrowserLease, context: ProviderRecordContext): Promise<ProviderRecording> => {
+    const client = clientFor(context.env);
+    const startedAt = new Date().toISOString();
+    const replayId = await client.startReplay(lease.id, body, context.signal);
+    return {
+      startedAt,
+      async stop({ dir, signal }) {
+        await client.saveReplay(lease.id, replayId, path.join(dir, REPLAY_FILE), signal);
+        return { file: REPLAY_FILE };
+      },
+    };
   };
   return {
     name: 'kernel',
@@ -79,5 +113,6 @@ export function kernel(options: KernelOptions = {}): BrowserProvider {
     async release(lease: BrowserLease, context: BrowserReleaseContext): Promise<void> {
       await clientFor(context.env).delete(lease.id, context.signal);
     },
+    ...(replayParams === undefined ? {} : { record: replays(replayParams) }),
   };
 }
