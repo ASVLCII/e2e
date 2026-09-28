@@ -121,6 +121,31 @@ test('toHaveValue never normalizes the value', async ({ app, screen }) => {
   await expect(screen.getByLabel('Notes')).toHaveValue('line1 line2', fast);
 });
 
+test('toHaveValue on a secure field is denied', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen.getByLabel('Password')).toHaveValue('');
+});
+
+test('a negated toHaveValue on a secure field is denied', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen.getByLabel('Password')).not.toHaveValue('');
+});
+
+test('toHaveText on a secure field is denied', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen.getByLabel('Password')).toHaveText('');
+});
+
+test('a negated toHaveText on a secure field is denied', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen.getByLabel('Password')).not.toHaveText('');
+});
+
+test('the list form of toHaveText over a secure field is denied', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen.getByRole('textbox')).toHaveText(['', '', '', '']);
+});
+
 test('toHaveAttribute fails on an absent attribute', async ({ app, screen }) => {
   await app.open('/');
   await expect(screen.getByTestId('card')).toHaveAttribute('hidden', fast);
@@ -182,12 +207,22 @@ const FAILURES: [string, ...string[]][] = [
   ['a negated matcher fails while the condition holds', 'expect.not.toBeVisible failed', 'expected: not visible', 'observed: default states (match count 1)'],
 ];
 
+/** The value and text matchers a secure field refuses, negated and in list form too. */
+const SECURE_DENIALS = [
+  'toHaveValue on a secure field is denied',
+  'a negated toHaveValue on a secure field is denied',
+  'toHaveText on a secure field is denied',
+  'a negated toHaveText on a secure field is denied',
+  'the list form of toHaveText over a secure field is denied',
+];
+
 const TITLES = [
   'every matcher passes on the scripted screen',
   'every negated matcher passes on the scripted screen',
   ...FAILURES.map(([title]) => title),
   'a matcher honors its timeout',
   'an ambiguous locator fails an assertion at once',
+  ...SECURE_DENIALS,
 ];
 
 describe('scripted engine: expect(locator) matchers', () => {
@@ -218,6 +253,14 @@ describe('scripted engine: expect(locator) matchers', () => {
     for (const [title, ...fragments] of FAILURES) {
       const attempt = failed(run.outcome, title, 'ASSERTION_FAILED', ...fragments);
       expect(attempt.error?.details, title).toMatchObject({ locator: expect.any(String), expected: expect.any(String) });
+    }
+  });
+
+  it('refuses to judge a secure field with POLICY_DENIED, negated and in list form too', () => {
+    for (const title of SECURE_DENIALS) {
+      const attempt = failed(run.outcome, title, 'POLICY_DENIED', 'reading values from a secure field is denied');
+      expect(attempt.error?.category, title).toBe('configuration');
+      expect(JSON.stringify(attempt), title).not.toContain('hunter2');
     }
   });
 

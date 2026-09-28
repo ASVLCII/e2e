@@ -12,7 +12,7 @@ import {
 } from '../internal/text.ts';
 import { isValueControl } from '../internal/roles.ts';
 import { Deadline, pollCondition } from '../internal/time.ts';
-import { attributeOf, isNodeVisible } from '../locator/engine.ts';
+import { attributeOf, denySecureRead, isNodeVisible } from '../locator/engine.ts';
 import { describeExpression } from '../locator/expression.ts';
 import type { LocatorInternals } from '../locator/screen.ts';
 import type { AsyncExpectation, TextMatch } from '../types.ts';
@@ -39,6 +39,12 @@ interface MatcherSpec {
    * heading is not a pass.
    */
   readonly evaluableNode?: (node: SemanticNode) => boolean;
+  /**
+   * Refuses a sample the matcher must not judge at all; what it throws ends
+   * the poll, negated or not, before the predicate or the failure message
+   * reads the sample.
+   */
+  readonly refuse?: (sample: Sample) => void;
   readonly predicate: (sample: Sample) => boolean;
   readonly describeExpected: string;
   readonly observed: (sample: Sample) => string;
@@ -125,6 +131,7 @@ class AsyncExpectationImpl implements AsyncExpectation {
         evaluate: async () => {
           const sample = await this.sample(spec, deadline);
           lastSample = sample;
+          spec.refuse?.(sample);
           if (!this.conditionEvaluable(spec, sample)) return undefined;
           return spec.predicate(sample);
         },
@@ -158,6 +165,18 @@ class AsyncExpectationImpl implements AsyncExpectation {
     if (spec.wholeSet !== undefined) return true;
     if (sample.node === null) return spec.evaluableWithoutNode === true;
     return spec.evaluableNode?.(sample.node) ?? true;
+  }
+
+  /**
+   * The refusal a value or text matcher polls with: the engine withholds both
+   * on a secure field, and judged against `''`, a filled password field would
+   * pass as cleared. The name matcher has none, a name is never withheld.
+   */
+  private secureRefusal(def: TextMatcherDef): Pick<MatcherSpec, 'refuse'> {
+    if (def.field === 'name') return {};
+    return {
+      refuse: (sample) => denySecureRead(sample.node === null ? sample.nodes : [sample.node], this.label),
+    };
   }
 
   private async sample(spec: MatcherSpec, deadline: Deadline): Promise<Sample> {
@@ -199,6 +218,7 @@ class AsyncExpectationImpl implements AsyncExpectation {
     return this.poll(
       {
         name,
+        ...this.secureRefusal(def),
         evaluableNode: (node) => readField(def, node) !== undefined,
         predicate: (sample) => {
           const actual = sample.node === null ? undefined : readField(def, sample.node);
@@ -234,6 +254,7 @@ class AsyncExpectationImpl implements AsyncExpectation {
     return this.poll(
       {
         name,
+        ...this.secureRefusal(def),
         wholeSet: 'read',
         predicate: (sample) =>
           sample.nodes.length === patterns.length &&
