@@ -156,6 +156,43 @@ function spellingsDistinct(templates: readonly ParamTemplate[]): boolean {
   return true;
 }
 
+/** The scalar leaves of the params that no template marked, as the text a recording would spell them in. */
+function literalLeaves(params: Readonly<Record<string, JsonValue>> | undefined, templates: readonly ParamTemplate[]): ParamTemplate[] {
+  const pointers = new Set(templates.map((template) => template.pointer));
+  const out: ParamTemplate[] = [];
+  const walk = (value: JsonValue, pointer: string): void => {
+    if (pointers.has(pointer)) return;
+    if (value === null) return;
+    if (typeof value !== 'object') {
+      out.push({ pointer, value: String(value) });
+    } else if (isJsonArray(value)) {
+      value.forEach((item, index) => walk(item, paramPointer(pointer, index)));
+    } else {
+      for (const [key, item] of Object.entries(value)) walk(item, paramPointer(pointer, key));
+    }
+  };
+  walk(params ?? {}, '');
+  return out;
+}
+
+/**
+ * Whether a `unique()` value cannot be told apart from the rest of the
+ * params: two marked params share a spelling, or a marked value is spelled
+ * inside an unmarked one. The recording is text with no provenance, so a
+ * `select` of the unmarked choice `Daily` that ran while the marked title
+ * happened to be `Daily` would be stored as the title's slot and replay the
+ * next run's title as the choice. Such a step is not recorded. Unmarked
+ * values are compared in every spelling a recording can give them too: a
+ * URL spells the choice `a b` as `a%20b`, which a marked `a%20b` would claim.
+ */
+export function templatesCollide(params: Readonly<Record<string, JsonValue>> | undefined, templates: readonly ParamTemplate[]): boolean {
+  if (templates.length === 0) return false;
+  if (!spellingsDistinct(templates)) return true;
+  const marked = spellings(templates);
+  const literal = spellings(literalLeaves(params, templates));
+  return literal.some((plain) => marked.some((slot) => plain.text.includes(slot.text)));
+}
+
 /**
  * Replaces every occurrence of each template's value in `text`, in any of
  * its spellings, with the matching placeholder. Longer texts are claimed
@@ -215,6 +252,11 @@ export function expandText(text: string, values: ReadonlyMap<string, string>): s
  * cannot be templated safely: the text already spelled a placeholder, which
  * could not be told from a written one at replay, or two marked params
  * share a spelling, so the text cannot say which one it came from.
+ *
+ * The verdict summary is kept as recorded. It is the model's prose about
+ * the recording run, not a replay input or an anchor, and a value spelled
+ * inside a word of it (`Daily` in "kept the Daily plan") would come back
+ * rewritten as this run's value, which the run never said.
  */
 export function templateTrace(trace: ActionTrace, templates: readonly ParamTemplate[]): ActionTrace | undefined {
   if (!spellingsDistinct(templates)) return undefined;
@@ -223,7 +265,7 @@ export function templateTrace(trace: ActionTrace, templates: readonly ParamTempl
     if (text.includes(PLACEHOLDER_PREFIX)) literalPlaceholder = true;
     return templateText(text, templates);
   });
-  return literalPlaceholder ? undefined : templated;
+  return literalPlaceholder || templated === undefined ? undefined : { ...templated, summary: trace.summary };
 }
 
 /**
