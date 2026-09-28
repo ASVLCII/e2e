@@ -966,6 +966,125 @@ test('also passes', async () => {});
   );
 
   it(
+    '--last-failed runs a failed hook\'s scope again until the hook passes',
+    async () => {
+      const hooks = (teardown: string) => `import { test } from 'e2e';
+test.describe('teardown', () => {
+  test.afterAll(() => {
+    ${teardown}
+  });
+  test('passes in the scope', async () => {});
+});
+test('passes outside it', async () => {});
+`;
+      const brokenBody = `import { test } from 'e2e';
+test('fails', async () => {
+  throw new Error('still broken');
+});
+`;
+      const project = createProject({
+        'tests/hooks.e2e.ts': hooks(`throw new Error('teardown broke');`),
+        'tests/body.e2e.ts': brokenBody,
+      });
+      const selection = (outcome: RunOutcome) =>
+        outcome.results
+          .toSorted((a, b) => (a.test.file === b.test.file ? a.test.declarationIndex - b.test.declarationIndex : a.test.file < b.test.file ? -1 : 1))
+          .map((result) => [result.test.title, result.selected, result.status]);
+      const hookErrors = (outcome: RunOutcome) =>
+        outcome.report.run.errors.map((error) => [error.code, error.phase, error.scopeId, error.scope]);
+
+      const first = await runExisting(project, { appUrl: app.url });
+      expect(first.exitCode).toBe(1);
+      expect(hookErrors(first)).toEqual([['HOOK_FAILED', 'afterAll', 'teardown', { file: 'tests/hooks.e2e.ts', targetId: 'web', titlePath: ['teardown'] }]]);
+      assertValidReport(first.report);
+
+      // The body is fixed, the hook is not: the scope runs again and still fails the run.
+      writeFileSync(path.join(project.dir, 'tests', 'body.e2e.ts'), brokenBody.replace(`throw new Error('still broken');`, ''));
+      const second = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(second.exitCode).toBe(1);
+      expect(selection(second)).toEqual([
+        ['fails', true, 'passed'],
+        ['passes in the scope', true, 'passed'],
+        ['passes outside it', false, 'skipped'],
+      ]);
+      expect(hookErrors(second)).toEqual([['HOOK_FAILED', 'afterAll', 'teardown', { file: 'tests/hooks.e2e.ts', targetId: 'web', titlePath: ['teardown'] }]]);
+
+      // The hook is fixed: its scope runs once more and the error is gone, not carried.
+      writeFileSync(path.join(project.dir, 'tests', 'hooks.e2e.ts'), hooks(''));
+      const third = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(third.exitCode).toBe(0);
+      expect(selection(third)).toEqual([
+        ['fails', false, 'skipped'],
+        ['passes in the scope', true, 'passed'],
+        ['passes outside it', false, 'skipped'],
+      ]);
+      expect(third.report.run.errors).toEqual([]);
+      const fourth = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(fourth.exitCode).toBe(2);
+      expect(fourth.report.run.errors.map((error) => error.code)).toEqual(['NO_TESTS']);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    '--last-failed runs a setup whose afterAll failed again through the tests that consume its session',
+    async () => {
+      const auth = (teardown: string) => `import { test } from 'e2e';
+test.afterAll(() => {
+  ${teardown}
+});
+test.setup('sign in', { sessions: ['member'] }, async ({ app, session }) => {
+  await app.open();
+  await session.save('member');
+});
+`;
+      const project = createProject({
+        'tests/auth.e2e.ts': auth(`throw new Error('sign out broke');`),
+        'tests/member.e2e.ts': `import { test } from 'e2e';
+test('signed in', { session: 'member' }, async () => {});
+`,
+        'tests/other.e2e.ts': `import { test } from 'e2e';
+test('unrelated', async () => {
+  throw new Error('still broken');
+});
+`,
+      });
+      const ran = (outcome: RunOutcome) =>
+        outcome.results.filter((result) => result.selected).map((result) => [result.test.title, result.status]).toSorted();
+
+      const first = await runExisting(project, { appUrl: app.url });
+      expect(first.exitCode).toBe(1);
+      expect(first.report.run.errors.map((error) => [error.code, error.phase, error.scope])).toEqual([
+        ['HOOK_FAILED', 'afterAll', { file: 'tests/auth.e2e.ts', targetId: 'web', titlePath: [] }],
+      ]);
+
+      writeFileSync(path.join(project.dir, 'tests', 'other.e2e.ts'), `import { test } from 'e2e';
+test('unrelated', async () => {});
+`);
+      const second = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(second.exitCode).toBe(1);
+      expect(ran(second)).toEqual([
+        ['sign in', 'passed'],
+        ['signed in', 'passed'],
+        ['unrelated', 'passed'],
+      ]);
+      expect(second.report.run.errors.map((error) => error.code)).toEqual(['HOOK_FAILED']);
+
+      writeFileSync(path.join(project.dir, 'tests', 'auth.e2e.ts'), auth(''));
+      const third = await runExisting(project, { appUrl: app.url, runOptions: { lastFailed: true } });
+      expect(third.exitCode).toBe(0);
+      expect(ran(third)).toEqual([
+        ['sign in', 'passed'],
+        ['signed in', 'passed'],
+      ]);
+      expect(third.report.run.errors).toEqual([]);
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
     'fails with NO_TESTS unless --pass-with-no-tests',
     async () => {
       const empty = { 'tests/empty.txt': 'not a test' };
