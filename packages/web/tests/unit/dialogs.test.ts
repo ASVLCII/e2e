@@ -4,6 +4,7 @@
  */
 
 import type { Dialog as PwDialog } from 'playwright';
+import { TestError } from 'e2e/engine';
 import { describe, expect, it, vi } from 'vitest';
 import { DialogRouter } from '../../src/dialogs.ts';
 import { ErrorLatch } from '../../src/support.ts';
@@ -109,6 +110,17 @@ describe('DialogRouter', () => {
     expect(() => router.throwPending()).not.toThrow();
   });
 
+  it('latches a classified handler failure as it was: an assertion stays ASSERTION_FAILED', async () => {
+    const router = new DialogRouter();
+    const failure = new TestError('ASSERTION_FAILED', 'expected the other message');
+    router.add(async (dialog) => {
+      await dialog.accept();
+      throw failure;
+    });
+    await router.dispatch(fakeDialog().dialog);
+    expect(() => router.throwPending()).toThrow(failure);
+  });
+
   it('shares one latch with its owner, so either side observes the failure', async () => {
     const latch = new ErrorLatch();
     const router = new DialogRouter(latch);
@@ -119,6 +131,8 @@ describe('DialogRouter', () => {
 });
 
 describe('ErrorLatch', () => {
+  const budget = () => ({ timeoutMs: 1_000, signal: new AbortController().signal });
+
   it('keeps the first error until it is thrown, then forgets it', () => {
     const latch = new ErrorLatch();
     const first = new Error('first');
@@ -126,5 +140,74 @@ describe('ErrorLatch', () => {
     latch.latch(new Error('second'));
     expect(() => latch.throwPending()).toThrow(first);
     expect(() => latch.throwPending()).not.toThrow();
+  });
+
+  it('settles with what a tracked path still running latches once it finishes', async () => {
+    const latch = new ErrorLatch();
+    const router = new DialogRouter(latch);
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    router.add(async (dialog) => {
+      await dialog.accept();
+      await waiting;
+      throw new TestError('ASSERTION_FAILED', 'late');
+    });
+    void router.dispatch(fakeDialog().dialog);
+    const settling = latch.settle(budget());
+    release();
+    await expect(settling).rejects.toThrowError(expect.objectContaining({ code: 'ASSERTION_FAILED' }));
+    await expect(latch.settle(budget())).resolves.toBeUndefined();
+  });
+
+  it('fails closed with CLEANUP_TIMEOUT naming a handler that outlives the budget, and drops what it throws later', async () => {
+    const latch = new ErrorLatch();
+    const router = new DialogRouter(latch);
+    router.add(async (dialog) => {
+      await dialog.accept();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      throw new TestError('ASSERTION_FAILED', 'too late to count');
+    });
+    const dispatched = router.dispatch(fakeDialog().dialog);
+    await expect(latch.settle({ timeoutMs: 20, signal: new AbortController().signal })).rejects.toThrowError(
+      expect.objectContaining({
+        code: 'CLEANUP_TIMEOUT',
+        category: 'infrastructure',
+        message: expect.stringContaining('a dialog handler was still running'),
+      }),
+    );
+    await dispatched;
+    expect(() => latch.throwPending()).not.toThrow();
+    await expect(latch.settle(budget())).resolves.toBeUndefined();
+  });
+
+  it('waits only for the paths running when it was called, so one starting during the wait is no timeout', async () => {
+    const latch = new ErrorLatch();
+    let startNext!: () => void;
+    const first = new Promise<void>((resolve) => {
+      startNext = resolve;
+    });
+    latch.track('route', first);
+    void first.then(() => latch.track('route', new Promise<void>((resolve) => setTimeout(resolve, 50))));
+    const settling = latch.settle(budget());
+    startNext();
+    await expect(settling).resolves.toBeUndefined();
+  });
+
+  it('reports a latched error at once, ahead of handlers still running, and names every kind still running at the timeout', async () => {
+    const latch = new ErrorLatch();
+    latch.latch(new TestError('ASSERTION_FAILED', 'landed in time'));
+    latch.track('route', new Promise<void>(() => undefined));
+    latch.track('dialog', new Promise<void>(() => undefined));
+    await expect(latch.settle({ timeoutMs: 60_000, signal: new AbortController().signal })).rejects.toThrowError(
+      expect.objectContaining({ code: 'ASSERTION_FAILED' }),
+    );
+    const bare = new ErrorLatch();
+    bare.track('route', new Promise<void>(() => undefined));
+    bare.track('dialog', new Promise<void>(() => undefined));
+    await expect(bare.settle({ timeoutMs: 20, signal: new AbortController().signal })).rejects.toThrowError(
+      expect.objectContaining({ message: expect.stringContaining('a dialog and route handler was still running') }),
+    );
   });
 });

@@ -438,6 +438,23 @@ test('forbidden URL schemes are refused', async ({ app }) => {
   await app.open('javascript:alert(1)');
 });
 
+test('a route handler assertion that no step follows', async ({ app, web }) => {
+  await web.route('**/api/flags', async (route) => {
+    await route.fulfill({ json: { betaBoard: true } });
+    expect(route.request.method).toBe('POST');
+  });
+  await app.open('/flags');
+});
+
+test('a dialog handler assertion that no step follows', async ({ app, web, screen }) => {
+  await app.open('/dialog');
+  await web.onDialog(async (dialog) => {
+    await dialog.accept();
+    expect(dialog.message).toBe('Are you sure?');
+  });
+  await screen.getByRole('button', { name: 'Ask' }).tap();
+});
+
 test('a step call without await', async ({ app }) => {
   app.open();
 });
@@ -445,6 +462,22 @@ test('a step call without await', async ({ app }) => {
 test('a step call without await before the body throws', async ({ app }) => {
   app.open();
   throw new Error('the body gave up');
+});
+`;
+
+const LATE_HANDLER_THEN_TEARDOWN = `import { test } from '@e2edev/web';
+import { expect } from 'e2e';
+
+test.afterEach(async ({ app }) => {
+  await app.open('/');
+});
+
+test('a route handler assertion that no step follows, then a teardown that navigates', async ({ app, web }) => {
+  await web.route('**/api/flags', async (route) => {
+    await route.fulfill({ json: { betaBoard: true } });
+    expect(route.request.method).toBe('POST');
+  });
+  await app.open('/flags');
 });
 `;
 
@@ -456,7 +489,7 @@ describe('web platform integration', () => {
   beforeAll(async () => {
     app = await startFixtureApp();
     ({ outcome, project } = await runProject(
-      { 'tests/kitchen.e2e.ts': KITCHEN_SINK },
+      { 'tests/kitchen.e2e.ts': KITCHEN_SINK, 'tests/late-handler.e2e.ts': LATE_HANDLER_THEN_TEARDOWN },
       {
         appUrl: app.url,
         config: { actionTimeout: 5_000, assertionTimeout: 4_000, timeout: 30_000 },
@@ -586,6 +619,32 @@ describe('web platform integration', () => {
     expect(attempt.secondaryErrors.map((error) => error.code)).toEqual(['STEP_NOT_AWAITED']);
     expect(attempt.steps[0]).toMatchObject({ api: 'app.open', status: 'failed', error: { code: 'STEP_NOT_AWAITED' } });
     expect(outcome.report.run.errors.map((error) => error.code)).toEqual([]);
+  });
+
+  it.each([
+    ['route', 'a route handler assertion that no step follows'],
+    ['dialog', 'a dialog handler assertion that no step follows'],
+  ])('fails a %s handler assertion at the attempt end when no step follows it', (_kind, title) => {
+    const result = resultByTitle(outcome, title);
+    expect(result.status).toBe('failed');
+    const attempt = result.attempts[0]!;
+    expect(attempt.error).toMatchObject({ code: 'ASSERTION_FAILED', phase: 'body' });
+    expect(attempt.cleanup).toBe('complete');
+    expect(outcome.report.run.errors.map((error) => error.code)).toEqual([]);
+  });
+
+  it('takes the failure evidence of a late handler assertion before a teardown navigates away', () => {
+    const result = resultByTitle(outcome, 'a route handler assertion that no step follows, then a teardown that navigates');
+    expect(result.status).toBe('failed');
+    const attempt = result.attempts[0]!;
+    expect(attempt.error).toMatchObject({ code: 'ASSERTION_FAILED', phase: 'body' });
+    expect(attempt.steps.map((step) => step.api)).toEqual(['web.route', 'app.open', 'app.open']);
+    const failure = attempt.failure!;
+    expect(failure.url).toMatch(/\/flags$/);
+    const screen = attempt.artifacts.find((artifact) => artifact.id === failure.screen)!;
+    const text = readFileSync(path.join(project.dir, '.e2e', 'artifacts', screen.path!), 'utf8');
+    expect(text).toContain('heading "Flags"');
+    expect(text).not.toContain('heading "Home"');
   });
 
   it('fails UI operations before open with APP_NOT_OPEN', () => {

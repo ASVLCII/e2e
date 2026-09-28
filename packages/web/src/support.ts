@@ -1,7 +1,7 @@
 /** Shared error translation, filename, and swipe helpers for the Playwright engine. */
 
 import type { ElementHandle, Locator as PwLocator, Mouse, Page } from 'playwright';
-import { EngineError, type Momentum, type ScrollDirection, type ViewportPoint, type ViewportSize } from 'e2e/engine';
+import { EngineError, withinCleanupBudget, type EngineCleanupContext, type Momentum, type ScrollDirection, type ViewportPoint, type ViewportSize } from 'e2e/engine';
 import { ConfigurationError, InfrastructureError, TestError } from 'e2e/engine';
 
 export const DEFAULT_VIEWPORT = { width: 1280, height: 720 } as const;
@@ -203,15 +203,54 @@ export function cancelled(text: string): EngineError {
 /**
  * Holds one error raised on a path nobody awaits - a native dialog nobody
  * handled, a route handler that broke its contract - until the next step
- * enters the surface, which then fails with the real cause. Rethrows once:
- * the failure belongs to the step that observes it, not to every later one.
+ * enters the surface, which then fails with the real cause, or until the
+ * attempt settles when no step follows. Rethrows once: the failure belongs
+ * to the step that observes it, not to every later one.
  */
 export class ErrorLatch {
   private pending: Error | null = null;
+  private readonly running = new Map<Promise<void>, string>();
+  private abandoned = false;
 
-  /** Latches an error; the first one wins until it is thrown. */
+  /** Latches an error; the first one wins until it is thrown. Dropped once `settle` gave up on a handler. */
   latch(error: Error): void {
+    if (this.abandoned) return;
     this.pending ??= error;
+  }
+
+  /** Tracks one unawaited `kind` of path (a route or dialog handler) until it settles, so `settle` can wait for it. Its own rejection is the caller's to latch. */
+  track(kind: string, work: Promise<void>): void {
+    const tracked: Promise<void> = work.then(() => undefined, () => undefined);
+    this.running.set(tracked, kind);
+    void tracked.then(() => this.running.delete(tracked));
+  }
+
+  /**
+   * Rethrows the latched error once; with none latched yet, first waits,
+   * within the budget, for the tracked paths running when it was called. One
+   * of those that outlives the budget fails closed: `CLEANUP_TIMEOUT` naming
+   * it, and whatever it throws afterwards is dropped here on purpose rather
+   * than landing on a verdict already reached. A path that starts during the
+   * wait is left to the next settle.
+   */
+  async settle(budget: EngineCleanupContext): Promise<void> {
+    this.throwPending();
+    if (!this.abandoned && this.running.size > 0) {
+      const waited = [...this.running.keys()];
+      await withinCleanupBudget(Promise.all(waited), budget);
+      const outlived = waited.filter((path) => this.running.has(path));
+      if (outlived.length > 0) {
+        const kinds = [...new Set(outlived.map((path) => this.running.get(path)))].toSorted().join(' and ');
+        this.running.clear();
+        this.abandoned = true;
+        this.throwPending();
+        throw new InfrastructureError(
+          'CLEANUP_TIMEOUT',
+          `a ${kinds} handler was still running when the cleanup budget ended; anything it throws now is dropped`,
+        );
+      }
+    }
+    this.throwPending();
   }
 
   /** Rethrows the latched error once, if any. */
