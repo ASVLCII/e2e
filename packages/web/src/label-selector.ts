@@ -1,9 +1,10 @@
 /**
- * The selector engine an exact label query composes through. Standing alone,
- * such a query resolves every labelable control and the surface keeps the
- * ones the reader labels with the pattern; inside Playwright's own chain (a
- * scope for child queries, a `has` filter) that predicate has to run in the
- * page, so this engine runs the same reader on the same candidates there.
+ * The selector engine an exact label query resolves through, standing alone
+ * and inside Playwright's own chain (a scope for child queries, a `has`
+ * filter) alike: it runs the reader on every labelable control under the
+ * query root and keeps the ones labelled with the pattern, in the one task
+ * that finds them. A control the page replaces a frame later is then no
+ * candidate of a query for another label and cannot make it re-resolve.
  * Playwright's `getByLabel` could not stand in for it: its exact form reads a
  * label's aria-hidden text and misses `Display name*`, and its substring form
  * accepts `Last Name` for `Name`.
@@ -18,9 +19,9 @@ export const EXACT_LABEL_SELECTOR_ENGINE = 'e2e-label';
 /**
  * Every control `getByLabel` can name: labelable form controls plus anything
  * carrying its own label attributes. The candidates of an exact label query;
- * the surface, or the engine below, keeps those whose labels match.
+ * the engine below keeps those whose labels match.
  */
-export const LABELABLE_SELECTOR =
+const LABELABLE_SELECTOR =
   'button, input:not([type="hidden"]), textarea, select, meter, output, progress, [aria-label], [aria-labelledby]';
 
 /** What the selector body carries into the page: the label to equal and the reader's options. */

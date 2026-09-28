@@ -49,7 +49,7 @@ import { captureObservation } from './observation-capture.ts';
 import { maskOptions, secureFieldMasks } from './observe.ts';
 import { connectionAbort } from './operation-budget.ts';
 import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from './closed-shadow.ts';
-import { readHandlesSemanticsFunction, readManySemanticsFunction, SECURE_FIELD_SELECTOR } from './read-node.ts';
+import { readHandlesSemanticsFunction, readManySemanticsFunction, SECURE_FIELD_SELECTOR, type RawNodeData } from './read-node.ts';
 import { httpCredentials, installSiteHeaders, lowercaseNames } from './protected-app.ts';
 import { RefRegistry } from './refs.ts';
 import {
@@ -561,34 +561,47 @@ export class PlaywrightSurface {
           secureFieldSelector: SECURE_FIELD_SELECTOR,
           mode: { kind: 'node' as const },
         };
-        // A predicate-filtered match is one element among many candidates, and the candidate
-        // list is broad (every labelable control, every input with a value). Re-resolving it
-        // by position at action time would act on a neighbor whenever the page inserted or
-        // removed an element in between, so such matches are pinned to element handles: the
-        // handles are taken first and the semantics are read from those very handles, so what
-        // was read and what is acted on are one set of elements by construction.
+        // A predicate-filtered match is one element among many candidates (every input with a
+        // value, every control the label engine kept). Re-resolving it by position at action
+        // time would act on a neighbor whenever the page inserted or removed an element in
+        // between, so such matches are pinned to element handles: the handles are taken first
+        // and the semantics are read from those very handles, so what was read and what is
+        // acted on are one set of elements by construction.
         const handles =
           displayValue !== null || name !== null
             ? ((await projected.locator.elementHandles()) as ElementHandle<Element>[])
             : null;
+        /** Disposes every handle this locate took, on the paths that hand none of them out. */
+        const releaseHandles = (): void => {
+          for (const handle of handles ?? []) void handle.dispose().catch(() => undefined);
+        };
         const first = handles?.[0];
-        const raws =
+        const reads =
           handles === null
             ? await projected.locator.evaluateAll(readManySemanticsFunction, readOptions)
             : first === undefined
               ? []
               : await first.evaluate(readHandlesSemanticsFunction, { elements: handles, options: readOptions });
-        const candidates = raws
-          .map((raw, index) => ({ raw, index }))
-          .filter(({ raw }) => !(projected.visible && raw.states.hidden));
+        // The page can replace a queried element before the read reaches it. Every element the
+        // query returned is a match, except a display-value candidate, whose held value says
+        // whether it was one. A match that left re-resolves the set, so a count or a single
+        // match is never taken from what remains; a non-match that left drops out, so churn in
+        // unrelated controls never holds up a query for a stable one.
+        if (reads.some((read) => 'detached' in read && (displayValue === null || matchesText(read.value ?? '', displayValue)))) {
+          releaseHandles();
+          throw new EngineError('NODE_STALE', 'a match left the document while it was read', { retryable: true });
+        }
+        const candidates = reads.flatMap((raw, index) =>
+          'detached' in raw || (projected.visible && raw.states.hidden) ? [] : [{ raw, index }],
+        );
         // An exact label query matches any of the control's labels as the engine's reader names
         // them, so text a label marks aria-hidden (a required-field marker) never hides a field,
         // and an aria-label override or a second label does not either.
         const predicate =
           displayValue !== null
-            ? (raw: (typeof raws)[number]) => matchesText(raw.value ?? '', displayValue)
+            ? (raw: RawNodeData) => matchesText(raw.value ?? '', displayValue)
             : name !== null
-              ? (raw: (typeof raws)[number]) =>
+              ? (raw: RawNodeData) =>
                   raw.labels !== null && raw.labels.some((label) => matchesText(label, name))
               : null;
         const matches =
@@ -602,11 +615,11 @@ export class PlaywrightSurface {
                   (await projected.locator.nth(index).filter(options).count()) > 0,
               );
         if (currentOperation.signal.aborted) {
-          for (const handle of handles ?? []) void handle.dispose().catch(() => undefined);
+          releaseHandles();
           throw cancelled('locate cancelled');
         }
         try { session.check(token); } catch (cause) {
-          for (const handle of handles ?? []) void handle.dispose().catch(() => undefined);
+          releaseHandles();
           throw cause;
         }
         if (handles !== null) {
@@ -621,7 +634,7 @@ export class PlaywrightSurface {
           // A single match keeps the strict locator, so a ref that turns
           // ambiguous between locate and perform fails loud instead of acting
           // on whichever element is first.
-          const locator = raws.length === 1 ? projected.locator : projected.locator.nth(index);
+          const locator = reads.length === 1 ? projected.locator : projected.locator.nth(index);
           const id = refs.storeLocated(
             pinned === undefined ? { kind: 'locator', locator } : { kind: 'element', element: pinned },
           );

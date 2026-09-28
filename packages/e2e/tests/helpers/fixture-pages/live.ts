@@ -114,4 +114,67 @@ export const LIVE_PAGES: Record<string, PageRenderer> = {
   </script>
 </body>
 </html>`),
+  // A field a framework re-renders on every animation frame: the element is
+  // swapped for an identical clone, so exactly one visible match is in the
+  // document at any moment while every handle taken a frame earlier points at
+  // a detached node. "City" stays put beside it, a candidate of the same label
+  // and display-value queries. "Remove" takes the nickname out for good and
+  // stops the swap.
+  '/replaced': constant(`<!doctype html>
+<html>
+<head><title>Replaced</title></head>
+<body>
+  <label>Nickname <input data-testid="nickname" value="ada"></label>
+  <label>City <input data-testid="city" value="paris"></label>
+  <button id="remove">Remove</button>
+  <script>
+    let removed = false;
+    const swap = () => {
+      if (removed) return;
+      const field = document.querySelector('[data-testid="nickname"]');
+      const clone = field.cloneNode(true);
+      clone.value = field.value;
+      field.replaceWith(clone);
+      requestAnimationFrame(swap);
+    };
+    requestAnimationFrame(swap);
+    document.getElementById('remove').addEventListener('click', () => {
+      removed = true;
+      document.querySelector('[data-testid="nickname"]').remove();
+    });
+  </script>
+</body>
+</html>`),
+  // A stable "City" field among 250 labelled fields, each swapped for a
+  // clone on every animation frame: candidates of the same exact label and
+  // display-value queries that are never a match for "City".
+  '/replaced-crowd': constant(`<!doctype html>
+<html>
+<head><title>Replaced crowd</title></head>
+<body>
+  <div id="crowd"></div>
+  <label>City <input data-testid="city" value="paris"></label>
+  <script>
+    const crowd = document.getElementById('crowd');
+    for (let i = 0; i < 250; i += 1) {
+      const label = document.createElement('label');
+      label.textContent = 'Churn ' + i + ' ';
+      const input = document.createElement('input');
+      input.className = 'churn';
+      input.value = 'c' + i;
+      label.append(input);
+      crowd.append(label);
+    }
+    const swap = () => {
+      for (const field of document.querySelectorAll('.churn')) {
+        const clone = field.cloneNode(true);
+        clone.value = field.value;
+        field.replaceWith(clone);
+      }
+      requestAnimationFrame(swap);
+    };
+    requestAnimationFrame(swap);
+  </script>
+</body>
+</html>`),
 };
