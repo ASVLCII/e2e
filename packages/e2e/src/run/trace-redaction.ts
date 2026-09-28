@@ -86,24 +86,26 @@ async function redactArchive(absolute: string, ledger: SecretLedger): Promise<vo
 
 /**
  * A trace's own members are JSON, one record per line; a resource is whatever
- * the page served. A line that parses as JSON is redacted value by value and
- * re-serialized only when something changed, so a secret that happens to
- * spell JSON syntax cannot break a record; any other line is redacted as text.
+ * the page served. An entry whose every non-blank line parses as JSON is
+ * redacted record by record, value by value, and a record is re-serialized
+ * only when something changed, so a secret that happens to spell JSON syntax
+ * cannot break one. Any other entry is redacted whole as text, so a value
+ * that spans a line break, or matches across one as whitespace, is caught.
  */
 function redactText(text: string, redact: (text: string) => string): string {
-  return text
-    .split('\n')
-    .map((line) => redactLine(line, redact))
-    .join('\n');
+  const lines = text.split('\n');
+  const records = lines.map((line) => (line.trim() === '' ? line : redactRecord(line, redact)));
+  return records.every((record) => record !== undefined) ? records.join('\n') : redact(text);
 }
 
 /**
+ * `line` redacted as one JSON record, or undefined when it is not one.
  * Numbers are carried as their source text (`JSON.rawJSON`), so an integer
  * past 2^53 or a negative zero survives the round trip untouched, and the
  * line's trailing whitespace (a CR before the LF) is kept as it was.
  */
-function redactLine(line: string, redact: (text: string) => string): string {
-  if (!line.startsWith('{') && !line.startsWith('[')) return redact(line);
+function redactRecord(line: string, redact: (text: string) => string): string | undefined {
+  if (!line.startsWith('{') && !line.startsWith('[')) return undefined;
   const body = line.trimEnd();
   let parsed: unknown;
   try {
@@ -111,7 +113,7 @@ function redactLine(line: string, redact: (text: string) => string): string {
       typeof value === 'number' && context.source !== undefined ? RAW_JSON(context.source) : value,
     );
   } catch {
-    return redact(line);
+    return undefined;
   }
   const { value, changed } = redactValues(parsed, redact);
   return changed ? JSON.stringify(value) + line.slice(body.length) : line;
