@@ -135,8 +135,8 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
 
   const implicitRole = memoized((el: Element): string | null => {
     const explicit = el.getAttribute('role');
-    if (explicit !== null && explicit !== '') {
-      const first = explicit.split(/\s+/)[0] ?? null;
+    if (explicit !== null && explicit.trim() !== '') {
+      const first = explicit.trim().split(/\s+/)[0] ?? null;
       // The vocabulary spells ARIA's `img` as `image`.
       return first === 'img' ? 'image' : first;
     }
@@ -150,8 +150,10 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
         return el.hasAttribute('href') ? 'link' : null;
       case 'button':
         return 'button';
+      // HTML-AAM: a select that shows several rows is a listbox; only a
+      // one-row drop-down is a combobox.
       case 'select':
-        return el.hasAttribute('multiple') ? 'listbox' : 'combobox';
+        return el.hasAttribute('multiple') || (el as HTMLSelectElement).size > 1 ? 'listbox' : 'combobox';
       case 'textarea':
         return 'textbox';
       case 'img':
@@ -212,8 +214,12 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
         return 'rowgroup';
       case 'tr':
         return 'row';
-      case 'td':
-        return 'cell';
+      // A grid's cells are the interactive kind, as Playwright reads them.
+      case 'td': {
+        const table = el.closest('table');
+        const tableRole = table?.getAttribute('role')?.trim().split(/\s+/)[0];
+        return tableRole === 'grid' || tableRole === 'treegrid' ? 'gridcell' : 'cell';
+      }
       case 'th': {
         const scope = (el.getAttribute('scope') ?? '').toLowerCase();
         return scope === 'row' || scope === 'rowgroup' ? 'rowheader' : 'columnheader';
@@ -223,6 +229,10 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
       case 'output':
         return 'status';
       case 'input':
+        // HTML-AAM: a text field with suggestions from a datalist is a combobox.
+        // `list` resolves the attribute to a datalist element, null for anything else.
+        // The `type` property, not the attribute: a type the browser does not know is `text`.
+        if ((el as HTMLInputElement).list !== null && ['text', 'search', 'tel', 'url', 'email'].indexOf((el as HTMLInputElement).type) !== -1) return 'combobox';
         switch (type) {
           case 'button':
           case 'submit':
