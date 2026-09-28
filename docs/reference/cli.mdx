@@ -37,11 +37,21 @@ Output is colored on a terminal or in CI, plain when piped or when `NO_COLOR`
 is set. `FORCE_COLOR` keeps the colors. `e2e` without a command prints the
 help on stderr and exits 2.
 
+On a terminal at least 55 columns wide, `e2e --help` opens with the e2e
+wordmark, the site's lettering drawn in block characters; piped output and
+narrower terminals get the text alone.
+
 ## e2e init
 
 Scaffolds a project and adds `e2e` to `devDependencies`. Existing
 config and test files are skipped. With a `directory` argument the project is
 scaffolded there.
+
+On a terminal, the wizard opens with the e2e wordmark written in over about
+a second, letter by letter, the way a pen writes it. With `--yes`, in CI, on
+a dumb terminal, and on a terminal shorter than 11 rows the wordmark prints at
+once, and piped output never shows it. Ctrl-C or SIGTERM while it is being
+written exits 130.
 
 For a new project, the wizard asks you to choose:
 
