@@ -1183,10 +1183,18 @@ function classifyAttemptStatus(
  * Registers an attempt's kept recordings, in order: a file under its path, a
  * link by URL, each with the step captions of the time it recorded. Captions
  * are a convenience: one that cannot be written leaves its video without
- * them, never the attempt's cleanup failed.
+ * them, never the attempt's cleanup failed. An engine's own link is held to
+ * what a provider's is, an http(s) URL; one that is not fails the cleanup
+ * once every other recording is registered, so it costs no other video.
  */
 function registerVideos(sink: ArtifactSink, segments: readonly VideoSegment[], steps: readonly StepRecord[]): void {
+  const rejected: string[] = [];
   segments.forEach((segment, index) => {
+    const url = 'path' in segment ? undefined : hostedVideoUrl(segment.url);
+    if (!('path' in segment) && url === undefined) {
+      rejected.push(JSON.stringify(segment.url));
+      return;
+    }
     let captionsPath: string | undefined;
     try {
       captionsPath = writeStepCaptions(sink.dir, segment, index, segments[index + 1]?.startedAt, steps);
@@ -1195,13 +1203,10 @@ function registerVideos(sink: ArtifactSink, segments: readonly VideoSegment[], s
     }
     const captions = captionsPath === undefined ? undefined : sink.register('other', captionsPath, { redaction: 'complete' });
     const registration = { startedAt: segment.startedAt, ...(captions === undefined ? {} : { captions }) };
-    if ('path' in segment) {
-      sink.register('video', segment.path, registration);
-      return;
-    }
-    // An engine's own link is held to what a provider's is: the report admits an http(s) URL only.
-    const url = hostedVideoUrl(segment.url);
-    if (url === undefined) throw new EngineError('ENGINE_FAILURE', `the engine returned a video link that is not an http(s) URL: ${JSON.stringify(segment.url)}`, { retryable: false });
-    sink.link(url, { mediaType: segment.mediaType, ...registration });
+    if ('path' in segment) sink.register('video', segment.path, registration);
+    else sink.link(url!, { mediaType: segment.mediaType, ...registration });
   });
+  if (rejected.length > 0) {
+    throw new EngineError('ENGINE_FAILURE', `the engine returned a video link that is not an http(s) URL: ${rejected.join(', ')}`, { retryable: false });
+  }
 }

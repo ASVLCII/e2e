@@ -135,6 +135,8 @@ export interface FakeEngineBehavior {
    * segment began.
    */
   video?: boolean;
+  /** Links `stopVideo` reports after its file, as `video/mp4` segments starting with it. */
+  videoLinks?: readonly string[];
   /** Throw to fail state restore after startAttempt succeeded. */
   onRestore?(state: EngineState): void | Promise<void>;
   /** Contributes a `gadget` fixture exercising every fixture-context facility. */
@@ -442,7 +444,8 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
                     writeFileSync(path.join(dir, 'video', 'fake.webm'), FAKE_WEBM);
                     const startedAt = videoStartedAt;
                     videoStartedAt = undefined;
-                    return [{ path: 'video/fake.webm', startedAt }];
+                    const links = (behavior.videoLinks ?? []).map((url) => ({ url, mediaType: 'video/mp4', startedAt }));
+                    return [...links, { path: 'video/fake.webm', startedAt }];
                   },
                 }
               : {}),

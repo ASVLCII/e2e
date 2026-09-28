@@ -31,8 +31,9 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
    `trace.zip` per attempt (`npx playwright show-trace <file>`), downloads,
    with `--video` the attempt's recording (`video/video.webm` in a local
    browser, `video/video.mp4` on a device, a provider's own file or link)
-   and its step captions (`video/video.steps.vtt`), and with `--debug` the full transcript of every
-   agent step.
+   and its step captions (a `.steps.vtt` beside a file, `video/video.steps.vtt`
+   for `video/video.webm`, or `video/recording-<n>.steps.vtt` for a link), and
+   with `--debug` the full transcript of every agent step.
 
 ## Error codes and what to do
 

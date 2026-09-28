@@ -1056,6 +1056,28 @@ test('fails on purpose', async ({ app }) => {
   );
 
   it(
+    'fails the cleanup on an engine link that is not http(s), and still keeps its other recordings',
+    async () => {
+      const fake = createFakeEngine({ video: true, videoLinks: ['file:///tmp/r.mp4', 'https://recordings.example/r.mp4'] });
+      const { outcome, project } = await runProject(
+        { 'tests/video.e2e.ts': PASSING_TEST },
+        { appUrl: APP_URL, config: engineConfig(fake.engine, { video: 'on' }) },
+      );
+      assertValidReport(outcome.report);
+      const attempt = resultByTitle(outcome, 'taps a node').attempts[0]!;
+      expect(attempt.cleanup).toBe('failed');
+      expect(attempt.secondaryErrors).toEqual([expect.objectContaining({ code: 'ENGINE_FAILURE', message: expect.stringContaining('"file:///tmp/r.mp4"') })]);
+      const videos = attempt.artifacts.filter((artifact) => artifact.kind === 'video');
+      expect(videos.map((video) => video.url ?? video.path)).toEqual([
+        'https://recordings.example/r.mp4',
+        expect.stringMatching(/\/attempt-0\/video\/fake\.webm$/),
+      ]);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
     'records only the first retry with on-first-retry, and nothing for a test that passes first time',
     async () => {
       const fake = createFakeEngine({ video: true });
