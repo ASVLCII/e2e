@@ -96,7 +96,7 @@ export interface AsyncExpectation {
   /** Waits for exact normalized text; a list waits for exactly that many matches, each with its entry's text, in order. */
   toHaveText(expected: TextMatch, options?: { timeout?: number }): Promise<void>;
   toHaveText(expected: readonly TextMatch[], options?: { timeout?: number }): Promise<void>;
-  /** Waits for contained normalized text; a list waits for exactly that many matches, each containing its entry, in order. */
+  /** Waits for contained normalized text; a list waits for each entry to be contained by a distinct match, in order, extra matches allowed. */
   toContainText(expected: TextMatch, options?: { timeout?: number }): Promise<void>;
   toContainText(expected: readonly TextMatch[], options?: { timeout?: number }): Promise<void>;
   /** Waits for a form control's value, compared as it is. */
@@ -127,17 +127,23 @@ password input, `toHaveAttribute` throws `POLICY_DENIED` like
 `toBeAttached` passes once one match exists, hidden or shown, where
 `toBeVisible` needs a shown one. Negated, it passes once nothing matches.
 
-`toHaveText([...])` and `toContainText([...])` check a list: the match count
-must equal the list length and the match at each position must satisfy the
-entry there, a string exactly after normalization, a `RegExp` by test. There
-is no exactly-one rule; the failure message lists every text observed. An
-empty list holds when nothing matches.
+`toHaveText([...])` and `toContainText([...])` check a list, with no
+exactly-one rule; the failure message lists every text observed.
+`toHaveText([...])` needs the match count to equal the list length and the
+match at each position to satisfy the entry there, a string exactly after
+normalization, a `RegExp` by test; an empty list holds when nothing matches.
+`toContainText([...])` needs each entry contained by a distinct match, in
+list order, as Playwright's does: extra matches before, between, or after
+are fine, a repeated entry needs a match of its own, and an empty list always
+holds. Negated, it fails as soon as that ordered subsequence exists, so
+`not.toContainText(['Deleted'])` fails while any match contains `Deleted`.
 
 ```ts
 await expect(screen.getByRole('status')).toHaveText('Saved');
 await expect(screen.getByTestId('todo')).toHaveCount(3);
 await expect(screen.getByTestId('todo')).toHaveText(['Write spec', /^Ship/, 'Release']);
 await expect(screen.getByTestId('todo')).toContainText(['spec', 'runner', 'Release']);
+await expect(screen.getByTestId('todo')).toContainText(['spec', 'Release']);
 await expect(screen.getByText('Loaded')).toBeAttached();
 await expect(screen.getByRole('dialog')).not.toBeVisible({ timeout: 10_000 });
 ```
