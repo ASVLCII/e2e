@@ -5,7 +5,7 @@ import type { LocatorAction, LocatorExpression, SemanticNode } from '../engine/s
 import { locatorBrand, secretBrand } from '../internal/brands.ts';
 import { asEngineError, TestError } from '../internal/errors.ts';
 import { requireFinitePoint } from '../internal/geometry.ts';
-import { rejectUnknownOptions } from '../internal/options.ts';
+import { isPlainObject, rejectUnknownOptions } from '../internal/options.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
 import { normalizeText } from '../internal/text.ts';
 import type {
@@ -380,8 +380,9 @@ class LocatorImpl extends ScreenImpl implements Locator {
     return this.perform('uncheck', { kind: 'uncheck' }, options);
   }
 
-  selectOption(value: SelectOption, options?: ActionOptions): Promise<void> {
-    return this.perform('selectOption', { kind: 'selectOption', value }, options);
+  async selectOption(value: SelectOption, options?: ActionOptions): Promise<void> {
+    requireSelectOption(value);
+    await this.perform('selectOption', { kind: 'selectOption', value }, options);
   }
 
   focus(options?: ActionOptions): Promise<void> {
@@ -511,12 +512,13 @@ class LocatorImpl extends ScreenImpl implements Locator {
   }
 
   filter(options: { hasText?: TextMatch; has?: Locator }): Locator {
-    const hasExpression =
-      options.has === undefined ? undefined : this.ownLocator(options.has, 'filter({ has })').expression;
+    rejectUnknownOptions('filter', options, ['hasText', 'has'], 'INVALID_LOCATOR');
+    const { hasText, has } = options ?? {};
+    const hasExpression = has === undefined ? undefined : this.ownLocator(has, 'filter({ has })').expression;
     return new LocatorImpl(
       this.context,
       filterExpression(this.expression, {
-        ...(options.hasText !== undefined ? { hasText: options.hasText } : {}),
+        ...(hasText !== undefined ? { hasText } : {}),
         ...(hasExpression !== undefined ? { has: hasExpression } : {}),
       }),
     );
@@ -553,6 +555,31 @@ function requirePoint(point: Point | undefined, what: string): Point {
     throw new TestError('INVALID_ARGUMENT', `${what} requires a point { x, y } of non-negative numbers`);
   }
   return at;
+}
+
+/**
+ * Refuses a `selectOption` value that is not one option: a label string or an
+ * object with exactly one of `label`, `value`, or a nonnegative integer
+ * `index`. An engine maps the value field by field, so an array or a
+ * mixed object would select an option the test did not name.
+ */
+function requireSelectOption(value: unknown): void {
+  if (Array.isArray(value)) {
+    throw new TestError(
+      'INVALID_ARGUMENT',
+      'selectOption takes one option per call; an array of options is not supported',
+    );
+  }
+  if (typeof value === 'string') return;
+  if (isPlainObject(value) && Object.getOwnPropertyNames(value).length === 1) {
+    const { label, value: attribute, index } = value;
+    if (typeof label === 'string' || typeof attribute === 'string') return;
+    if (typeof index === 'number' && Number.isInteger(index) && index >= 0) return;
+  }
+  throw new TestError(
+    'INVALID_ARGUMENT',
+    'selectOption takes a label string or exactly one of { label }, { value }, { index } with a nonnegative integer index',
+  );
 }
 
 /** A point as the report shows it. */
