@@ -127,3 +127,33 @@ describe('the tree walk through a box with no size', () => {
     expect(nodes.filter((node) => node.role === 'combobox').map((node) => node.name)).toEqual(['Shown']);
   });
 });
+
+describe('an inert subtree', () => {
+  it('leaves the tree, as Chrome drops it, while Playwright still calls it visible', async () => {
+    await page.setContent(`
+      <main inert><h2>Behind the drawer</h2><button id="inert-save">Save</button></main>
+      <button>Close drawer</button>
+    `);
+    const names = (await captureTree()).map((node) => node.name).filter((name) => name !== undefined);
+    expect(names).toContain('Close drawer');
+    expect(names).not.toContain('Save');
+    expect(names).not.toContain('Behind the drawer');
+    expect(await hiddenOf('#inert-save')).toEqual({ reader: false, playwright: false });
+  });
+
+  it('lists nothing under an inert document root, and nothing slotted into an inert slot of a closed root', async () => {
+    await page.setContent('<!doctype html><html inert><body><button>Whole page</button></body></html>');
+    expect((await captureTree()).filter((node) => node.role === 'button')).toEqual([]);
+    await page.setContent(`
+      <inert-slot><button>Slotted</button></inert-slot>
+      <button>Outside</button>
+      <script>
+        customElements.define('inert-slot', class extends HTMLElement {
+          connectedCallback() { this.attachShadow({ mode: 'closed' }).innerHTML = '<div inert><slot></slot></div>'; }
+        });
+      </script>
+    `);
+    const buttons = (await captureTree()).filter((node) => node.role === 'button').map((node) => node.name);
+    expect(buttons).toEqual(['Outside']);
+  });
+});
