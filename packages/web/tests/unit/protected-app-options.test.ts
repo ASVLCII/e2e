@@ -102,7 +102,11 @@ describe('web({ video })', () => {
   });
 
   it('rejects a fractional or empty size, a quality outside 0-100, and an unknown key as INVALID_CONFIG', () => {
+    for (const video of [null, [], 'on', 1, new Date()]) {
+      expect(() => web({ video } as unknown as Parameters<typeof web>[0])).toThrow(/must be a plain object/);
+    }
     const invalid = [
+      { size: {} },
       { size: { width: 0, height: 720 } },
       { size: { width: 1280.5, height: 720 } },
       { quality: 101 },

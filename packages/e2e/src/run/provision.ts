@@ -40,7 +40,7 @@ export function validateEngine(target: ResolvedTarget, config: ResolvedConfig, p
   if (provenance.artifactCapabilities.includes('video')) return provenance;
   const where = `target "${target.name}" (engine ${provenance.engine.name}) cannot record video`;
   if (pairs === undefined) {
-    if (target.video !== 'off' && target.video !== 'on-first-retry') {
+    if (recordsVideo(target.video, 0)) {
       throw new ConfigurationError('UNSUPPORTED_ARTIFACT', `${where}, and its video is ${target.video}`);
     }
     return provenance;

@@ -485,7 +485,7 @@ Every kept recording gets its step captions beside it as WebVTT:
 `video/video.steps.vtt` next to `video/video.webm`, or
 `video/recording-<n>.steps.vtt` for a link. There is one cue per step that
 ran while the segment recorded, timed from the segment's start, such as
-`3. agent.act Sign in`, with ` - failed` after a step that did not pass. A
+`3. agent.act Sign in`, with the step's status after one that did not pass (` - failed`, ` - timed-out`). A
 browser's `<track>` element, VLC, and mpv show them as captions. The labels
 are the redacted ones the report carries. The report lists the file as an
 artifact of kind `other`, media type `text/vtt`, `redaction: 'complete'`, and

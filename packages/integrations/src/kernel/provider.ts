@@ -73,10 +73,16 @@ export function kernel(options: KernelOptions = {}): BrowserProvider {
     const client = clientFor(context.env);
     const startedAt = new Date().toISOString();
     const replayId = await client.startReplay(lease.id, body, context.signal);
+    // A retried stop (the download failed after the replay stopped) downloads again without stopping twice.
+    let stopped = false;
     return {
       startedAt,
       async stop({ dir, signal }) {
-        await client.saveReplay(lease.id, replayId, path.join(dir, REPLAY_FILE), signal);
+        if (!stopped) {
+          await client.stopReplay(lease.id, replayId, signal);
+          stopped = true;
+        }
+        await client.downloadReplay(lease.id, replayId, path.join(dir, REPLAY_FILE), signal);
         return { file: REPLAY_FILE };
       },
     };

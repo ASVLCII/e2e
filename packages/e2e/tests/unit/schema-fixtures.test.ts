@@ -53,7 +53,9 @@ describe.each(schemas)('%s schema', (name) => {
       const artifacts = report.run.results[0]!.attempts[0]!.artifacts;
       const link = artifacts.find((artifact) => artifact['url'] !== undefined)!;
       expect(link).toMatchObject({ kind: 'video', redaction: 'incomplete' });
-      expect(artifacts.find((artifact) => artifact['captions'] !== undefined)).toMatchObject({ kind: 'video' });
+      const captioned = artifacts.find((artifact) => artifact['captions'] !== undefined)!;
+      expect(captioned).toMatchObject({ kind: 'video' });
+      expect(artifacts.find((artifact) => artifact['id'] === captioned['captions'])).toMatchObject({ kind: 'other', mediaType: 'text/vtt' });
       expect(validate(report)).toBe(true);
       for (const url of ['file:///tmp/replay.mp4', 'replay.mp4', '']) {
         link['url'] = url;

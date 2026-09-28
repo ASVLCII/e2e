@@ -29,8 +29,9 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
 4. Artifacts named there live under `.e2e/artifacts/`: `failure/screen.txt`
    and the engine's failure screenshot per failed attempt, a Playwright
    `trace.zip` per attempt (`npx playwright show-trace <file>`), downloads,
-   with `--video` a `video/video.webm` per attempt and its step captions
-   `video/video.steps.vtt`, and with `--debug` the full transcript of every
+   with `--video` the attempt's recording (`video/video.webm` in a local
+   browser, `video/video.mp4` on a device, a provider's own file or link)
+   and its step captions (`video/video.steps.vtt`), and with `--debug` the full transcript of every
    agent step.
 
 ## Error codes and what to do

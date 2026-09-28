@@ -120,7 +120,7 @@ recorded flow is stale — `--no-cache` only skips the cache for one run.
 - Artifacts (screenshots, Playwright traces, video recordings and their
   `.steps.vtt` captions, `--debug` transcripts, downloads) live under
   `.e2e/artifacts/`; every path is recorded in the report, and a video a
-  hosted browser keeps by its URL.
+  hosted service keeps is recorded by its URL.
 
 ## Exit codes
 

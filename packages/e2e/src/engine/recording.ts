@@ -7,7 +7,7 @@
  * `VideoSegment` the same way.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { EngineError } from './contract.ts';
 import type { VideoSegment } from './index.ts';
@@ -92,26 +92,35 @@ export async function stopProviderRecording(recording: ProviderRecording, target
   }
   const startedAt = new Date(recording.startedAt).toISOString();
   if (isWrittenFile(result, dir)) return { path: path.posix.join('video', result.file), startedAt };
-  if (isLink(result)) return { url: new URL(result.url).href, mediaType: result.mediaType, startedAt };
+  if (isLink(result)) return { url: hostedVideoUrl(result.url)!, mediaType: result.mediaType.trim(), startedAt };
   throw new EngineError('ENGINE_FAILURE', `${what} finished without naming a file it wrote into ${dir} or an http(s) URL with a media type`, { retryable: false });
 }
 
-/** A plain file name, no directory part, that exists in `dir`. */
+/** A plain file name, no directory part, of a regular file in `dir`. */
 function isWrittenFile(result: unknown, dir: string): result is { readonly file: string } {
   if (typeof result !== 'object' || result === null) return false;
   const { file } = result as { file?: unknown };
-  return typeof file === 'string' && file !== '' && file !== '.' && file !== '..' && file === path.basename(file) && existsSync(path.join(dir, file));
+  if (typeof file !== 'string' || file === '' || file === '.' || file === '..' || file !== path.basename(file)) return false;
+  return statSync(path.join(dir, file), { throwIfNoEntry: false })?.isFile() === true;
 }
 
 /** An `http(s)` URL with a non-empty media type. */
 function isLink(result: unknown): result is { readonly url: string; readonly mediaType: string } {
   if (typeof result !== 'object' || result === null) return false;
   const { url, mediaType } = result as { url?: unknown; mediaType?: unknown };
-  if (typeof url !== 'string' || typeof mediaType !== 'string' || mediaType.trim() === '') return false;
+  return hostedVideoUrl(url) !== undefined && typeof mediaType === 'string' && mediaType.trim() !== '';
+}
+
+/**
+ * The parsed form of an `http(s)` URL with a host, the one shape the report
+ * admits for a video a hosted service keeps; undefined for anything else.
+ */
+export function hostedVideoUrl(url: unknown): string | undefined {
+  if (typeof url !== 'string') return undefined;
   try {
-    const { protocol } = new URL(url);
-    return protocol === 'https:' || protocol === 'http:';
+    const parsed = new URL(url);
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.host !== '' ? parsed.href : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }

@@ -20,6 +20,8 @@ export class ProviderVideo implements AttemptVideo {
   /** The provider records the browser from outside; the page's screencast stays the trace's. */
   readonly startsScreencast = false;
   private started: LeaseRecording | undefined;
+  /** The stop in flight, shared: a close that retries while a timed-out stop is still running waits for it instead of stopping twice. */
+  private stopping: Promise<readonly VideoSegment[]> | undefined;
 
   constructor(
     private readonly record: (signal: AbortSignal) => Promise<LeaseRecording>,
@@ -46,17 +48,23 @@ export class ProviderVideo implements AttemptVideo {
    * tries once more instead of leaving it running on a browser later
    * attempts share.
    */
-  async stop(signal: AbortSignal): Promise<readonly VideoSegment[]> {
+  stop(signal: AbortSignal): Promise<readonly VideoSegment[]> {
     const started = this.started;
-    if (started === undefined) return [];
-    const segment = await stopProviderRecording(started.recording, {
+    if (started === undefined) return Promise.resolve([]);
+    this.stopping ??= stopProviderRecording(started.recording, {
       artifactsDir: this.artifactsDir,
       provider: started.provider,
       leaseId: started.leaseId,
       signal,
+    }).then(
+      (segment) => {
+        this.started = undefined;
+        return [segment];
+      },
+    ).finally(() => {
+      this.stopping = undefined;
     });
-    this.started = undefined;
-    return [segment];
+    return this.stopping;
   }
 
   /** Stops a recording the attempt never collected, best effort and once: the attempt keeps nothing of it. */

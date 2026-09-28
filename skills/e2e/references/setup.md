@@ -122,7 +122,7 @@ export default {
 | `credentials` | `{}` | Named `{ username, password }` entries; `password` is a string of at least 6 characters (code points) or a function returning the value. |
 | `secrets` | `{}` | Named values the model never sees (API keys, tokens): a string of at least 6 characters (code points) or a function returning the value. A name cannot also be a credential. |
 | `artifacts` | `['screenshot', 'trace']` | Kinds to keep (`screenshot`, `trace`), or `{ kinds, store, trace }` to hand each artifact to a host store; `trace: { record: 'retries' }` traces retries only (a trace on every attempt is a large share of a run's CPU). Video is not a kind; `kinds: ['video']` and `artifacts.video` are `INVALID_CONFIG`. |
-| `video` | `'off'` | Which attempts record a video: `'on'`, `'retain-on-failure'` (record all, keep the ones that did not pass), `'on-first-retry'` (only the first retry records; the cheap CI mode). Also per target (`{ engine, video }`), over the config; `--video [mode]` beats both; a test's own `video` beats all. Never invalidates the trace cache. |
+| `video` | `'off'` | Which attempts record a video: `'on'`, `'retain-on-failure'` (record all, keep the ones that did not pass), `'on-first-retry'` (only the first retry records; the cheap CI mode). Also per target (`{ engine, video }`), over the config; `--video [mode]` beats both; a test's own `video` beats all. An engine that cannot record fails a mode that would record with `UNSUPPORTED_ARTIFACT`. Never invalidates the trace cache. |
 | `projectId` | the package name | Report and cache identity. |
 
 ## The app under test

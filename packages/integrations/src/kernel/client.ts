@@ -25,8 +25,10 @@ export interface KernelBrowsers {
   delete(sessionId: string, signal: AbortSignal): Promise<void>;
   /** Starts recording the browser's screen; resolves to the replay id. */
   startReplay(sessionId: string, params: KernelReplayParams, signal: AbortSignal): Promise<string>;
-  /** Stops a recording and writes its MP4 to `file`. */
-  saveReplay(sessionId: string, replayId: string, file: string, signal: AbortSignal): Promise<void>;
+  /** Stops a recording. */
+  stopReplay(sessionId: string, replayId: string, signal: AbortSignal): Promise<void>;
+  /** Downloads a stopped recording's MP4 to `file`. */
+  downloadReplay(sessionId: string, replayId: string, file: string, signal: AbortSignal): Promise<void>;
 }
 
 /** Kernel browsers for one API key, through the SDK. */
@@ -51,9 +53,12 @@ export function kernelBrowsers(apiKey: string): KernelBrowsers {
       const replay = await client.browsers.replays.start(sessionId, params, { signal });
       return replay.replay_id;
     },
-    async saveReplay(sessionId, replayId, file, signal) {
+    async stopReplay(sessionId, replayId, signal) {
       const { client } = await sdk;
       await client.browsers.replays.stop(replayId, { id_or_name: sessionId }, { signal });
+    },
+    async downloadReplay(sessionId, replayId, file, signal) {
+      const { client } = await sdk;
       const response = await client.browsers.replays.download(replayId, { id_or_name: sessionId }, { signal });
       if (response.body === null) throw new Error(`replay ${replayId} downloaded empty`);
       await pipeline(Readable.fromWeb(response.body), createWriteStream(file), { signal });

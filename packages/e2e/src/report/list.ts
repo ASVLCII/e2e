@@ -106,7 +106,7 @@ interface ResultDetails {
   readonly models: ModelTally;
   readonly cache: CacheTally;
   readonly error: SerializedError | undefined;
-  /** Report-relative paths of the recordings the attempts kept, in attempt order. */
+  /** Where the recordings the attempts kept are, in attempt order: report-relative paths, or hosted URLs. */
   readonly videos: readonly string[];
   /** What the runner saw when the last failure landed, with the screen text's report path when it kept one. */
   readonly failure: FailureEvidence | undefined;
@@ -183,7 +183,7 @@ interface Failure {
   readonly title: string;
   readonly status: ResultStatus;
   readonly error: SerializedError | undefined;
-  /** Report-relative paths of the recordings the failed attempts kept, if any. */
+  /** Where the recordings the failed attempts kept are, if any: report-relative paths, or hosted URLs. */
   readonly videos: readonly string[];
   readonly failure: FailureEvidence | undefined;
   readonly screenPath: string | undefined;

@@ -52,6 +52,8 @@ import { SessionStaging, SessionStore, type SessionIdentity } from './sessions.t
 import { redactTraceArchives } from './trace-redaction.ts';
 import { StepRecorder, type StepProgress, type StepRecord } from './steps.ts';
 import { attemptVideo, writeStepCaptions, type AttemptVideo } from './video.ts';
+import { EngineError } from '../engine/contract.ts';
+import { hostedVideoUrl } from '../engine/recording.ts';
 import { WorkerModels } from './worker-models.ts';
 import type { SetupFn } from '../types.ts';
 
@@ -1193,7 +1195,13 @@ function registerVideos(sink: ArtifactSink, segments: readonly VideoSegment[], s
     }
     const captions = captionsPath === undefined ? undefined : sink.register('other', captionsPath, { redaction: 'complete' });
     const registration = { startedAt: segment.startedAt, ...(captions === undefined ? {} : { captions }) };
-    if ('path' in segment) sink.register('video', segment.path, registration);
-    else sink.link(segment.url, { mediaType: segment.mediaType, ...registration });
+    if ('path' in segment) {
+      sink.register('video', segment.path, registration);
+      return;
+    }
+    // An engine's own link is held to what a provider's is: the report admits an http(s) URL only.
+    const url = hostedVideoUrl(segment.url);
+    if (url === undefined) throw new EngineError('ENGINE_FAILURE', `the engine returned a video link that is not an http(s) URL: ${JSON.stringify(segment.url)}`, { retryable: false });
+    sink.link(url, { mediaType: segment.mediaType, ...registration });
   });
 }

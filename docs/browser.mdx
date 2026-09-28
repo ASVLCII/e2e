@@ -325,7 +325,8 @@ async record(lease, context): Promise<ProviderRecording> {
   return {
     startedAt,
     async stop({ signal }) {
-      await fetch(`${options.serviceUrl}/recordings/${id}/stop`, { method: 'POST', headers, signal });
+      const stopped = await fetch(`${options.serviceUrl}/recordings/${id}/stop`, { method: 'POST', headers, signal });
+      if (!stopped.ok) throw new Error(`browser service: HTTP ${stopped.status}`);
       // The service keeps the recording; the report links to its player page.
       return { url: `${options.serviceUrl}/recordings/${id}`, mediaType: 'text/html' };
     },

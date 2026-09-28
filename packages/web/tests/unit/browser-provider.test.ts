@@ -5,11 +5,11 @@
  * leases, and release on every path.
  */
 
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Browser, Page } from 'playwright';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineAttemptContext, EngineCleanupContext, EngineFinishInfo, EngineInitInfo, EnginePrepareInfo, OperationContext, ProviderRecordContext, ProviderRecording } from 'e2e/engine';
 import { connectCdp } from '../../src/browser-connection.ts';
 import { web } from '../../src/index.ts';
@@ -596,12 +596,18 @@ describe('recording', () => {
     return { impl, recorded, stopped };
   }
 
-  /** A worker holding slot 0's lease, attempt `a1` started in a fresh artifact directory. */
+  const artifactDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of artifactDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A worker holding slot 0's lease, attempt `a1` started in a fresh artifact directory, removed after the test. */
   async function recordingWorker(impl: BrowserProvider) {
     const { env } = await prepared(impl, 1);
     const worker = new PlaywrightSurface({ browser: impl });
     await worker.init(initInfo(0, env));
     const artifactsDir = mkdtempSync(path.join(tmpdir(), 'e2e-provider-recording-'));
+    artifactDirs.push(artifactsDir);
     await worker.startAttempt({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
     return { worker, artifactsDir };
   }
@@ -703,6 +709,38 @@ describe('recording', () => {
       message: expect.stringContaining('browser provider "toy-cloud" returned a recording of browser lease-0 without a start time and a stop()'),
     });
     await malformed.worker.dispose(cleanup());
+  });
+
+  it('shares a stop that timed out and is still in flight, so ending the attempt never stops a recording twice', async () => {
+    let stops = 0;
+    let finish!: () => void;
+    const slow: BrowserProvider = {
+      ...provider().impl,
+      async record(): Promise<ProviderRecording> {
+        return {
+          startedAt: '2026-09-28T10:00:00.000Z',
+          async stop({ dir }) {
+            stops += 1;
+            await new Promise<void>((resolve) => { finish = resolve; });
+            writeFileSync(path.join(dir, 'replay.mp4'), 'mp4');
+            return { file: 'replay.mp4' };
+          },
+        };
+      },
+    };
+    const { worker } = await recordingWorker(slow);
+    await worker.startVideo(operation());
+    // The runner's cleanup budget runs out while the provider is still stopping; the close then waits for that same stop.
+    const budget = new AbortController();
+    const collecting = worker.stopVideo({ ...operation(), signal: budget.signal });
+    await vi.waitFor(() => expect(stops).toBe(1));
+    budget.abort();
+    await expect(collecting).rejects.toMatchObject({ code: 'CANCELLED' });
+    const ending = worker.endAttempt(cleanup());
+    finish();
+    await ending;
+    expect(stops).toBe(1);
+    await worker.dispose(cleanup());
   });
 
   it('keeps a recording whose stop failed, so ending the attempt stops it once more', async () => {

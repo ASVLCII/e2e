@@ -512,6 +512,23 @@ describe('device provider recording', () => {
     expect(cloud.stopped).toHaveLength(1);
   });
 
+  it('never asks the provider to record for an operation already cancelled', async () => {
+    const cloud = recordingProvider();
+    const worker = await leasedWorker(cloud.impl);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(worker.engine.artifacts!.startVideo!(operation(cancelled.signal))).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(cloud.recorded).toEqual([]);
+  });
+
+  it('stops a provider recording when the worker is disposed mid-attempt', async () => {
+    const cloud = recordingProvider();
+    const worker = await leasedWorker(cloud.impl);
+    await worker.engine.artifacts!.startVideo!(operation());
+    await worker.engine.dispose!(cleanup());
+    expect(cloud.stopped).toHaveLength(1);
+  });
+
   it('keeps a recording whose stop failed, so endAttempt stops it once more', async () => {
     let failures = 1;
     const cloud = recordingProvider({

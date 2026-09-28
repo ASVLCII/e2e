@@ -30,13 +30,16 @@ describe('recordsVideo', () => {
 });
 
 describe('writeStepCaptions', () => {
-  let dir: string;
+  let dir = '';
   const setup = () => {
     dir = mkdtempSync(path.join(tmpdir(), 'e2e-captions-'));
     mkdirSync(path.join(dir, 'video'));
     return dir;
   };
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    if (dir !== '') rmSync(dir, { recursive: true, force: true });
+    dir = '';
+  });
 
   const step = (index: number, startedAt: string, durationMs: number, extra: { api?: string; label?: string; status?: 'passed' | 'failed' } = {}) => ({
     index,

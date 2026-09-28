@@ -223,10 +223,11 @@ const ATTRIBUTE_NAME = /^[A-Za-z_:][A-Za-z0-9_:.-]*$/;
 
 /** `web({ video })`: a whole-pixel frame size and a 0-100 JPEG quality, each optional. */
 function validateVideo(video: unknown): void {
-  if (typeof video !== 'object' || video === null || Array.isArray(video)) {
-    throw new ConfigurationError('INVALID_CONFIG', 'web({ video }) must be an object: { size?, quality? }');
+  const prototype = typeof video === 'object' && video !== null ? Object.getPrototypeOf(video) : undefined;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ video }) must be a plain object: { size?, quality? }');
   }
-  for (const key of Object.keys(video)) {
+  for (const key of Object.keys(video as object)) {
     if (key !== 'size' && key !== 'quality') {
       throw new ConfigurationError('INVALID_CONFIG', `web({ video }) has unknown key "${key}"; it is { size?, quality? }, and which attempts record is the config's video`);
     }

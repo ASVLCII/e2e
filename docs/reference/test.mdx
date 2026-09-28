@@ -229,7 +229,8 @@ Resolution order: test, nearest group, outer groups, config, built-in default.
 `retain-on-failure`, or `on-first-retry`. A test's or group's own value wins
 over `--video`, the target's `video`, and the config's, so one test can
 record on a run that records nothing, or opt out of one that records
-everything:
+everything. A mode that records needs an engine that can; on one that
+cannot, the run fails with `UNSUPPORTED_ARTIFACT` before any test starts:
 
 ```ts
 test('checkout', { video: 'on' }, async ({ agent }) => {

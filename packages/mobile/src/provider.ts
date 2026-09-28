@@ -175,6 +175,7 @@ export function travelledLease(binding: SlotBinding | undefined): DeviceLease | 
 export async function recordLease(provider: RecordingDeviceProvider, lease: DeviceLease, context: ProviderRecordContext): Promise<ProviderRecording> {
   const failure = (detail: string, cause?: unknown) =>
     new EngineError('ENGINE_FAILURE', `device provider "${provider.name}" ${detail} for lease ${lease.id}`, { retryable: false, ...(cause === undefined ? {} : { cause }) });
+  if (context.signal.aborted) throw cancelled(`recording from device provider "${provider.name}" cancelled`);
   let recording: unknown;
   try {
     recording = await provider.record(lease, context);

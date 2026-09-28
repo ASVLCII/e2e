@@ -229,6 +229,8 @@ interface LeaseRecording {
   readonly kind: 'lease';
   readonly recorder: LeaseRecorder;
   readonly started: Promise<ProviderRecording>;
+  /** The stop in flight, shared: a retry while a stop that ran out of budget is still running waits for it instead of stopping twice. */
+  stopping?: Promise<VideoSegment> | undefined;
 }
 
 /** What a worker records its device through when its provider records: the provider, and the lease the slot rides. */
@@ -578,16 +580,20 @@ export class AgentDeviceSurface {
   /** Ends the provider's recording as the attempt's one segment, a file in its `video` directory or a link. */
   private async stopLeaseRecording(video: LeaseRecording, artifactsDir: string, signal: AbortSignal): Promise<VideoSegment> {
     const { provider, lease } = video.recorder;
-    return raceAbort(
-      async () =>
-        stopProviderRecording(await video.started, { artifactsDir, provider: `device provider "${provider.name}"`, leaseId: lease.id, signal }),
-      signal,
-      'stop video recording',
-    );
+    video.stopping ??= (async () =>
+      stopProviderRecording(await video.started, { artifactsDir, provider: `device provider "${provider.name}"`, leaseId: lease.id, signal }))().finally(() => {
+      video.stopping = undefined;
+    });
+    return raceAbort(video.stopping, signal, 'stop video recording');
   }
 
   async dispose(context: EngineCleanupContext): Promise<void> {
     const client = this.client;
+    const attempt = this.attempt;
+    // A worker torn down mid-attempt must not leave the provider recording the device.
+    if (attempt?.video?.kind === 'lease') {
+      await withinCleanupBudget(this.stopLeaseRecording(attempt.video, attempt.artifactsDir, context.signal), context).catch(() => undefined);
+    }
     this.client = undefined;
     this.attempt = undefined;
     this.generation = new Map();
