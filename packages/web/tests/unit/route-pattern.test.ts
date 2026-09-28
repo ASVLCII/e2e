@@ -1,10 +1,6 @@
+import { toTextPattern } from 'e2e/engine';
 import { describe, expect, it } from 'vitest';
-import {
-  compileRoutePattern,
-  routePatternMatches,
-  routePatternsEqual,
-  toRoutePattern,
-} from '../../src/route-pattern.ts';
+import { compileRoutePattern, routePatternMatches, routePatternsEqual } from '../../src/route-pattern.ts';
 
 function matches(pattern: string, url: string): boolean {
   return compileRoutePattern(pattern).test(url);
@@ -51,9 +47,9 @@ describe('routePatternMatches', () => {
 
 describe('routePatternsEqual', () => {
   it('compares string and regexp forms structurally', () => {
-    expect(routePatternsEqual(toRoutePattern('**/a'), toRoutePattern('**/a'))).toBe(true);
-    expect(routePatternsEqual(toRoutePattern(/a/i), toRoutePattern(/a/i))).toBe(true);
-    expect(routePatternsEqual(toRoutePattern(/a/i), toRoutePattern(/a/g))).toBe(false);
-    expect(routePatternsEqual(toRoutePattern('a'), toRoutePattern(/a/))).toBe(false);
+    expect(routePatternsEqual(toTextPattern('**/a'), toTextPattern('**/a'))).toBe(true);
+    expect(routePatternsEqual(toTextPattern(/a/i), toTextPattern(/a/i))).toBe(true);
+    expect(routePatternsEqual(toTextPattern(/a/i), toTextPattern(/a/g))).toBe(false);
+    expect(routePatternsEqual(toTextPattern('a'), toTextPattern(/a/))).toBe(false);
   });
 });

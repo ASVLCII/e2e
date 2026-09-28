@@ -52,7 +52,8 @@ negated `toBeAttached` accept zero matches.
 
 Text comparison is normalized: leading and trailing whitespace is trimmed and
 each run of whitespace collapses to one space. A `TextMatch` string matches
-exactly; a `RegExp` uses its own source and flags. `toHaveValue` is the
+exactly; a `RegExp` uses its own source and flags; anything else, such as a
+predicate function, is `INVALID_ARGUMENT`. `toHaveValue` is the
 exception: a form control's value is compared as it is, newlines and trailing
 spaces included, and the failure message prints it that way; a
 `contenteditable` editor's value is its rendered text, kept the same way, and
@@ -160,7 +161,8 @@ export interface WebExpectation {
 ```
 
 A relative `toHaveURL` string resolves against the base URL and matches
-exactly after normalization; a `RegExp` tests the full URL.
+exactly after normalization; a `RegExp` tests the full URL. Anything else,
+such as a predicate function, is `INVALID_ARGUMENT`.
 
 `toHaveClass` polls for the node too: a target that matches nothing yet is one
 more poll, not a failure, until the assertion timeout runs out. An ambiguous
@@ -258,7 +260,8 @@ by `toEqual` rules.
 A matcher that cannot evaluate its value (`toContain` on a number,
 `toHaveLength` on an object without one) fails as `ASSERTION_FAILED` like a
 mismatch would, so under `expect.poll` a value that has not taken its final
-shape yet is one more failing sample.
+shape yet is one more failing sample. A `toMatch` pattern that is neither a
+string nor a `RegExp` is `INVALID_ARGUMENT`.
 
 The unit-runner matchers (`toThrow`, `toBeInstanceOf`, `toBeNaN`,
 `toStrictEqual`, `resolves`, `rejects`, `expect.extend`) are not part of

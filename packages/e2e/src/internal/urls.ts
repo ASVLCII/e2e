@@ -2,6 +2,7 @@
 
 import { ConfigurationError } from './errors.ts';
 import { testPattern } from './regexp.ts';
+import { toTextPattern } from './text.ts';
 
 export interface NormalizedBaseUrl {
   /** Serialized base URL without trailing artifacts beyond the normalized path. */
@@ -177,18 +178,20 @@ export function sameSite(url: string | URL, site: string): boolean {
  * Compares a current URL to an expected string/regexp.
  * Relative expected strings resolve against the base URL; string comparison is
  * exact after WHATWG serialization; regexps test the complete serialized URL.
+ * Anything else is `INVALID_ARGUMENT`, the `toTextPattern` rule.
  */
 export function urlMatches(current: string, expected: string | RegExp, baseHref: string): boolean {
-  if (typeof expected === 'string') {
-    let expectedUrl: URL;
-    try {
-      expectedUrl = new URL(expected, baseHref);
-    } catch {
-      return false;
-    }
-    return serializeForComparison(current) === expectedUrl.href;
+  const pattern = toTextPattern(expected);
+  if (pattern.kind === 'regexp') {
+    return testPattern(pattern.source, pattern.flags, serializeForComparison(current));
   }
-  return testPattern(expected.source, expected.flags, serializeForComparison(current));
+  let expectedUrl: URL;
+  try {
+    expectedUrl = new URL(pattern.value, baseHref);
+  } catch {
+    return false;
+  }
+  return serializeForComparison(current) === expectedUrl.href;
 }
 
 function serializeForComparison(url: string): string {
