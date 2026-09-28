@@ -283,6 +283,10 @@ export interface Locator extends Screen {
 
 - An action whose kind the engine does not list in `actions` throws
   `UNSUPPORTED_CAPABILITY` before reaching the engine.
+- An action takes only the options its signature names. Any other key,
+  Playwright's `trial`, `force`, or `noWaitAfter` included, throws
+  `INVALID_ARGUMENT` before the node is resolved, so the control is never
+  touched.
 - `click` is an alias of `tap`.
 - `tap({ position })` taps at an offset of the node's top-left corner, in
   CSS pixels. The node is scrolled into view when the engine lists

@@ -171,6 +171,40 @@ test('actions and state', async ({ app, screen, web }) => {
   await expect(web).not.toHaveClass(web.locator('#class-card'), 'card inactive');
 });
 
+test('check and uncheck refuse an unknown option and leave the box untouched', async ({ app, screen, web }) => {
+  await app.open();
+  await web.evaluate(() => {
+    const box = document.querySelector<HTMLInputElement>('#notifications')!;
+    box.dataset.events = '0';
+    for (const type of ['input', 'change', 'click']) {
+      box.addEventListener(type, () => { box.dataset.events = String(Number(box.dataset.events) + 1); });
+    }
+  });
+  const box = screen.getByLabel('Notifications');
+  const code = async (call: () => Promise<void>) => {
+    try {
+      await call();
+    } catch (error) {
+      return (error as { code?: string }).code;
+    }
+    return 'no error';
+  };
+
+  expect(await code(() => box.check({ trial: true } as never))).toBe('INVALID_ARGUMENT');
+  await expect(box).not.toBeChecked();
+  await expect(box).toHaveAttribute('data-events', '0');
+  await box.check();
+  await expect(box).toBeChecked();
+  await expect(box).toHaveAttribute('data-events', '3');
+
+  expect(await code(() => box.uncheck({ trial: true } as never))).toBe('INVALID_ARGUMENT');
+  await expect(box).toBeChecked();
+  await expect(box).toHaveAttribute('data-events', '3');
+  await box.uncheck();
+  await expect(box).not.toBeChecked();
+  await expect(box).toHaveAttribute('data-events', '6');
+});
+
 test('class assertions report the observed class on failure', async ({ app, web }) => {
   await app.open();
   try {
@@ -509,6 +543,7 @@ describe('web platform integration', () => {
       'toHaveAttribute reads the value attribute of plain fields',
       'role vocabulary: tabs, menus, progress, toolbars, images',
       'actions and state',
+      'check and uncheck refuse an unknown option and leave the box untouched',
       'assertions poll until the app settles',
       'web navigation, urls, and titles',
       'routes intercept and fulfill',
