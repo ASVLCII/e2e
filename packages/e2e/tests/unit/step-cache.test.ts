@@ -36,6 +36,7 @@ function fakeContext(read: AgentCacheContext['store']['read']): AgentCacheContex
     },
     identity: { testId: 'tests/example.e2e.ts::step', targetId: 'web' },
     replayEligible: true,
+    strict: false,
     claimKeyHash: () => 'a'.repeat(64),
     staged: [],
   };
@@ -630,6 +631,7 @@ describe('StepTraceSession', () => {
       store,
       identity: { testId: 'tests/example.e2e.ts::step', targetId: 'web' },
       replayEligible: true,
+      strict: false,
       claimKeyHash: () => 'a'.repeat(64),
       staged: [],
     });
@@ -735,6 +737,7 @@ function entryContext(overrides: Partial<ActionTrace>): AgentCacheContext {
     },
     identity: { testId: 'tests/example.e2e.ts::step', targetId: 'web' },
     replayEligible: true,
+    strict: false,
     claimKeyHash: () => 'a'.repeat(64),
     staged: [],
   };
@@ -770,6 +773,7 @@ describe('flushStagedTraces and a re-recorded flow', () => {
       store,
       identity: { testId: 'tests/example.e2e.ts::step', targetId: 'web' },
       replayEligible: true,
+      strict: false,
       claimKeyHash: () => 'c'.repeat(64),
       staged: [],
     });
@@ -809,5 +813,59 @@ describe('flushStagedTraces and a re-recorded flow', () => {
     const replaced = await snapshot();
     expect(replaced.bytes).not.toBe(written.bytes);
     expect(JSON.parse(replaced.bytes).payload.actions).toHaveLength(2);
+  });
+});
+
+describe('cache.strict', () => {
+  const strict = (context: AgentCacheContext): AgentCacheContext => ({ ...context, strict: true });
+
+  it('fails a step whose recording diverged instead of handing it off, and keeps the cache detail', async () => {
+    const context = strict(entryContext({ endPath: '/customers', endAnchors: [savedAnchor] }));
+    const session = makeSession(context, makeHost(['/pricing', '/customers']));
+    await expect(session.begin()).rejects.toMatchObject({ code: 'REPLAY_STALE', category: 'configuration' });
+    expect(session.cacheInfo).toMatchObject({ mode: 'agent-concluded', reason: 'end-mismatch' });
+  });
+
+  it('fails an entry it cannot read and a recording made on another screen', async () => {
+    const malformed = { schemaVersion: 'trace-1', payload: { actions: 'not a list' } } as unknown as TraceEntry;
+    const unreadable = makeSession(strict(fakeContext(async () => ({ status: 'hit', entry: malformed, bytes: 1 }))), makeHost(['/']));
+    await expect(unreadable.begin()).rejects.toMatchObject({ code: 'REPLAY_STALE' });
+    const elsewhere = makeSession(strict(entryContext({ startPath: '/pricing', actions: [{ name: 'tap', summary: 'tap button "Upgrade"', target: { role: 'button', name: 'Upgrade' } }] })), makeHost(['/billing']));
+    await expect(elsewhere.begin()).rejects.toMatchObject({ code: 'REPLAY_STALE' });
+    expect(elsewhere.cacheInfo).toMatchObject({ mode: 'missed', reason: 'wrong-context' });
+  });
+
+  it('still runs live a step with no recording, a retry, and a recording too long to replay', async () => {
+    await expect(makeSession(strict(fakeContext(async () => ({ status: 'miss' }))), makeHost(['/'])).begin()).resolves.toBeUndefined();
+    const retry = makeSession({ ...strict(fakeContext(async () => ({ status: 'miss' }))), replayEligible: false }, makeHost(['/']));
+    await expect(retry.begin()).resolves.toBeUndefined();
+    const tapUpgrade = { name: 'tap', summary: 'tap button "Upgrade"', target: { role: 'button', name: 'Upgrade' } } as const;
+    const truncated = makeSession(
+      strict(entryContext({ actions: Array.from({ length: 50 }, () => tapUpgrade), startPath: '/pricing', truncated: true })),
+      makeHost(['/pricing']),
+    );
+    await expect(truncated.begin()).resolves.toBeUndefined();
+  });
+
+  it('keeps the stale entry it failed on in read-write mode, so the next strict run fails on it too', async () => {
+    const deleted: string[] = [];
+    const base = strict(entryContext({ endPath: '/customers', endAnchors: [savedAnchor] }));
+    const context: AgentCacheContext = { ...base, store: { ...base.store, delete: async (key) => { deleted.push(key); } } };
+    const session = makeSession(context, makeHost(['/pricing', '/customers']));
+    await expect(session.begin()).rejects.toMatchObject({ code: 'REPLAY_STALE' });
+    await session.conclude('failed', undefined);
+    expect(deleted).toEqual([]);
+  });
+
+  it('runs live when the store read rejects, since nothing says a recording exists', async () => {
+    const session = makeSession(strict(fakeContext(async () => { throw new Error('redis is down'); })), makeHost(['/']));
+    await expect(session.begin()).resolves.toBeUndefined();
+    expect(session.cacheInfo).toMatchObject({ mode: 'missed', reason: 'invalid-entry' });
+  });
+
+  it('replays a recording that still holds as it always does', async () => {
+    const context = strict(entryContext({ endPath: '/customers', endAnchors: [savedAnchor] }));
+    const verdict = await makeSession(context, makeHost(['/pricing', '/customers'], [[savedMarker]])).begin();
+    expect(verdict?.status).toBe('passed');
   });
 });
