@@ -194,7 +194,8 @@ function isGrantedLease(value: unknown): value is Pick<DeviceLease, 'id'> {
 /** A granted lease checked field by field: the engine trusts nothing it did not write. */
 function isDeviceLease(lease: Pick<DeviceLease, 'id'>): lease is DeviceLease {
   // `leaseId` is the engine's own field on a binding; a provider may keep a field of that name on its lease.
-  return isSlotBinding({ ...lease, leaseId: undefined }) && (lease.daemon !== undefined || lease.client !== undefined);
+  const declared: unknown = { ...lease, leaseId: undefined };
+  return isSlotBinding(declared) && (declared.daemon !== undefined || declared.client !== undefined);
 }
 
 const REJECTED_LEASE = 'returned a lease without an id and a daemon baseUrl or JSON client configuration (no `session` or daemon keys)';
