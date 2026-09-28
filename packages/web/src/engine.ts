@@ -68,6 +68,7 @@ export function web(options: WebOptions = {}): EngineHandle {
   if (options.basicAuth !== undefined) validateBasicAuth(options.basicAuth);
   if (options.testIdAttribute !== undefined) validateTestIdAttribute(options.testIdAttribute);
   if (options.userAgent !== undefined) validateUserAgent(options.userAgent, options.headers);
+  if (options.video !== undefined) validateVideo(options.video);
   const reconnecting = options.connect?.reconnectEndpoint !== undefined;
   if (reconnecting && typeof options.connect?.reconnectEndpoint !== 'function') {
     throw new ConfigurationError('INVALID_CONFIG', 'connect.reconnectEndpoint must be a function');
@@ -219,6 +220,28 @@ function validateUserAgent(userAgent: unknown, headers: Readonly<Record<string, 
  * and every `testId` query would fail silently.
  */
 const ATTRIBUTE_NAME = /^[A-Za-z_:][A-Za-z0-9_:.-]*$/;
+
+/** `web({ video })`: a whole-pixel frame size and a 0-100 JPEG quality, each optional. */
+function validateVideo(video: unknown): void {
+  if (typeof video !== 'object' || video === null || Array.isArray(video)) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ video }) must be an object: { size?, quality? }');
+  }
+  for (const key of Object.keys(video)) {
+    if (key !== 'size' && key !== 'quality') {
+      throw new ConfigurationError('INVALID_CONFIG', `web({ video }) has unknown key "${key}"; it is { size?, quality? }, and which attempts record is the config's video`);
+    }
+  }
+  const { size, quality } = video as { size?: unknown; quality?: unknown };
+  if (size !== undefined) {
+    const { width, height } = (typeof size === 'object' && size !== null ? size : {}) as { width?: unknown; height?: unknown };
+    if (!Number.isInteger(width) || !Number.isInteger(height) || (width as number) < 1 || (height as number) < 1) {
+      throw new ConfigurationError('INVALID_CONFIG', 'web({ video: { size } }) must be { width, height } in whole pixels, each at least 1');
+    }
+  }
+  if (quality !== undefined && (!Number.isInteger(quality) || (quality as number) < 0 || (quality as number) > 100)) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ video: { quality } }) must be an integer from 0 through 100');
+  }
+}
 
 /** Refuses a test-id attribute no element could carry, at config load. */
 function validateTestIdAttribute(attribute: unknown): void {

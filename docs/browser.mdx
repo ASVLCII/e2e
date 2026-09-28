@@ -164,6 +164,8 @@ export interface BrowserProvider {
   readonly scope?: 'worker' | 'attempt';
   acquire(request: BrowserRequest): Promise<BrowserLease>;
   release(lease: BrowserLease, context: BrowserReleaseContext): Promise<void>;
+  /** Optional: the service's own recording of the browser, in the worker, for an attempt that records video. */
+  record?(lease: BrowserLease, context: ProviderRecordContext): Promise<ProviderRecording>;
 }
 
 export interface BrowserLease {
@@ -291,6 +293,56 @@ Two workers lease two sessions in parallel and keep them for the run. Hosted
 sessions are billed while they run, so keep `workers` at what the suite can
 fill; `scope: 'attempt'` trades a session start per test for a browser no
 earlier test has touched.
+
+### Recording on the provider
+
+A service that records its browsers can record the attempt's video too.
+Implement `record` and an attempt that records [video](/reference/config#video)
+calls it from the worker, with the lease that attempt rides, instead of
+starting the engine's screencast of the page. It starts once the attempt's
+page is open and covers the whole browser window, tabs and address bar
+included. `record` returns a `ProviderRecording` (import the type from
+`e2e/engine`), stopped when the attempt collects its video: `stop` either
+writes a file into the directory it is given and returns `{ file }`, kept as
+`video/<file>` beside the attempt's other artifacts, or returns
+`{ url, mediaType }` for a recording the service keeps, which the report
+links to.
+
+```ts title="browser-provider.ts"
+import type { ProviderRecording } from 'e2e/engine';
+
+// In hostedBrowsers(), beside acquire and release.
+async record(lease, context): Promise<ProviderRecording> {
+  const headers = { Authorization: `Bearer ${context.env['BROWSER_SERVICE_TOKEN'] ?? ''}` };
+  const startedAt = new Date().toISOString();
+  const started = await fetch(`${options.serviceUrl}/sessions/${lease.id}/recordings`, {
+    method: 'POST',
+    headers,
+    signal: context.signal,
+  });
+  if (!started.ok) throw new Error(`browser service: HTTP ${started.status}`);
+  const { id } = (await started.json()) as { id: string };
+  return {
+    startedAt,
+    async stop({ signal }) {
+      await fetch(`${options.serviceUrl}/recordings/${id}/stop`, { method: 'POST', headers, signal });
+      // The service keeps the recording; the report links to its player page.
+      return { url: `${options.serviceUrl}/recordings/${id}`, mediaType: 'text/html' };
+    },
+  };
+},
+```
+
+In `worker` scope the lease `record` gets is usually the copy that traveled
+to the worker, which carries only `id`, `cdpEndpoint`, and
+`reconnectEndpoint`, so key the recording on `lease.id`.
+
+A `record` that fails fails the attempt's launch, named after the provider
+and the lease; a `stop` that fails is tried once more when the attempt ends,
+so a recording never keeps running on a browser later attempts share. A
+provider that cannot record, or a browser the service cannot record (a
+headless one), leaves `record` out, and the engine records the screencast.
+[Kernel](/integrations/kernel#recordings) records this way.
 
 ## Inert content
 

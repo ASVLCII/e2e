@@ -1,5 +1,5 @@
 /**
- * The `headers`, `basicAuth`, `testIdAttribute`, and `userAgent` options are checked at
+ * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `video` options are checked at
  * config load, so a header the browser could never send or an attribute no
  * element could carry fails the run before a browser launches. What the
  * browser does with valid ones is in tests/integration.
@@ -91,5 +91,27 @@ describe('web({ userAgent })', () => {
   it('rejects a user-agent header beside it, which would override it on the app site only', () => {
     expect(() => web({ userAgent: 'playwright', headers: { 'User-Agent': 'other' } })).toThrowError(/conflict/);
     expect(() => web({ userAgent: 'playwright', headers: { 'x-preview': 'token' } })).not.toThrow();
+  });
+});
+
+describe('web({ video })', () => {
+  it('accepts a whole-pixel size and a 0-100 quality, each optional', () => {
+    expect(() => web({ video: {} })).not.toThrow();
+    expect(() => web({ video: { size: { width: 1920, height: 1080 }, quality: 90 } })).not.toThrow();
+    expect(() => web({ video: { quality: 0 } })).not.toThrow();
+  });
+
+  it('rejects a fractional or empty size, a quality outside 0-100, and an unknown key as INVALID_CONFIG', () => {
+    const invalid = [
+      { size: { width: 0, height: 720 } },
+      { size: { width: 1280.5, height: 720 } },
+      { quality: 101 },
+      { quality: 0.5 },
+      { mode: 'on' },
+    ];
+    for (const video of invalid) {
+      expect(() => web({ video } as unknown as Parameters<typeof web>[0])).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }));
+    }
+    expect(() => web({ video: { mode: 'on' } } as unknown as Parameters<typeof web>[0])).toThrow(/which attempts record is the config's video/);
   });
 });

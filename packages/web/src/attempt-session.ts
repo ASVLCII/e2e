@@ -6,8 +6,11 @@ import { EngineError, raceAbort, withinCleanupBudget, type EngineCleanupContext,
 import { attachPersistent, recoveryFailed, targetIdentity, type CdpEndpointResolver, type SessionBinding } from './cdp-recovery.ts';
 import { connectionAbort, withConnectionBudget, type ConnectionBudget } from './operation-budget.ts';
 import { RefRegistry } from './refs.ts';
+import type { LeaseRecording } from './provider.ts';
+import { ProviderVideo } from './provider-video.ts';
 import { invalidState, translatePwError } from './support.ts';
-import { VideoRecorder } from './video.ts';
+import type { WebVideoOptions } from './surface.ts';
+import { VideoRecorder, type AttemptVideo } from './video.ts';
 
 export type StorageState = Exclude<NonNullable<BrowserContextOptions['storageState']>, string>;
 
@@ -15,9 +18,13 @@ interface SessionOptions {
   readonly artifactsDir: string;
   /** The emulated page size, or `null` to follow the window. */
   readonly viewport: ViewportSize | null;
+  /** How the engine's own screencast records, when the provider does not record. */
+  readonly video: WebVideoOptions;
   readonly contextOptions: BrowserContextOptions;
   readonly acquire: (signal: AbortSignal) => Promise<Browser>;
   readonly configure: (context: BrowserContext) => Promise<void>;
+  /** Starts the browser provider's own recording of the attempt's browser, when it records; the attempt records the screencast otherwise. */
+  readonly record?: ((signal: AbortSignal) => Promise<LeaseRecording>) | undefined;
   readonly persistent?: {
     readonly provision: CdpEndpointResolver;
     readonly reconnect: CdpEndpointResolver;
@@ -43,7 +50,7 @@ const TRACE_OPTIONS = { screenshots: true, snapshots: true } as const;
 export class AttemptSession {
   readonly refs = new RefRegistry();
   private readonly lifetime = new AbortController();
-  private readonly video: VideoRecorder;
+  private readonly video: AttemptVideo;
   private state: SessionState = { kind: 'empty' };
   private generation = {};
   private observed = true;
@@ -55,7 +62,9 @@ export class AttemptSession {
   private requestedViewport: { readonly width: number; readonly height: number } | undefined;
 
   constructor(private readonly options: SessionOptions) {
-    this.video = new VideoRecorder(options.artifactsDir);
+    this.video = options.record === undefined
+      ? new VideoRecorder(options.artifactsDir, options.video)
+      : new ProviderVideo(options.record, options.artifactsDir);
   }
 
   /** Captures an immutable connection generation for publication after asynchronous reads. */
@@ -214,10 +223,10 @@ export class AttemptSession {
   /**
    * The page the attempt shows next. A persistent browser is fresh for the
    * attempt, so its own first tab serves as the attempt's first page instead
-   * of a second tab beside it, which a hosted browser's live view would show
-   * behind the test's. The tab is navigated to `about:blank` first, so its
-   * document runs the context's init scripts as a new tab's does. Every later
-   * page is a new tab.
+   * of a second tab beside it, which a hosted browser's live view and
+   * recording would show behind the test's. The tab is navigated to
+   * `about:blank` first, so its document runs the context's init scripts
+   * as a new tab's does. Every later page is a new tab.
    */
   private async nextPage(context: BrowserContext): Promise<Page> {
     const first = this.firstPage;
@@ -280,7 +289,7 @@ export class AttemptSession {
     if (state.kind === 'pending') await withinCleanupBudget(state.work, budget);
     const binding = 'binding' in state ? state.binding : undefined;
     if (binding === undefined) return;
-    if (this.video.isRecording) await withinCleanupBudget(this.video.pageClosing(), budget);
+    await withinCleanupBudget(this.video.abandon(budget.signal), budget);
     if (this.tracing) await withinCleanupBudget(binding.context.tracing.stop(), budget);
     await withinCleanupBudget(this.release(binding), budget);
   }
@@ -331,16 +340,17 @@ export class AttemptSession {
   }
 
   /**
-   * Starts video at the page's full size. A trace records through the same
-   * screencast and sizes it for itself, so a trace already running (a host
-   * that starts the video mid-attempt) is split around the start: its
-   * segment so far is saved, and it resumes on the video's screencast.
+   * Starts video once the page is open, so a provider's recording of the
+   * browser starts on the attempt's own tab. A screencast is shared with the
+   * trace, which sizes it for itself, so a trace already running (a host
+   * that starts the video mid-attempt) is split around a screencast's start:
+   * its segment so far is saved, and it resumes on the video's screencast.
    */
-  async startVideo(): Promise<void> {
+  async startVideo(signal: AbortSignal): Promise<void> {
     const page = await this.ensurePage();
-    const resume = this.video.isRecording ? false : await this.closeTraceSegment(this.current().context);
+    const resume = this.video.startsScreencast ? await this.closeTraceSegment(this.current().context) : false;
     try {
-      await this.video.arm(page);
+      await this.video.arm(page, signal);
     } finally {
       if (resume) await this.startTrace();
     }
@@ -353,15 +363,15 @@ export class AttemptSession {
 
   /** Collects this attempt's video independently of a failed connection. */
   collectVideo(operation: OperationContext): Promise<readonly VideoSegment[]> {
-    return this.finalize(operation, 'video', () => this.video.stop());
+    return this.finalize(operation, 'video', (signal) => this.video.stop(signal));
   }
 
   /** Terminal artifact collection needs its own budget, but no successful UI dispatch. */
-  private async finalize<T>(operation: OperationContext, label: string, collect: () => Promise<T>): Promise<T> {
+  private async finalize<T>(operation: OperationContext, label: string, collect: (signal: AbortSignal) => Promise<T>): Promise<T> {
     try {
       return this.state.kind === 'failed' || this.state.kind === 'closed'
-        ? await withConnectionBudget(operation, label, (remaining) => raceAbort(collect, remaining().signal, label))
-        : await this.run(operation, label, collect);
+        ? await withConnectionBudget(operation, label, (remaining) => raceAbort(() => collect(remaining().signal), remaining().signal, label))
+        : await this.run(operation, label, (current) => collect(current.signal));
     } catch (cause) {
       throw translatePwError(cause, label);
     }

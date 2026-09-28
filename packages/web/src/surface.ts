@@ -130,6 +130,14 @@ export interface WebBasicAuth {
   readonly password: string;
 }
 
+/** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
+export interface WebVideoOptions {
+  /** Frame size in pixels; default the viewport's, or the window's under `viewport: null`. A smaller size makes a smaller file. */
+  readonly size?: ViewportSize;
+  /** JPEG quality of each captured frame, 0 through 100; Playwright's default when unset. */
+  readonly quality?: number;
+}
+
 /**
  * Options of the browser engine: the app it drives (`url`, `command`,
  * `services`, `environment`, `identity`, `readyUrl` - the
@@ -150,6 +158,12 @@ export interface WebOptions extends EngineAppDeclaration {
    * `web.setViewport` still fixes one for the rest of the attempt.
    */
   readonly viewport?: ViewportSize | null;
+  /**
+   * How the engine's own screencast records an attempt that records video.
+   * A browser provider that records (`BrowserProvider.record`) records in
+   * its place, and ignores these.
+   */
+  readonly video?: WebVideoOptions;
   /**
    * Attach to a remote browser over CDP instead of launching locally. Requires
    * the chromium browser (the default). Wired by a hosted-browser engine.
@@ -212,6 +226,7 @@ export class PlaywrightSurface {
   private session: AttemptSession | undefined;
   private readonly usedContexts = new Set<string>();
   private readonly viewport: ViewportSize | null;
+  private readonly video: WebVideoOptions;
   /** Injected request headers, names lowercased so they replace the browser's own of the same name. */
   private readonly headers: Readonly<Record<string, string>> | undefined;
   private readonly basicAuth: WebBasicAuth | undefined;
@@ -234,6 +249,7 @@ export class PlaywrightSurface {
     this.leases = typeof options.browser === 'object' && options.browser !== null ? new LeasedBrowsers(options.browser) : undefined;
     this.connect = options.connect;
     this.viewport = options.viewport === undefined ? DEFAULT_VIEWPORT : options.viewport;
+    this.video = options.video ?? {};
     this.headers = options.headers === undefined ? undefined : lowercaseNames(options.headers);
     this.basicAuth = options.basicAuth;
     this.testIdAttribute = options.testIdAttribute ?? DEFAULT_TEST_ID_ATTRIBUTE;
@@ -378,6 +394,7 @@ export class PlaywrightSurface {
     const session = new AttemptSession({
       artifactsDir: context.artifactsDir,
       viewport: this.viewport,
+      video: this.video,
       acquire: (signal) => this.acquireBrowser(signal),
       contextOptions: {
         viewport: this.viewport,
@@ -394,6 +411,7 @@ export class PlaywrightSurface {
         for (const stored of routes) await target.route(stored.predicate, stored.handler);
       },
       ...(persistent === undefined ? {} : { persistent }),
+      record: this.leases?.recorder(context.attemptId),
     });
     this.session = session;
     await session.start(context.signal);
@@ -841,7 +859,7 @@ export class PlaywrightSurface {
 
   /** Starts the attempt's video before a trace chooses its screencast dimensions. */
   startVideo(operation: OperationContext): Promise<void> {
-    return this.guard(operation, 'video', () => this.requireSession().startVideo());
+    return this.guard(operation, 'video', (current) => this.requireSession().startVideo(current.signal));
   }
 
   /** Finishes the attempt's recording and returns its finalized segments. */

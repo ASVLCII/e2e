@@ -20,8 +20,11 @@ import {
   type EngineInitInfo,
   type EnginePrepareInfo,
   type EnginePrepareResult,
+  type ProviderRecordContext,
+  type ProviderRecording,
 } from 'e2e/engine';
-import { message } from './support.ts';
+import { connectionAbort } from './operation-budget.ts';
+import { invalidState, message } from './support.ts';
 
 /**
  * How long a lease lives. `worker` (the default) is one browser per worker
@@ -85,6 +88,14 @@ export interface BrowserReleaseContext {
   readonly log: (line: string) => void;
 }
 
+/** A provider recording the attempt started, with who made it and which lease it covers, for `stopProviderRecording`. */
+export interface LeaseRecording {
+  readonly recording: ProviderRecording;
+  /** The provider as error messages name it: `browser provider "kernel"`. */
+  readonly provider: string;
+  readonly leaseId: string;
+}
+
 /**
  * A source of hosted browsers. In `worker` scope `acquire` is called once per
  * worker slot, for every slot at once, in the runner process; a worker whose
@@ -101,6 +112,15 @@ export interface BrowserProvider {
   readonly scope?: BrowserProviderScope | undefined;
   acquire(request: BrowserRequest): Promise<BrowserLease>;
   release(lease: BrowserLease, context: BrowserReleaseContext): Promise<void>;
+  /**
+   * Records the leased browser for an attempt that records video, in place
+   * of the engine's screencast of the page: the service's own recording of
+   * the browser, called from the worker when the attempt starts its video.
+   * A provider that cannot record its browsers (a headless session the
+   * service cannot replay) leaves it out, and the engine records the
+   * screencast.
+   */
+  record?(lease: BrowserLease, context: ProviderRecordContext): Promise<ProviderRecording>;
 }
 
 const SCOPES: ReadonlySet<string> = new Set<BrowserProviderScope>(['worker', 'attempt']);
@@ -115,6 +135,9 @@ export function asBrowserProvider(browser: object): BrowserProvider {
     if (typeof candidate[member] !== 'function') {
       throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" must implement ${member}()`);
     }
+  }
+  if (candidate.record !== undefined && typeof candidate.record !== 'function') {
+    throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" has a record that is not a function`);
   }
   if (candidate.scope !== undefined && (typeof candidate.scope !== 'string' || !SCOPES.has(candidate.scope))) {
     throw new ConfigurationError(
@@ -412,6 +435,33 @@ export class LeasedBrowsers {
     this.tenure = {};
     if (current === undefined || !current.owned) return;
     await this.release(current.lease, context);
+  }
+
+  /**
+   * How the attempt records its browser when the provider records: starts
+   * the provider's recording of the browser the attempt rides, the
+   * attempt's lease in `attempt` scope and the worker's current one in
+   * `worker` scope. Undefined when the provider does not record. A start
+   * that fails is named after the provider, or is the cancellation when the
+   * attempt gave up first; `stopProviderRecording` checks the stop.
+   */
+  recorder(attemptId: string): ((signal: AbortSignal) => Promise<LeaseRecording>) | undefined {
+    const { provider } = this;
+    const record = provider.record?.bind(provider);
+    if (record === undefined) return undefined;
+    const label = `browser provider "${provider.name}"`;
+    return async (signal) => {
+      const run = this.requireRun();
+      const lease = this.scope === 'attempt' ? this.attempt : this.current?.lease;
+      if (lease === undefined) throw invalidState(`${label} was asked to record before the attempt had a browser`);
+      try {
+        const recording = await record(lease, { runId: run.runId, targetName: run.targetName, attemptId, env: run.env, signal });
+        return { recording, provider: label, leaseId: lease.id };
+      } catch (cause) {
+        if (signal.aborted) throw connectionAbort(signal, `recording from "${provider.name}"`);
+        throw new EngineError('ENGINE_FAILURE', `${label} could not start recording browser ${lease.id}: ${message(cause)}`, { retryable: false, cause });
+      }
+    };
   }
 
   private requireRun(): WorkerRun {
