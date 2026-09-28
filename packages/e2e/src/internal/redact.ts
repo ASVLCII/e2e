@@ -87,13 +87,15 @@ function compile(values: readonly (readonly [string, string])[]): Compiled {
   // `split` on a capturing pattern returns the markers at the odd indexes; those pass through untouched.
   const redact = (text: string): string =>
     text.split(known).map((piece, index) => (index % 2 === 1 ? piece : rewrite(piece))).join('');
+  const valueKeys = entries.map(([, value]) => caseKey(value));
   const redactCut = (text: string): string => {
     // Only what follows the last marker can end in a value cut short.
     const tail = text.split(known).at(-1) ?? '';
+    const tailKey = caseKey(tail);
     let cut = 0;
     let marker = '';
-    entries.forEach(([, value], index) => {
-      const length = leadingPartAtEnd(tail, value, Math.min(FRAGMENT_LENGTH, Math.ceil(value.length / 2)));
+    valueKeys.forEach((value, index) => {
+      const length = leadingPartAtEnd(tailKey, value, Math.min(FRAGMENT_LENGTH, Math.ceil(value.length / 2)));
       if (length > cut) {
         cut = length;
         marker = markers[index] ?? '';
@@ -111,7 +113,7 @@ function compile(values: readonly (readonly [string, string])[]): Compiled {
     }
     return `${redact(text.slice(0, text.length - tail.length + start))}${marker}`;
   };
-  const fragments = fragmentOwners(entries.map(([, value]) => value));
+  const fragments = fragmentOwners(valueKeys);
   const redactFragments = (text: string): string =>
     redact(text)
       .split(known)
@@ -241,6 +243,34 @@ function folded(text: string): string {
     .join('');
 }
 
+/**
+ * `text` with every character in one case, for comparing a cut or a fragment
+ * of a value as whole-value matching does: each code point lower-cased from
+ * its upper case, the Turkish lower case standing in where the default one
+ * takes more units (`İ` as `i`), so `ſ`, `S`, and `s` agree, and so do `İ`
+ * and `i`. A mapping that changes the length (`ß` as `SS`) is left out, so
+ * an index into the result is one into `text`.
+ */
+function caseKey(text: string): string {
+  if (!/[^\p{ASCII}]/u.test(text)) return text.toLowerCase();
+  let out = '';
+  for (const ch of text) out += ch.charCodeAt(0) < 128 ? ch.toLowerCase() : caseKeyOf(ch);
+  return out;
+}
+
+/** One non-ASCII character's `caseKey`, the same length as `ch`. */
+function caseKeyOf(ch: string): string {
+  const upper = sameLength(ch.toUpperCase(), ch);
+  const lower = upper.toLowerCase();
+  if (lower.length === ch.length) return lower;
+  return sameLength(upper.toLocaleLowerCase('tr'), upper);
+}
+
+/** `mapped` when it is as long as `original`, else `original`. */
+function sameLength(mapped: string, original: string): string {
+  return mapped.length === original.length ? mapped : original;
+}
+
 /** Locales whose case mappings differ from the default: the dotted and dotless i of Turkish and Azeri, Lithuanian's retained dot. */
 const CASE_LOCALES = ['tr', 'az', 'lt'];
 
@@ -318,7 +348,8 @@ function leadingPartAtEnd(text: string, value: string, minimum: number): number 
 /**
  * Every run of `FRAGMENT_LENGTH` characters of every value, mapped to the
  * index of the first value holding it; values come longest first, so a run
- * two values share names the longer one.
+ * two values share names the longer one. The values come as `caseKey`
+ * reads them, so a run in any case finds its owner.
  */
 function fragmentOwners(values: readonly string[]): Map<string, number> {
   const owners = new Map<string, number>();
@@ -334,22 +365,25 @@ function fragmentOwners(values: readonly string[]): Map<string, number> {
 /**
  * `text` with every stretch whose windows of `FRAGMENT_LENGTH` characters
  * each occur in a value replaced by the marker of the value owning its first
- * window. The stretch grows one window at a time, so the scan is linear in
- * the text and a run spanning two values becomes one marker.
+ * window. Windows are looked up by `caseKey`, as `owners` is keyed, so a
+ * fragment in another case is one too. The stretch grows one window at a time, so the
+ * scan is linear in the text and a run spanning two values becomes one
+ * marker.
  */
 function rewriteFragments(text: string, owners: ReadonlyMap<string, number>, markers: readonly string[]): string {
   if (owners.size === 0) return text;
+  const key = caseKey(text);
   let out = '';
   let kept = 0;
   let start = 0;
   while (start + FRAGMENT_LENGTH <= text.length) {
-    const owner = owners.get(text.slice(start, start + FRAGMENT_LENGTH));
+    const owner = owners.get(key.slice(start, start + FRAGMENT_LENGTH));
     if (owner === undefined) {
       start += 1;
       continue;
     }
     let end = start + FRAGMENT_LENGTH;
-    while (end < text.length && owners.has(text.slice(end + 1 - FRAGMENT_LENGTH, end + 1))) end += 1;
+    while (end < text.length && owners.has(key.slice(end + 1 - FRAGMENT_LENGTH, end + 1))) end += 1;
     out += `${text.slice(kept, start)}${markers[owner] ?? ''}`;
     kept = end;
     start = end;
@@ -419,11 +453,13 @@ export class SecretLedger {
    * longest such part becomes that value's marker too, down to
    * `FRAGMENT_LENGTH` characters, or half of a value shorter than twice that.
    * A cut is one position, so a boundary this short seldom matches plain text
-   * by chance. Matched as the value is written: the cut falls on text as the
-   * engine read it, before any serializer spells it. The part is found before
-   * whole values are rewritten, so a value that starts with another
-   * registered value is not half rewritten as the shorter one, and an
-   * occurrence running into the part joins its marker. Bound like `redact`.
+   * by chance. Matched as the value is written, in any case (`caseKey`), as
+   * a CSS `text-transform` shows it: the cut falls on text as the engine read
+   * it, before any serializer spells it. A case mapping that changes length
+   * (`ß` to `SS`) is not followed, nor is collapsed whitespace. The part is found before whole values are
+   * rewritten, so a value that starts with another registered value is not
+   * half rewritten as the shorter one, and an occurrence running into the
+   * part joins its marker. Bound like `redact`.
    */
   readonly redactCut = (text: string): string => this.compile().redactCut(text);
 
@@ -433,7 +469,8 @@ export class SecretLedger {
    * becomes its marker. For a recording that keeps what an engine read raw
    * (a Playwright trace holds the page's cut text and selections), where a
    * value cut or selected partway through survives whole-value matching.
-   * Matched as the value is written, like `redactCut`. Bound like `redact`.
+   * Matched as the value is written, in any case, like `redactCut`. Bound
+   * like `redact`.
    */
   readonly redactFragments = (text: string): string => this.compile().redactFragments(text);
 
