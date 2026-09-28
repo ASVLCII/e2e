@@ -136,12 +136,14 @@ function failureOf(
   return { failure, screenPath: screen?.path };
 }
 
-/** Report-relative paths of the video artifacts these attempts kept, in order. */
+/** Where each video these attempts kept is, in order: a report-relative path, or the URL of one a hosted service keeps. */
 function videoPaths(attempts: readonly { readonly artifacts: readonly ArtifactRecord[] }[]): string[] {
   const paths: string[] = [];
   for (const attempt of attempts) {
     for (const artifact of attempt.artifacts) {
-      if (artifact.kind === 'video' && artifact.path !== undefined) paths.push(artifact.path);
+      if (artifact.kind !== 'video') continue;
+      const where = artifact.url ?? artifact.path;
+      if (where !== undefined) paths.push(where);
     }
   }
   return paths;
@@ -960,8 +962,9 @@ export class ListReporter implements Reporter {
   private printVideos(videos: readonly string[]): void {
     const { pc } = this;
     for (const video of videos) {
-      const target = this.artifactsRoot === undefined ? video : path.join(this.artifactsRoot, video);
-      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${this.displayPath(target)}`));
+      const hosted = /^https?:\/\//.test(video);
+      const target = hosted || this.artifactsRoot === undefined ? video : path.join(this.artifactsRoot, video);
+      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${hosted ? video : this.displayPath(target)}`));
     }
   }
 

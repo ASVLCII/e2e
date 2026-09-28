@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isCiMode, resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine, type EngineAppDeclaration } from '../../src/engine/index.ts';
-import type { E2EConfig } from '../../src/types.ts';
+import type { E2EConfig, Target } from '../../src/types.ts';
 import { snapshot } from '../helpers/snapshot.ts';
 
 const ROOT = '/tmp/e2e-config-project';
@@ -142,7 +142,7 @@ describe('resolveConfig', () => {
       'unknown config key "screen"; the test-id attribute is an engine option: engine: web({ testIdAttribute })',
     );
     expect(() => resolve({ targets: [{ ...WEB, url: 'http://localhost:3000' }] } as never)).toThrow(
-      'target "web" has unknown key "url"; a target is { name?, platform?, engine? }; the app under test is declared by the engine',
+      'target "web" has unknown key "url"; a target is { name?, platform?, engine?, video? }; the app under test is declared by the engine',
     );
     expect(() => resolve({ targets: [{ ...WEB, platfrom: 'web' }] } as never)).toThrow('did you mean "platform"?');
     expect(() => resolve({ reporters: ['lst'] } as never)).toThrow(
@@ -881,38 +881,6 @@ describe('resolveConfig', () => {
       expect(() => resolve({ ...APP, artifacts: ['gif'] as never })).toThrow(/unknown artifact kind "gif"/);
     });
 
-    it('accepts the video kind in either form and keeps it out of the digest', () => {
-      const withVideo = resolve({ ...APP, artifacts: ['screenshot', 'trace', 'video'] });
-      expect(policies(withVideo)).toEqual({ screenshot: 'required', trace: 'required', video: 'required' });
-      expect(withVideo.videoRetain).toBe('all');
-      // Recording a run must never invalidate the traces it would replay.
-      expect(withVideo.configDigest).toBe(resolve({ ...APP, artifacts: ['screenshot', 'trace'] }).configDigest);
-      const object = resolve({ ...APP, artifacts: { kinds: ['video'], video: { retain: 'on-failure' } } });
-      expect(policies(object)).toEqual({ video: 'required' });
-      expect(object.videoRetain).toBe('on-failure');
-      expect(object.configDigest).toBe(resolve({ ...APP, artifacts: [] }).configDigest);
-      expect(resolve({ ...APP }).videoRetain).toBe('all');
-    });
-
-    it('adds video as a required kind for --video without turning the default set into a contract', () => {
-      const flagged = resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: { video: true } });
-      expect(policies(flagged)).toEqual({ screenshot: 'best-effort', trace: 'best-effort', video: 'required' });
-      expect(flagged.configDigest).toBe(resolve({ ...APP }).configDigest);
-      const already = resolveConfig(
-        { targets: TARGETS, artifacts: ['video'] },
-        { projectRoot: ROOT, env: BASE_ENV, cli: { video: true } },
-      );
-      expect(policies(already)).toEqual({ video: 'required' });
-    });
-
-    it('never writes --video back into the default set or the kinds array it was given', () => {
-      const own: ('screenshot' | 'trace' | 'video')[] = ['screenshot'];
-      resolveConfig({ targets: TARGETS, artifacts: own }, { projectRoot: ROOT, env: BASE_ENV, cli: { video: true } });
-      expect(own).toEqual(['screenshot']);
-      const later = resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: {} });
-      expect(policies(later)).toEqual({ screenshot: 'best-effort', trace: 'best-effort' });
-    });
-
     it('resolves the trace block, all attempts by default', () => {
       expect(resolve({ ...APP }).traceRecord).toBe('all');
       expect(resolve({ ...APP, artifacts: { trace: { record: 'retries' } } }).traceRecord).toBe('retries');
@@ -925,15 +893,46 @@ describe('resolveConfig', () => {
       expect(() => resolve({ ...APP, artifacts: { trace: 'retries' } as never })).toThrow(/artifacts.trace must be an object/);
     });
 
-    it('rejects a malformed video block', () => {
-      expect(() => resolve({ ...APP, artifacts: { video: { keep: true } } as never })).toThrow(
-        /unknown artifacts.video config key "keep"/,
+    it('refuses video as an artifact kind or an artifacts block, naming the video option', () => {
+      for (const artifacts of [['screenshot', 'video'], { kinds: ['video'] }, { video: { retain: 'on-failure' } }]) {
+        expect(() => resolve({ ...APP, artifacts } as never)).toThrow(
+          expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringContaining("video is its own option: video: 'on'") }),
+        );
+      }
+    });
+  });
+
+  describe('video', () => {
+    const web = (video: string) => ({ ...WEB, video }) as unknown as Target;
+
+    it('is off unless asked, and a target inherits the config mode', () => {
+      expect(resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV }).targets[0]!.video).toBe('off');
+      const inherited = resolveConfig({ targets: TARGETS, video: 'retain-on-failure' }, { projectRoot: ROOT, env: BASE_ENV });
+      expect(inherited.targets[0]!.video).toBe('retain-on-failure');
+    });
+
+    it('lets a target override the config, and --video override both', () => {
+      const own = resolveConfig({ targets: [web('on-first-retry')], video: 'on' }, { projectRoot: ROOT, env: BASE_ENV });
+      expect(own.targets[0]!.video).toBe('on-first-retry');
+      const flagged = resolveConfig({ targets: [web('off')], video: 'off' }, { projectRoot: ROOT, env: BASE_ENV, cli: { video: 'on' } });
+      expect(flagged.targets[0]!.video).toBe('on');
+    });
+
+    it('keeps video, at the top and on a target, out of the digest', () => {
+      const plain = resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV }).configDigest;
+      expect(resolveConfig({ targets: [web('on')], video: 'retain-on-failure' }, { projectRoot: ROOT, env: BASE_ENV }).configDigest).toBe(plain);
+      expect(resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: { video: 'on' } }).configDigest).toBe(plain);
+    });
+
+    it('refuses a mode it does not know, wherever it is set', () => {
+      expect(() => resolveConfig({ targets: TARGETS, video: true } as never, { projectRoot: ROOT, env: BASE_ENV })).toThrow(
+        /video must be one of off, on, retain-on-failure, on-first-retry, got true/,
       );
-      expect(() => resolve({ ...APP, artifacts: { video: { retain: 'sometimes' } } as never })).toThrow(
-        /artifacts.video.retain must be one of all, on-failure/,
+      expect(() => resolveConfig({ targets: [web('sometimes')] } as never, { projectRoot: ROOT, env: BASE_ENV })).toThrow(
+        /target "web" video must be one of off, on, retain-on-failure, on-first-retry/,
       );
-      expect(() => resolve({ ...APP, artifacts: { video: 'on-failure' } as never })).toThrow(
-        /artifacts.video must be an object/,
+      expect(() => resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: { video: 'all' as never } })).toThrow(
+        /--video must be one of/,
       );
     });
   });

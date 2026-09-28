@@ -110,7 +110,9 @@ Playwright traces and videos need separate care. Trace redaction replaces
 secret text with `<secret:name>` and drops the trace's screencast frames, so
 the viewer shows actions, DOM snapshots, and network, but no filmstrip. An
 image the app served itself stays, even one that draws the secret. Videos
-mask nothing and are marked `redaction: "incomplete"`.
+mask nothing and are marked `redaction: "incomplete"`. A video's step
+captions hold the redacted step labels the report carries and are marked
+`complete`.
 
 If trace rewriting fails, the runner deletes the trace from the attempt's
 artifact directory. For a path outside that directory, it withholds the
@@ -120,19 +122,47 @@ artifact with `TRACE_WITHHELD` and leaves the file untouched. See the
 ## Watch it happen
 
 ```bash
-npx e2e run --headed          # a visible browser
-npx e2e run --video           # requires an engine that records video
+npx e2e run --headed                      # a visible browser
+npx e2e run --video                       # record every attempt
+npx e2e run --video=retain-on-failure     # record every attempt, keep the failures
 ```
 
-`--video` requires recording support from every selected engine. Unsupported
-engines fail configuration with `UNSUPPORTED_ARTIFACT`. Playwright records
-WebM files; agent-device records MP4. Restarts can produce multiple files.
+Each recording lands under its attempt's artifact directory. Playwright
+writes WebM, one file per page the attempt opened; agent-device writes MP4.
+The failure recap prints the path, or the URL of a recording a hosted
+browser keeps. Next to each recording is a
+`.steps.vtt` file with one caption per step, `3. agent.act Sign in`, so a
+browser, VLC, or mpv shows which step was running at each moment.
 
-To keep recordings only for failed attempts, configure:
+To record without the flag, set `video` in the config. `on-first-retry` is
+the cheap CI mode: a test that passes first time records nothing, and a
+flaky one leaves a recording of its retry.
 
 ```ts
-artifacts: { kinds: ['video'], video: { retain: 'on-failure' } },
+export default {
+  video: 'on-first-retry',
+  retries: 1,
+  targets: [
+    { name: 'chromium', engine: web({ url }) },
+    { name: 'firefox', engine: web({ url, browser: 'firefox' }), video: 'retain-on-failure' },
+  ],
+} satisfies E2EConfig;
 ```
+
+A target's `video` wins over the config's, `--video` over both. A test's own
+option wins over all of them, which records one flow you are chasing
+without recording the suite:
+
+```ts
+test('checkout', { video: 'on' }, async ({ agent }) => {
+  await agent.act('Buy the first product in the catalog');
+});
+```
+
+`--video [mode]` takes an optional value, so put test files before it or
+write `--video=<mode>`. An engine that cannot record fails the run with
+`UNSUPPORTED_ARTIFACT` before any test starts, as soon as one test would
+record on it. [video](/reference/config#video) has every mode and file.
 
 ## Console output
 

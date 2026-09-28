@@ -251,7 +251,7 @@ or every test was filtered out.
 | `--pass-with-no-tests` | boolean | `false` | Exit 0 instead of `NO_TESTS` when nothing is selected. |
 | `--debug` | boolean | `false` | Phase timings and an agent step table on stderr after the run. |
 | `--ai-trace` | boolean | `false` | Records every model call to `.e2e/ai-trace.json`, an AI SDK devtools database. Open it with [unbox-ai](https://github.com/tester-army/unbox-ai). |
-| `--video` | boolean | `false` | Records every attempt (WebM on a browser engine, MP4 on a device engine). Adds the `video` kind to `config.artifacts` for this run; an engine that cannot record fails with `UNSUPPORTED_ARTIFACT`. See [video](/reference/config#video). |
+| `--video [mode]` | `off`, `on`, `retain-on-failure`, or `on-first-retry` | config | Which attempts record a video (WebM on a browser engine, MP4 on a device engine), over the config's and every target's `video`; a test's own `video` still wins. A bare `--video` is `on`. The value is optional and greedy, so `--video tests/a.e2e.ts` reads the file as a mode and fails: write `--video=<mode>`, or put test files before `--video`. A test that records on an engine that cannot record fails the run with `UNSUPPORTED_ARTIFACT` before any test starts. See [video](/reference/config#video). |
 
 Out-of-range `--retries` and `--workers` fail with `INVALID_CONFIG` before
 anything starts, the same as the config value would. `--target`, `--tag`,
@@ -375,7 +375,7 @@ assessment. The default goal is `Explore the app and find bugs`. See
 | `--artifacts <dir>` | string | `.e2e/artifacts` | Relocates the report and the artifact tree; a finding's evidence screenshot is one of the attempt's artifacts there. |
 | `--debug` | boolean | `false` | As for `run`: phase timings and the agent step table. |
 | `--ai-trace` | boolean | `false` | As for `run`. |
-| `--video` | boolean | `false` | As for `run`: one video of the whole exploration (WebM on a browser engine, MP4 on a device engine) when the engine can record; otherwise the run fails with `UNSUPPORTED_ARTIFACT` before exploration starts. |
+| `--video [mode]` | a video mode | config | As for `run`: one video of the whole exploration (WebM on a browser engine, MP4 on a device engine) when the engine can record; otherwise the run fails with `UNSUPPORTED_ARTIFACT` before exploration starts. A bare `--video` is `on`; `retain-on-failure` keeps it only when the exploration did not pass. The exploration is one attempt, so `on-first-retry` records nothing. Put the goal before `--video`, or write `--video=<mode>`. |
 
 The run has one result, under the virtual file `explore`, titled by the goal.
 The trace cache is off and retries are zero whatever the config says.

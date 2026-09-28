@@ -6,6 +6,7 @@
  * provision differently.
  */
 
+import { pairVideoMode, type TestTargetPair } from '../collect/select.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
 import type { EnginePrepareResult } from '../engine/index.ts';
 import type { DebugTrace } from '../internal/debug.ts';
@@ -13,13 +14,18 @@ import { ConfigurationError, InfrastructureError, translateProvisioningError } f
 import { Deadline, NEVER_ABORTS, withScopedBudget } from '../internal/time.ts';
 import { describeTarget, type TargetProvenance } from '../report/build.ts';
 import { declaredProcesses } from './declared-processes.ts';
+import { recordsVideo } from './video.ts';
 import { ManagedProcess, ServiceStack, type ManagedProcessHooks } from './managed-process.ts';
 
 /**
  * Grades one target from its engine declaration and validates the configured
- * artifacts against it; returns the report provenance.
+ * artifacts against it; returns the report provenance. Video is graded from
+ * what will record: with the target's `pairs` (a run), every test that runs
+ * and whose mode records on some attempt; without them (a standalone
+ * attempt), the target's own mode. An engine that cannot record fails here,
+ * before any test starts.
  */
-export function validateEngine(target: ResolvedTarget, config: ResolvedConfig): TargetProvenance {
+export function validateEngine(target: ResolvedTarget, config: ResolvedConfig, pairs?: readonly TestTargetPair[]): TargetProvenance {
   const provenance = describeTarget(target);
   // A best-effort kind is captured when the engine can; a required one is a
   // contract the engine must be able to honour before any test starts.
@@ -30,6 +36,21 @@ export function validateEngine(target: ResolvedTarget, config: ResolvedConfig): 
         `target "${target.name}" (engine ${provenance.engine.name}) does not support the configured "${artifact}" artifact`,
       );
     }
+  }
+  if (provenance.artifactCapabilities.includes('video')) return provenance;
+  const where = `target "${target.name}" (engine ${provenance.engine.name}) cannot record video`;
+  if (pairs === undefined) {
+    if (target.video !== 'off' && target.video !== 'on-first-retry') {
+      throw new ConfigurationError('UNSUPPORTED_ARTIFACT', `${where}, and its video is ${target.video}`);
+    }
+    return provenance;
+  }
+  const recording = pairs.find((pair) => pair.disposition === 'run' && recordsVideo(pairVideoMode(pair), pair.options.retries));
+  if (recording !== undefined) {
+    throw new ConfigurationError(
+      'UNSUPPORTED_ARTIFACT',
+      `${where}, and test "${recording.test.titlePath.join(' > ')}" in ${recording.test.file} records with video: ${pairVideoMode(recording)}`,
+    );
   }
   return provenance;
 }

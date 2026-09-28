@@ -198,6 +198,12 @@ export interface TestOptions {
    * a pin the flag does not name.
    */
   agent?: string | readonly string[];
+  /**
+   * Which of the test's attempts record a video, in place of the run's:
+   * the same modes as the config's `video`. Innermost wins; inside a serial
+   * group the group's value applies, since the group records as one unit.
+   */
+  video?: VideoMode;
 }
 
 export interface DescribeOptions extends Omit<TestOptions, 'only'> {
@@ -219,11 +225,25 @@ to be a static, non-empty array of unique names.
 
 Resolution order: test, nearest group, outer groups, config, built-in default.
 
+`video` takes a [video mode](/reference/config#video): `off`, `on`,
+`retain-on-failure`, or `on-first-retry`. A test's or group's own value wins
+over `--video`, the target's `video`, and the config's, so one test can
+record on a run that records nothing, or opt out of one that records
+everything:
+
+```ts
+test('checkout', { video: 'on' }, async ({ agent }) => {
+  await agent.act('Buy the first product in the catalog');
+});
+```
+
 `serial: true` makes the group one ordered retry unit with shared app state
 and shared secret state: a secret fill withholds pixels for the rest of the
-group's attempt. A retry starts fresh. Inside it, `retries`, `session`,
-`platforms`, `requires`, `skip`, `only`, and a nested `serial` on a member
-are collection errors. Set them on the group.
+group's attempt. A retry starts fresh. Inside it, `retries`, `video`,
+`session`, `platforms`, `requires`, `skip`, `only`, and a nested `serial` on
+a member are collection errors. Set them on the group. The group records one
+video per group attempt, from the `video` on the serial `describe` or a
+group around it.
 
 ## Fixtures
 

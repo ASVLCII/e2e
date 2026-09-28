@@ -26,6 +26,7 @@ const target: ResolvedTarget = {
   platform: 'web',
   engine: undefined,
   app: EMPTY_APP,
+  video: 'off',
 };
 
 function makeTest(
@@ -66,6 +67,7 @@ const defaultOptions: ResolvedTestOptions = {
   agentContext: undefined,
   skipReason: undefined,
   serial: false,
+  video: undefined,
 };
 
 function makePair(test: CollectedTest, overrides: Partial<TestTargetPair> = {}): TestTargetPair {

@@ -48,6 +48,19 @@ describe.each(schemas)('%s schema', (name) => {
       }
     });
 
+    it('lets a video be a link a hosted service keeps, http(s) only, with its step captions by id', () => {
+      const report = readJson('fixtures', 'report-v1.valid.json') as { run: { results: { attempts: { artifacts: Record<string, unknown>[] }[] }[] } };
+      const artifacts = report.run.results[0]!.attempts[0]!.artifacts;
+      const link = artifacts.find((artifact) => artifact['url'] !== undefined)!;
+      expect(link).toMatchObject({ kind: 'video', redaction: 'incomplete' });
+      expect(artifacts.find((artifact) => artifact['captions'] !== undefined)).toMatchObject({ kind: 'video' });
+      expect(validate(report)).toBe(true);
+      for (const url of ['file:///tmp/replay.mp4', 'replay.mp4', '']) {
+        link['url'] = url;
+        expect(validate(report)).toBe(false);
+      }
+    });
+
     it('lets a suite hook failure name its scope: a project-relative file, a target, and describe titles', () => {
       const report = readJson('fixtures', 'report-v1.valid.json') as { run: { errors: Record<string, unknown>[] } };
       const hook = { category: 'test', code: 'HOOK_FAILED', message: 'afterAll failed: teardown broke', retryable: false, phase: 'afterAll', scopeId: 'checkout' };

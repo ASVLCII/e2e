@@ -20,6 +20,7 @@ import type {
   TestFn,
   TestHookFn,
   TestOptions,
+  VideoMode,
 } from '../types.ts';
 
 export interface SourceLocation {
@@ -249,6 +250,8 @@ export function outermostSerialGroup(group: GroupNode | undefined): GroupNode | 
   return groupChain(group).find((node) => node.serial);
 }
 
+const VIDEO_MODES: ReadonlySet<unknown> = new Set(['off', 'on', 'retain-on-failure', 'on-first-retry'] satisfies VideoMode[]);
+
 function validateCommonOptions(options: TestOptions | DescribeOptions, label: string): void {
   if (options.timeout !== undefined) {
     if (!Number.isSafeInteger(options.timeout) || options.timeout <= 0) {
@@ -262,6 +265,9 @@ function validateCommonOptions(options: TestOptions | DescribeOptions, label: st
   }
   if (options.agent !== undefined) validateAgentOption(options.agent, label);
   if (options.tags !== undefined) validateTagsOption(options.tags, label);
+  if (options.video !== undefined && !VIDEO_MODES.has(options.video)) {
+    throw new CollectionError(`${label}: video must be one of ${[...VIDEO_MODES].join(', ')}, got ${describeValue(options.video)}`);
+  }
 }
 
 /**
@@ -327,6 +333,7 @@ function validateTestOptions(options: TestOptions, group: GroupNode | undefined)
   if (insideSerial(group)) {
     const forbidden: (keyof TestOptions)[] = [
       'retries',
+      'video',
       'session',
       'platforms',
       'requires',

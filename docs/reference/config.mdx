@@ -80,8 +80,13 @@ export interface E2EConfig {
   retries?: number;
   /** Parallel workers, 1 through 1024; default 1 in CI, else half the cores. An engine may cap it lower. */
   workers?: number;
-  /** Artifact kinds, or `{ kinds, store, video, trace }` to also hand every artifact to a host store. */
+  /** Artifact kinds, or `{ kinds, store, trace }` to also hand every artifact to a host store. */
   artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
+  /**
+   * Which attempts record a video; default `off`. A target's `video` wins
+   * over it, `--video [mode]` over both, and a test's own `video` over all.
+   */
+  video?: VideoMode;
   /**
    * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
    * `markdown` writes `.e2e/summary.md`, `json` prints the report and
@@ -151,6 +156,8 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
+  /** Which attempts on this target record a video, in place of the config's `video`; `--video` and a test's own `video` win over it. */
+  video?: VideoMode;
 }
 ```
 
@@ -348,33 +355,35 @@ reverse order, then their `teardown` commands. A failing teardown is a
 
 ```ts
 artifacts: {
-  kinds: ['screenshot', 'trace', 'video'],
+  kinds: ['screenshot', 'trace'],
   store: {
     async put(artifact) {
       const key = await bucket.upload(artifact.path, artifact.bytes);
       return { ref: key };
     },
   },
-  video: { retain: 'on-failure' },
 },
 ```
 
-`kinds` accepts `screenshot`, `trace`, and `video`. The default set is
-screenshot and trace, captured best-effort. A configured kind the target's
-engine cannot produce fails before collection with `UNSUPPORTED_ARTIFACT`.
-`video` is never in the default set; `--video` adds it for one run.
+`kinds` accepts `screenshot` and `trace`. The default set is both, captured
+best-effort. A configured kind the target's engine cannot produce fails the
+run before any test starts with `UNSUPPORTED_ARTIFACT`. Video is not a kind: it has
+its own [`video`](#video) option, and `kinds: ['video']` or an
+`artifacts.video` block fails with `INVALID_CONFIG` naming it.
 
 `store` receives every artifact once it is complete on disk and returns a
 reference the report records as `ref` beside the local path. A failed `put`
 never fails the run. Each worker constructs its own store from the config
 module. `redaction` is the report's label: a store that exports only what
 the runner vouches for keeps back an `incomplete` artifact, a video or a
-download the runner did not rewrite.
+download the runner did not rewrite. A video a hosted service keeps is a
+link with no bytes, so the store never receives it.
 
 ```ts
 /** One produced artifact, handed to `store.put` once it is complete on disk. */
 export interface StoredArtifact {
-  readonly kind: 'screenshot' | 'trace' | 'video' | 'download' | 'log';
+  /** `other` is a runner-written companion file: the step captions of a video. */
+  readonly kind: 'screenshot' | 'trace' | 'video' | 'download' | 'log' | 'other';
   readonly mediaType: string;
   readonly bytes: Uint8Array;
   readonly size: number;
@@ -392,23 +401,6 @@ export interface StoredArtifact {
   readonly startedAt?: string;
 }
 ```
-
-### video
-
-With `video` among the kinds, or `--video`, every selected engine must
-support recording; otherwise configuration fails with `UNSUPPORTED_ARTIFACT`.
-Playwright writes `video/video.webm` under the attempt's artifact directory,
-one segment per page, later ones as `video/video-part<n>.webm`. The
-mobile engine writes `video/video.mp4`. Each segment carries
-`startedAt`, so `step.startedAt - artifact.startedAt` is a step's offset into
-it.
-
-| Key | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `retain` | `'all' \| 'on-failure'` | `'all'` | `on-failure` deletes the recording of every attempt that passed once its verdict is known |
-
-A recording masks nothing and is recorded with `redaction: 'incomplete'`.
-Turning video on or off never invalidates cached replays.
 
 ### trace
 
@@ -428,6 +420,83 @@ artifacts: { trace: { record: 'retries' } },
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `record` | `'all' \| 'retries'` | `'all'` | `retries` records the attempts after the first; a serial group's shared trace follows the group's attempts |
+
+## video
+
+```ts
+video: 'retain-on-failure',
+targets: [
+  { name: 'chromium', engine: web({ url }) },
+  { name: 'firefox', engine: web({ url, browser: 'firefox' }), video: 'on-first-retry' },
+],
+```
+
+```ts
+/** Which attempts record a video, and which recordings are kept. */
+export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
+```
+
+| Mode | Records | Keeps |
+| --- | --- | --- |
+| `off` (default) | nothing | nothing |
+| `on` | every attempt | every recording |
+| `retain-on-failure` | every attempt | the recordings of attempts that did not pass; a passed attempt's file is deleted once its verdict is in |
+| `on-first-retry` | the first retry only, the second attempt | that recording. A test that passes first time records nothing, and with `retries: 0` nothing records |
+
+The names are Playwright's `use.video` modes. Four places set the mode, and
+each replaces the one before it:
+
+1. `video` at the top of the config.
+2. A target's `video`.
+3. `--video [mode]` on [`e2e run`](/reference/cli#e2e-run), over the config
+   and every target. A bare `--video` is `on`.
+4. A test's or describe's own [`video` option](/reference/test#options),
+   innermost wins: `test('checkout', { video: 'on' }, ...)`.
+
+A serial group records one video per group attempt, so its members cannot
+set `video` (a `COLLECTION_ERROR`, like `retries`). The value on the serial
+`describe`, or on a group around it, applies to every member.
+
+`e2e explore` and an `e2e mcp` session are one attempt each and use the
+target's mode, `--video` included for `explore`, so `on-first-retry` records
+nothing there. An `e2e mcp` session always closes as passed, so it keeps a
+recording only under `on`.
+
+### Engines that cannot record
+
+Before any test starts, the run checks every target: a selected test that
+will run, and whose mode records on some attempt, on a target whose engine
+cannot record fails the run with `UNSUPPORTED_ARTIFACT`. The message names
+the target and the test. A run whose tests all resolve to `off` asks nothing
+of the engine, even under `--video`.
+
+### What gets written
+
+| Recorder | Files under the attempt's artifact directory |
+| --- | --- |
+| Web engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ video })`](/reference/web#options) sets the frame size and quality |
+| Mobile engine, agent-device | `video/video.mp4` |
+| A provider's own recording ([`BrowserProvider.record`](/browser#recording-on-the-provider), [`DeviceProvider.record`](/mobile#hosted-devices)) | the file the provider wrote, as `video/<file>`: Kernel's is `video/replay.mp4`. Or a link to a recording the service keeps, recorded with `url` in place of `path`; the runner never downloads it |
+
+Each segment carries `startedAt`, so `step.startedAt - artifact.startedAt` is
+a step's offset into it.
+
+Every kept recording gets its step captions beside it as WebVTT:
+`video/video.steps.vtt` next to `video/video.webm`, or
+`video/recording-<n>.steps.vtt` for a link. There is one cue per step that
+ran while the segment recorded, timed from the segment's start, such as
+`3. agent.act Sign in`, with ` - failed` after a step that did not pass. A
+browser's `<track>` element, VLC, and mpv show them as captions. The labels
+are the redacted ones the report carries. The report lists the file as an
+artifact of kind `other`, media type `text/vtt`, `redaction: 'complete'`, and
+the video's `captions` field holds its artifact id. A segment no step ran
+in gets no captions.
+
+A recording masks nothing and is recorded with `redaction: 'incomplete'`.
+Under `retain-on-failure` a link is left out of the report of a passed
+attempt, but the service still holds the recording. `video`, at the top or on
+a target, never enters the config digest: turning it on or off never
+invalidates cached replays.
 
 ## agents
 

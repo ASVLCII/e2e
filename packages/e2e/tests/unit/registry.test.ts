@@ -110,6 +110,29 @@ describe('registration', () => {
       }),
     ).rejects.toThrow(/0 through 10/);
   });
+
+  it('accepts a video mode on tests, groups, and setups, and rejects anything else', async () => {
+    const registration = await collectModule(async () => {
+      test.setup('auth', { sessions: ['a'], video: 'off' }, noop);
+      test.describe('group', { video: 'on' }, () => {
+        test('x', { video: 'on-first-retry' }, noop);
+      });
+    });
+    expect(registration.tests.map((item) => item.options.video)).toEqual(['off', 'on-first-retry']);
+    const register = (video: unknown) =>
+      collectModule(async () => {
+        test('x', { video } as never, noop);
+      });
+    await expect(register(true)).rejects.toThrow('test options: video must be one of off, on, retain-on-failure, on-first-retry, got true');
+    await expect(register('on-failure')).rejects.toThrow('got "on-failure"');
+    await expect(
+      collectModule(async () => {
+        test.describe('group', { video: 'yes' } as never, () => {
+          test('x', noop);
+        });
+      }),
+    ).rejects.toThrow('describe options: video must be one of off, on, retain-on-failure, on-first-retry, got "yes"');
+  });
 });
 
 describe('setup tests', () => {
@@ -151,7 +174,7 @@ describe('serial groups', () => {
   });
 
   it('rejects member overrides of unit-owned options', async () => {
-    for (const options of [{ retries: 1 }, { session: 's' }, { skip: true }, { only: true }]) {
+    for (const options of [{ retries: 1 }, { video: 'on' }, { session: 's' }, { skip: true }, { only: true }]) {
       await expect(
         collectModule(async () => {
           test.describe('unit', { serial: true }, () => {

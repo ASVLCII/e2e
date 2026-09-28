@@ -34,6 +34,14 @@ export { describePattern, matchesText, toTextPattern } from '../internal/text.ts
 export { resolveExpression, type ResolveExpressionOptions } from './resolve.ts';
 export type { TextMatch } from '../types.ts';
 export { raceAbort } from './timing.ts';
+export { stopProviderRecording } from './recording.ts';
+export type {
+  ProviderRecordContext,
+  ProviderRecording,
+  ProviderRecordingResult,
+  ProviderRecordingStopContext,
+  ProviderRecordingTarget,
+} from './recording.ts';
 export { Deadline, pollCondition, withTimeout, withinCleanupBudget, type PollConditionOptions } from '../internal/time.ts';
 export { sameSite, siteOf, urlMatches } from '../internal/urls.ts';
 export { obj, type WithoutUndefined } from '../internal/objects.ts';
@@ -341,11 +349,27 @@ export interface EngineArtifacts {
   stopVideo?(context: OperationContext): Promise<readonly VideoSegment[]>;
 }
 
-/** One recorded video file of an attempt. */
-export interface VideoSegment {
+/**
+ * One recorded video of an attempt: a file the engine wrote into the attempt
+ * artifact directory, or a recording a hosted service keeps and links to.
+ */
+export type VideoSegment = VideoFile | VideoLink;
+
+/** A video file in the attempt artifact directory. */
+export interface VideoFile {
   /** Path relative to the attempt artifact directory. */
   readonly path: string;
   /** When the segment started recording, as an ISO timestamp; its first frame is at or just after it. */
+  readonly startedAt: string;
+}
+
+/** A recording a hosted service keeps, by URL: the report links to it and the runner never downloads it. */
+export interface VideoLink {
+  /** `http(s)` URL of the recording. */
+  readonly url: string;
+  /** Media type of what the URL serves: `video/mp4`, or `text/html` for a player page. */
+  readonly mediaType: string;
+  /** When the recording started, as an ISO timestamp; its first frame is at or just after it. */
   readonly startedAt: string;
 }
 

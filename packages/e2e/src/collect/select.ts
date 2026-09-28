@@ -4,7 +4,7 @@ import { ConfigurationError, CollectionError } from '../internal/errors.ts';
 import { resultId } from '../internal/ids.ts';
 import { didYouMean, suggestionNote } from '../internal/suggest.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
-import type { Capability } from '../types.ts';
+import type { Capability, TestOptions, VideoMode } from '../types.ts';
 import type { Collection, CollectedTest, UncollectedFile } from './collect.ts';
 import { groupChain } from './registry.ts';
 
@@ -24,6 +24,12 @@ export interface ResolvedTestOptions {
   readonly agents: readonly string[];
   readonly skipReason: string | undefined;
   readonly serial: boolean;
+  /**
+   * The test's own `video`, innermost layer first; undefined leaves it to
+   * the target (`pairVideoMode`). A serial group records one video per group
+   * attempt, so its members share the group's value.
+   */
+  readonly video: VideoMode | undefined;
 }
 
 export interface SkipInfo {
@@ -131,11 +137,13 @@ export function resolveOptions(test: CollectedTest, config: ResolvedConfig): Res
   let session: string | undefined;
   let pin: readonly string[] | undefined;
   let skipReason: string | undefined;
+  let video: TestOptions['video'];
   const agentContextParts: string[] = [];
 
   for (const layer of layers) {
     if (layer.timeout !== undefined) timeout = layer.timeout;
     if (layer.retries !== undefined) retries = layer.retries;
+    if (layer.video !== undefined) video = layer.video;
     if (layer.platforms !== undefined) platforms = layer.platforms;
     if (layer.requires !== undefined) requires = layer.requires;
     if (layer.session !== undefined) session = layer.session;
@@ -146,14 +154,19 @@ export function resolveOptions(test: CollectedTest, config: ResolvedConfig): Res
     }
   }
 
+  // Retries and video belong to the serial unit: one retry loop and one
+  // shared session, so one recording, per group attempt.
   const serialRoot = test.serialRoot;
   if (serialRoot !== undefined) {
     let serialRetries = config.retries;
+    let serialVideo: TestOptions['video'];
     for (const group of chain) {
       if (group.options.retries !== undefined) serialRetries = group.options.retries;
+      if (group.options.video !== undefined) serialVideo = group.options.video;
       if (group === serialRoot) break;
     }
     retries = serialRetries;
+    video = serialVideo;
   }
 
   // A pin names configured agents, or the test never runs: the error lands
@@ -175,7 +188,13 @@ export function resolveOptions(test: CollectedTest, config: ResolvedConfig): Res
     agentContext: agentContextParts.length === 0 ? undefined : agentContextParts.join('\n'),
     skipReason,
     serial: serialRoot !== undefined,
+    video,
   };
+}
+
+/** Which attempts of a pair record a video: the test's own `video`, else its target's (which `--video` and the config already decided). */
+export function pairVideoMode(pair: Pick<TestTargetPair, 'options' | 'target'>): VideoMode {
+  return pair.options.video ?? pair.target.video;
 }
 
 /**

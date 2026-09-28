@@ -25,6 +25,7 @@ import { TargetExecutor, type ClosingRecord } from './execute.ts';
 import { createFixtures } from './fixtures.ts';
 import type { EnginePrepareResult } from '../engine/index.ts';
 import { PreparedEngines, startDeclaredProcesses, validateEngine, type AppProcesses } from './provision.ts';
+import { attemptVideo } from './video.ts';
 import { sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -84,6 +85,8 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   const attemptId = uuidv7();
 
   validateEngine(target, config);
+  // No test and no retry loop: the one attempt records what the target's mode says a first attempt does.
+  const video = attemptVideo(target.video, 0);
   // The secret registry is process-wide, as in a run: `credentials.user()` and `secrets.get()`
   // resolve while the attempt is open.
   setSecretRegistry(config);
@@ -156,7 +159,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   };
 
   try {
-    session = await executor.launchSession(undefined, attemptId, artifacts.dir, signal, 0);
+    session = await executor.launchSession({ session: undefined, video, attemptIndex: 0 }, attemptId, artifacts.dir, signal);
   } catch (cause) {
     await executor.dispose();
     await teardownProcesses();
@@ -207,7 +210,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
         attemptEnd.abort();
         const record: ClosingRecord = { status: 'passed', cleanup: 'complete' };
         try {
-          await executor.closeSession(session, attemptId, record, artifacts.sink, cleanupErrors);
+          await executor.closeSession(session, { attemptId, video, steps: [] }, record, artifacts.sink, cleanupErrors);
           await executor.dispose();
           cleanupErrors.push(...executor.collectedRunErrors().map((runError) => runError.error));
           await artifacts.settle();

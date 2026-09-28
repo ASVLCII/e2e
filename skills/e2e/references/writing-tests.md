@@ -73,7 +73,8 @@ wsTest('uses the workspace', async ({ ws }) => {}); // code after use() is teard
 | `session` | unset | Restore state saved by a setup test. |
 | `agentContext` | unset | Extra context for `agent.*` calls in this test or group. |
 | `agent` | the run's agent | Pin the test or group to a configured agent (`agents.<name>`). Innermost wins; `agent.act(..., { agent })` can name another for one call. |
-| `serial` | `false` | Groups only. Members share one app state, run in order on one worker, and retry as a whole. Inside, per-member `retries`, `session`, `platforms`, `requires`, and `skip` are errors. |
+| `video` | the target's | `'off'`, `'on'`, `'retain-on-failure'`, or `'on-first-retry'`. Innermost wins, over `--video`, the target, and the config. On a serial group the group's value applies. |
+| `serial` | `false` | Groups only. Members share one app state, run in order on one worker, and retry as a whole. Inside, per-member `retries`, `video`, `session`, `platforms`, `requires`, and `skip` are errors. |
 
 Hook order follows nesting, not position: outer `beforeEach` first, inner
 `afterEach` first. `beforeAll` runs again for every retry and every serial

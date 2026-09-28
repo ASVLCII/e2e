@@ -193,7 +193,8 @@ export function evidenceOf(told: AttemptView): ReportArtifact[] {
   const rest: ReportArtifact[] = [];
   const kinds = new Set<string>();
   for (const artifact of told.artifacts) {
-    if (seen.has(artifact.id) || kinds.has(artifact.kind) || artifact.kind === 'log') continue;
+    // A video's step captions travel with it; they are not evidence of their own.
+    if (seen.has(artifact.id) || kinds.has(artifact.kind) || artifact.kind === 'log' || artifact.kind === 'other') continue;
     kinds.add(artifact.kind);
     rest.push(artifact);
   }
@@ -216,6 +217,8 @@ const STEP_GLYPH: Record<ReportStep['status'], string> = { passed: '✓', failed
 /** `[screenshot](run#artifacts) \`web/.../screenshot-1.png\``: the kind, linked to the run's artifacts when there is a URL, and the file's path so the reader finds it. */
 function artifactPath(artifact: ReportArtifact, options: FailurePageOptions): string {
   const kind = cell(artifact.kind, MAX_ID_CHARS);
+  // A video a hosted service keeps is its own link, wherever the run's files are.
+  if (artifact.url !== undefined) return link(kind, artifact.url);
   const named = options.artifactsUrl === undefined ? kind : link(kind, options.artifactsUrl);
   if (artifact.path === undefined) return named;
   const shown = options.artifactsDir === undefined ? artifact.path : `${options.artifactsDir}/${artifact.path}`;

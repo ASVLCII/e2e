@@ -29,8 +29,9 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
 4. Artifacts named there live under `.e2e/artifacts/`: `failure/screen.txt`
    and the engine's failure screenshot per failed attempt, a Playwright
    `trace.zip` per attempt (`npx playwright show-trace <file>`), downloads,
-   with `--video` a `video/video.webm` per attempt, and with `--debug` the
-   full transcript of every agent step.
+   with `--video` a `video/video.webm` per attempt and its step captions
+   `video/video.steps.vtt`, and with `--debug` the full transcript of every
+   agent step.
 
 ## Error codes and what to do
 
@@ -74,7 +75,7 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
 | `--no-cache` | Rule out a stale `agent.act` replay |
 | `--debug` | Read each agent step's duration, model calls, cost, and transcript |
 | `--ai-trace`, then `npx unbox-ai runs .e2e/ai-trace.json` | See exactly what the model was shown and called |
-| `--video` | Watch the failed attempt; `step.startedAt` minus the video artifact's `startedAt` is the step's offset into it |
+| `--video`, `--video=retain-on-failure` | Watch the failed attempt; the `.steps.vtt` beside it captions each step, and `step.startedAt` minus the video artifact's `startedAt` is the step's offset into it. `test('x', { video: 'on' }, ...)` records one test; `video: 'on-first-retry'` in the config records flaky retries in CI |
 | `command.log: '.e2e/logs/app.log'` | Read the app's own output when it never becomes ready or errors mid-test |
 | `await app.screenshot('before-submit')` | Attach evidence before any secret is filled; later calls fail with `POLICY_DENIED` |
 | `CI=1 npx e2e run` | Reproduce CI-only behaviour: `ONLY_IN_CI`, read-only cache, `reuseExisting` ignored |

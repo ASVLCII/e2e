@@ -550,12 +550,12 @@ describe('engine targets in config', () => {
     ).toThrow(/defineEngine/);
   });
 
-  it('accepts the video artifact kind on a target without an engine; the runner grades it later', () => {
+  it('accepts a video mode on a target without an engine; the runner grades it later', () => {
     const config = resolveConfig(
-      { targets: [{ name: 'ios', platform: 'ios' }], artifacts: ['video'] },
+      { targets: [{ name: 'ios', platform: 'ios', video: 'on' }] },
       { projectRoot: ROOT, env: {} as NodeJS.ProcessEnv },
     );
-    expect([...config.artifacts]).toEqual([['video', 'required']]);
+    expect(config.targets[0]!.video).toBe('on');
   });
 
   it('accepts agent options alongside an executor', () => {

@@ -80,7 +80,9 @@ fill, screenshots are withheld for the rest of the attempt.
 
 `--reporter list,markdown` also writes the findings to `.e2e/summary.md`.
 `--debug`, `--ai-trace`, and `--video` work as they do for `e2e run`. Video
-requires an engine that supports recording.
+requires an engine that supports recording. The exploration is one attempt,
+so `--video=on-first-retry` records nothing; put the goal before a bare
+`--video`.
 
 ## Your config applies
 

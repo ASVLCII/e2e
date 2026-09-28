@@ -17,7 +17,7 @@ import { resolveConfig, type ResolvedCredential, type ResolvedTarget } from '../
 import { ConfigurationError } from '../internal/errors.ts';
 import type { ReportExplore } from '../report/build.ts';
 import { run, type RunOutcome } from '../run/runner.ts';
-import type { AgentConfig, BuiltinReporter, E2EConfig } from '../types.ts';
+import type { AgentConfig, BuiltinReporter, E2EConfig, VideoMode } from '../types.ts';
 import { createExploreBody } from './body.ts';
 import { createExplorer } from './executor.ts';
 import type { PlanAccount } from './plan.ts';
@@ -60,7 +60,8 @@ export interface ExploreOptions {
   readonly artifactsDir?: string | undefined;
   readonly debug?: boolean | undefined;
   readonly aiTrace?: boolean | undefined;
-  readonly video?: boolean | undefined;
+  /** Which attempts record a video, `--video [mode]`; the exploration is one attempt, so `on-first-retry` records nothing. */
+  readonly video?: VideoMode | undefined;
   readonly interruptSignal?: AbortSignal | undefined;
   readonly forceSignal?: AbortSignal | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;

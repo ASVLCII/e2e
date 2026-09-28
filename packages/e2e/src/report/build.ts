@@ -43,7 +43,8 @@ export interface ReportSource {
 export interface TargetProvenance {
   engine: { name: string; version: string; spiVersion: EngineSpiVersion };
   capabilities: string[];
-  artifactCapabilities: ConfiguredArtifactKind[];
+  /** What the engine can capture: the configurable kinds, and video. */
+  artifactCapabilities: (ConfiguredArtifactKind | 'video')[];
   stateCapability: boolean;
 }
 
