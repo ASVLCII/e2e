@@ -2,12 +2,8 @@
 
 # e2e
 
-Agentic end-to-end testing framework for any app.
+e2e is an end-to-end testing framework for web and mobile apps. Describe a goal in natural language and an agent interacts with the app to complete it. Use locators and assertions in the same test to check exact results. Customize anything from agent to the engine.
 
-Describe what a user does in natural language, pin the exact outcome with
-locators and assertions, and run it like any other test suite. Web runs
-through Playwright, iOS and Android through agent-device, and anything else
-with a UI through the same engine contract.
 
 ```ts
 // tests/checkout.e2e.ts
