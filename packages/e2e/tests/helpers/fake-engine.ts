@@ -135,7 +135,7 @@ export interface FakeEngineBehavior {
    * segment began.
    */
   video?: boolean;
-  /** Links `stopVideo` reports after its file, as `video/mp4` segments starting with it. */
+  /** Links `stopVideo` reports before its file, as `video/mp4` segments starting with it. */
   videoLinks?: readonly string[];
   /** Throw to fail state restore after startAttempt succeeded. */
   onRestore?(state: EngineState): void | Promise<void>;
