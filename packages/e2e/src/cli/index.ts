@@ -13,6 +13,7 @@ import { explore, STEP_BOUNDS, TIMEOUT_BOUNDS } from '../explore/index.ts';
 import { BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { bounded } from '../report/format.ts';
 import type { BuiltinReporter, VideoMode } from '../types.ts';
+import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
 import { runsFromCheckout } from '../telemetry/checkout.ts';
 import { initCompletedEvent, runCompletedEvent, USAGE_ERROR_CODE } from '../telemetry/events.ts';
 import { Telemetry } from '../telemetry/telemetry.ts';
@@ -146,21 +147,18 @@ function parseReporters(value: string): Reporter[] {
   });
 }
 
-const VIDEO_MODES = ['off', 'on', 'retain-on-failure', 'on-first-retry'] as const satisfies readonly VideoMode[];
-
 /**
  * `--video [mode]`: a bare flag is `on`. An optional value is greedy, so a
  * test file after the flag would be read as the mode; one that is not a mode
  * is refused with the way to write it.
  */
 function parseVideoMode(value: string): VideoMode {
-  const mode = VIDEO_MODES.find((candidate) => candidate === value);
-  if (mode === undefined) {
+  if (!isVideoMode(value)) {
     throw new InvalidArgumentError(
       `expected a mode (${VIDEO_MODES.join(', ')}), got "${value}"; write --video=<mode>, or put test files before --video`,
     );
   }
-  return mode;
+  return value;
 }
 
 /** The mode `--video [mode]` parsed to: `on` for the bare flag, undefined when it was not given. */

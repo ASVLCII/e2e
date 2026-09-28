@@ -60,11 +60,25 @@ export interface ProviderRecordingTarget {
 }
 
 /**
+ * Whether `value` is a recording a provider's `record` may hand back: a
+ * parseable start time and a `stop`. Every engine checks what `record`
+ * resolved to with this before it keeps it, so a malformed one fails the
+ * start, named, instead of the stop.
+ */
+export function isProviderRecording(value: unknown): value is ProviderRecording {
+  if (typeof value !== 'object' || value === null) return false;
+  const { startedAt, stop } = value as Partial<Record<keyof ProviderRecording, unknown>>;
+  return typeof startedAt === 'string' && !Number.isNaN(Date.parse(startedAt)) && typeof stop === 'function';
+}
+
+/**
  * Ends a provider's recording and returns it as the attempt's segment: a file
  * in the attempt's `video` directory, or a link. What the provider handed back
  * is checked, since the engine trusts nothing it did not write: a file must be
  * a plain name that exists in the directory, a link an `http(s)` URL with a
- * media type. Every failure names the provider and the lease.
+ * media type. The URL is kept in its parsed form and the start time as an
+ * ISO timestamp, the shapes the report schema admits. Every failure names
+ * the provider and the lease.
  */
 export async function stopProviderRecording(recording: ProviderRecording, target: ProviderRecordingTarget): Promise<VideoSegment> {
   const dir = path.join(target.artifactsDir, 'video');
@@ -76,9 +90,9 @@ export async function stopProviderRecording(recording: ProviderRecording, target
   } catch (cause) {
     throw new EngineError('ENGINE_FAILURE', `${what} could not finish: ${cause instanceof Error ? cause.message : String(cause)}`, { retryable: false, cause });
   }
-  const { startedAt } = recording;
+  const startedAt = new Date(recording.startedAt).toISOString();
   if (isWrittenFile(result, dir)) return { path: path.posix.join('video', result.file), startedAt };
-  if (isLink(result)) return { url: result.url, mediaType: result.mediaType, startedAt };
+  if (isLink(result)) return { url: new URL(result.url).href, mediaType: result.mediaType, startedAt };
   throw new EngineError('ENGINE_FAILURE', `${what} finished without naming a file it wrote into ${dir} or an http(s) URL with a media type`, { retryable: false });
 }
 

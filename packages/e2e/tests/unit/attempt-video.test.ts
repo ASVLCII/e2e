@@ -83,6 +83,7 @@ describe('writeStepCaptions', () => {
 
   it('names a link recording by its place in the attempt, and writes nothing without a step inside it', () => {
     setup();
+    rmSync(path.join(dir, 'video'), { recursive: true });
     const link = { url: 'https://recordings.example/r.mp4', mediaType: 'video/mp4', startedAt: '2026-09-28T10:00:00.000Z' };
     expect(writeStepCaptions(dir, link, 1, undefined, [step(0, '2026-09-28T10:00:01.000Z', 5)])).toBe('video/recording-2.steps.vtt');
     expect(writeStepCaptions(dir, link, 0, undefined, [step(0, '2026-09-28T09:59:59.000Z', 5)])).toBeUndefined();

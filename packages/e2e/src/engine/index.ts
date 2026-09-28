@@ -34,7 +34,7 @@ export { describePattern, matchesText, toTextPattern } from '../internal/text.ts
 export { resolveExpression, type ResolveExpressionOptions } from './resolve.ts';
 export type { TextMatch } from '../types.ts';
 export { raceAbort } from './timing.ts';
-export { stopProviderRecording } from './recording.ts';
+export { isProviderRecording, stopProviderRecording } from './recording.ts';
 export type {
   ProviderRecordContext,
   ProviderRecording,

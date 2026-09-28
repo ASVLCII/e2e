@@ -696,6 +696,15 @@ describe('recording', () => {
     await expect(leases.recorder('a1')!(new AbortController().signal)).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
   });
 
+  it('refuses, at the start and named, a recording without a start time and a stop', async () => {
+    const malformed = await recordingWorker({ ...provider().impl, record: async () => undefined as unknown as ProviderRecording });
+    await expect(malformed.worker.startVideo(operation())).rejects.toMatchObject({
+      code: 'ENGINE_FAILURE',
+      message: expect.stringContaining('browser provider "toy-cloud" returned a recording of browser lease-0 without a start time and a stop()'),
+    });
+    await malformed.worker.dispose(cleanup());
+  });
+
   it('keeps a recording whose stop failed, so ending the attempt stops it once more', async () => {
     const cloud = recordingProvider();
     let failures = 1;

@@ -195,7 +195,7 @@ describe('resolveOptions', () => {
     const col = await collection(() => {
       test.describe('outer', { video: 'retain-on-failure', retries: 2 }, () => {
         test.describe('wizard', { serial: true }, () => {
-          test.describe('nested', { video: 'off', retries: 0 }, () => {
+          test.describe('nested', { retries: 0 }, () => {
             test('step', noop);
           });
         });

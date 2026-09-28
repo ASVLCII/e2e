@@ -964,7 +964,7 @@ export class ListReporter implements Reporter {
     for (const video of videos) {
       const hosted = /^https?:\/\//.test(video);
       const target = hosted || this.artifactsRoot === undefined ? video : path.join(this.artifactsRoot, video);
-      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${hosted ? video : this.displayPath(target)}`));
+      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${hosted ? bounded(video) : this.displayPath(target)}`));
     }
   }
 

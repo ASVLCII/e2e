@@ -4,7 +4,7 @@
  * step captions each kept recording gets beside it.
  */
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { VideoSegment } from '../engine/index.ts';
 import type { VideoMode } from '../types.ts';
@@ -77,7 +77,9 @@ export function writeStepCaptions(
     });
   if (cues.length === 0) return undefined;
   const relative = 'path' in segment ? `${segment.path.replace(/\.[^./]+$/, '')}.steps.vtt` : path.posix.join('video', `recording-${segmentIndex + 1}.steps.vtt`);
-  writeFileSync(path.join(dir, relative), `WEBVTT\n\n${cues.join('\n\n')}\n`);
+  const absolute = path.join(dir, relative);
+  mkdirSync(path.dirname(absolute), { recursive: true });
+  writeFileSync(absolute, `WEBVTT\n\n${cues.join('\n\n')}\n`);
   return relative;
 }
 

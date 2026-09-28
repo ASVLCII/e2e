@@ -931,6 +931,10 @@ describe('resolveConfig', () => {
       expect(() => resolveConfig({ targets: [web('sometimes')] } as never, { projectRoot: ROOT, env: BASE_ENV })).toThrow(
         /target "web" video must be one of off, on, retain-on-failure, on-first-retry/,
       );
+      // --video wins over a target's mode, but never hides a mistake in it.
+      expect(() => resolveConfig({ targets: [web('retain_on_failure')] } as never, { projectRoot: ROOT, env: BASE_ENV, cli: { video: 'on' } })).toThrow(
+        /target "web" video must be one of/,
+      );
       expect(() => resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: { video: 'all' as never } })).toThrow(
         /--video must be one of/,
       );

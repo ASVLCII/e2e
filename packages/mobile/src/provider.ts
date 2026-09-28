@@ -13,6 +13,7 @@ import path from 'node:path';
 import {
   ConfigurationError,
   EngineError,
+  isProviderRecording,
   obj,
   type EngineFinishInfo,
   type EnginePrepareInfo,
@@ -181,15 +182,8 @@ export async function recordLease(provider: RecordingDeviceProvider, lease: Devi
     if (context.signal.aborted) throw cancelled(`recording from device provider "${provider.name}" cancelled`);
     throw failure(`could not start recording: ${message(cause)}`, cause);
   }
-  if (!isRecording(recording)) throw failure('returned a recording without a startedAt and a stop()');
+  if (!isProviderRecording(recording)) throw failure('returned a recording without a start time and a stop()');
   return recording;
-}
-
-/** A recording as `record` handed it back: a start time and a way to stop it. */
-function isRecording(value: unknown): value is ProviderRecording {
-  if (typeof value !== 'object' || value === null) return false;
-  const { startedAt, stop } = value as Partial<Record<keyof ProviderRecording, unknown>>;
-  return typeof startedAt === 'string' && typeof stop === 'function';
 }
 
 /** An object with a lease id: something the provider granted and `release` is owed, whatever the field check makes of it. */
@@ -199,7 +193,8 @@ function isGrantedLease(value: unknown): value is Pick<DeviceLease, 'id'> {
 
 /** A granted lease checked field by field: the engine trusts nothing it did not write. */
 function isDeviceLease(lease: Pick<DeviceLease, 'id'>): lease is DeviceLease {
-  return isSlotBinding(lease) && (lease.daemon !== undefined || lease.client !== undefined);
+  // `leaseId` is the engine's own field on a binding; a provider may keep a field of that name on its lease.
+  return isSlotBinding({ ...lease, leaseId: undefined }) && (lease.daemon !== undefined || lease.client !== undefined);
 }
 
 const REJECTED_LEASE = 'returned a lease without an id and a daemon baseUrl or JSON client configuration (no `session` or daemon keys)';

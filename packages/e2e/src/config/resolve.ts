@@ -7,6 +7,7 @@ import { envFlag } from '../internal/env.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { canonicalDigest, sha256Hex } from '../internal/ids.ts';
 import { didYouMean } from '../internal/suggest.ts';
+import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
 import { compileGlob } from '../internal/globs.ts';
@@ -158,8 +159,6 @@ export interface CliOverrides {
 const TARGET_NAME_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]+$/;
 
 const TARGET_KEYS = new Set(['name', 'platform', 'engine', 'video']);
-
-const VIDEO_MODES: readonly VideoMode[] = ['off', 'on', 'retain-on-failure', 'on-first-retry'];
 
 const TOP_LEVEL_KEYS = new Set([
   'specVersion',
@@ -505,10 +504,10 @@ function resolveArtifactsConfig(raw: E2EConfig): {
 /** Checks one `video` value: a mode, or undefined when the key is unset. */
 function videoMode(value: unknown, where: string): VideoMode | undefined {
   if (value === undefined) return undefined;
-  if (!(VIDEO_MODES as readonly unknown[]).includes(value)) {
+  if (!isVideoMode(value)) {
     throw new ConfigurationError('INVALID_CONFIG', `${where} must be one of ${VIDEO_MODES.join(', ')}, got ${describeValue(value)}`);
   }
-  return value as VideoMode;
+  return value;
 }
 
 /** The run's video mode before any target speaks: `--video`, else the config's `video`; undefined when neither says. */
@@ -677,13 +676,15 @@ function resolveTargets(
     }
     seen.add(name);
     if (target.name === undefined) defaulted.add(name);
+    // Checked whether or not `--video` wins over it, so a flag never hides a config mistake.
+    const ownVideo = videoMode(target.video, `${where} video`);
     return {
       name,
       index,
       platform,
       engine: target.engine,
       app: resolveTargetApp(name, target.engine, projectRoot, ports[name]),
-      video: video.cli ?? videoMode(target.video, `${where} video`) ?? video.config ?? 'off',
+      video: video.cli ?? ownVideo ?? video.config ?? 'off',
     };
   });
 }

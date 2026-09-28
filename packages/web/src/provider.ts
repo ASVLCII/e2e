@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import {
   ConfigurationError,
   EngineError,
+  isProviderRecording,
   obj,
   raceAbort,
   type EngineAttemptContext,
@@ -454,13 +455,17 @@ export class LeasedBrowsers {
       const run = this.requireRun();
       const lease = this.scope === 'attempt' ? this.attempt : this.current?.lease;
       if (lease === undefined) throw invalidState(`${label} was asked to record before the attempt had a browser`);
+      let recording: unknown;
       try {
-        const recording = await record(lease, { runId: run.runId, targetName: run.targetName, attemptId, env: run.env, signal });
-        return { recording, provider: label, leaseId: lease.id };
+        recording = await record(lease, { runId: run.runId, targetName: run.targetName, attemptId, env: run.env, signal });
       } catch (cause) {
         if (signal.aborted) throw connectionAbort(signal, `recording from "${provider.name}"`);
         throw new EngineError('ENGINE_FAILURE', `${label} could not start recording browser ${lease.id}: ${message(cause)}`, { retryable: false, cause });
       }
+      if (!isProviderRecording(recording)) {
+        throw new EngineError('ENGINE_FAILURE', `${label} returned a recording of browser ${lease.id} without a start time and a stop()`, { retryable: false });
+      }
+      return { recording, provider: label, leaseId: lease.id };
     };
   }
 

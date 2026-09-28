@@ -186,7 +186,8 @@ describe('device provider', () => {
     const bookkeeping: DeviceProvider = {
       name: 'notes',
       async acquire(request) {
-        const lease = { id: `l-${request.slot}`, daemon: { baseUrl: 'https://d.example' }, session: { secret: 'x'.repeat(100) } };
+        // A provider may keep a `leaseId` of its own on the lease; the worker's comes from `id`.
+        const lease = { id: `l-${request.slot}`, leaseId: 42, daemon: { baseUrl: 'https://d.example' }, session: { secret: 'x'.repeat(100) } };
         acquiredLeases.push(lease);
         return lease;
       },

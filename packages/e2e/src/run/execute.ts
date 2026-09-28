@@ -1179,11 +1179,18 @@ function classifyAttemptStatus(
 
 /**
  * Registers an attempt's kept recordings, in order: a file under its path, a
- * link by URL, each with the step captions of the time it recorded.
+ * link by URL, each with the step captions of the time it recorded. Captions
+ * are a convenience: one that cannot be written leaves its video without
+ * them, never the attempt's cleanup failed.
  */
 function registerVideos(sink: ArtifactSink, segments: readonly VideoSegment[], steps: readonly StepRecord[]): void {
   segments.forEach((segment, index) => {
-    const captionsPath = writeStepCaptions(sink.dir, segment, index, segments[index + 1]?.startedAt, steps);
+    let captionsPath: string | undefined;
+    try {
+      captionsPath = writeStepCaptions(sink.dir, segment, index, segments[index + 1]?.startedAt, steps);
+    } catch {
+      captionsPath = undefined;
+    }
     const captions = captionsPath === undefined ? undefined : sink.register('other', captionsPath, { redaction: 'complete' });
     const registration = { startedAt: segment.startedAt, ...(captions === undefined ? {} : { captions }) };
     if ('path' in segment) sink.register('video', segment.path, registration);

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { stopProviderRecording, type ProviderRecording, type ProviderRecordingResult } from '../../src/engine/index.ts';
+import { isProviderRecording, stopProviderRecording, type ProviderRecording, type ProviderRecordingResult } from '../../src/engine/index.ts';
 
 describe('stopProviderRecording', () => {
   let artifactsDir: string;
@@ -32,9 +32,19 @@ describe('stopProviderRecording', () => {
     expect(existsSync(path.join(artifactsDir, 'video', 'replay.mp4'))).toBe(true);
   });
 
-  it('turns an http(s) URL with a media type into a link segment', async () => {
+  it('turns an http(s) URL with a media type into a link segment, in the parsed forms the report admits', async () => {
     const segment = await stopProviderRecording(recording(async () => ({ url: 'https://cloud.example/r/7', mediaType: 'text/html' })), target());
     expect(segment).toEqual({ url: 'https://cloud.example/r/7', mediaType: 'text/html', startedAt: '2026-09-28T10:00:00.000Z' });
+    const loose: ProviderRecording = { startedAt: '2026-09-28T10:00:00Z', stop: async () => ({ url: ' HTTPS://Cloud.example/r/\u001b]8;;x', mediaType: 'video/mp4' }) };
+    const normalized = await stopProviderRecording(loose, target());
+    expect(normalized).toEqual({ url: 'https://cloud.example/r/%1B]8;;x', mediaType: 'video/mp4', startedAt: '2026-09-28T10:00:00.000Z' });
+  });
+
+  it('knows a recording by a parseable start time and a stop', () => {
+    expect(isProviderRecording({ startedAt: '2026-09-28T10:00:00Z', stop: async () => ({ file: 'r.mp4' }) })).toBe(true);
+    for (const value of [undefined, {}, { startedAt: 'soon', stop: async () => ({}) }, { startedAt: '2026-09-28T10:00:00Z' }]) {
+      expect(isProviderRecording(value)).toBe(false);
+    }
   });
 
   it('refuses a file outside the directory or never written, a non-http URL, and a link without a media type', async () => {

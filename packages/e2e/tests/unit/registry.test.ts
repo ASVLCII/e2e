@@ -173,6 +173,18 @@ describe('serial groups', () => {
     ).rejects.toThrow(/nested serial/);
   });
 
+  it('rejects a video on a describe nested in a serial group, which records as one unit', async () => {
+    await expect(
+      collectModule(async () => {
+        test.describe('unit', { serial: true }, () => {
+          test.describe('inner', { video: 'off' }, () => {
+            test('x', noop);
+          });
+        });
+      }),
+    ).rejects.toThrow('describe option "video" cannot be set inside a serial group');
+  });
+
   it('rejects member overrides of unit-owned options', async () => {
     for (const options of [{ retries: 1 }, { video: 'on' }, { session: 's' }, { skip: true }, { only: true }]) {
       await expect(
