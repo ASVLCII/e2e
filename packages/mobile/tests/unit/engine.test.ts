@@ -1633,8 +1633,7 @@ describe('video', () => {
     });
     const segments = await h.engine.artifacts!.stopVideo!(operation());
     expect(h.fake.lastArgs('recording.record')).toEqual({ action: 'stop' });
-    expect(segments).toHaveLength(1);
-    expect(segments[0]!.path).toBe(path.join('video', 'video.mp4'));
+    expect(segments).toEqual([{ path: path.join('video', 'video.mp4'), startedAt: expect.any(String) }]);
     expect(Number.isNaN(Date.parse(segments[0]!.startedAt))).toBe(false);
     expect(existsSync(path.join(artifactsDir, 'video', 'video.mp4'))).toBe(true);
     await h.engine.endAttempt!(cleanup());
@@ -1648,7 +1647,7 @@ describe('video', () => {
     await openAttempt(h);
     await h.engine.artifacts!.startVideo!(operation());
     const segments = await h.engine.artifacts!.stopVideo!(operation());
-    expect(segments.map((segment) => segment.path)).toEqual([path.join('video', 'video.mp4')]);
+    expect(segments).toEqual([{ path: path.join('video', 'video.mp4'), startedAt: expect.any(String) }]);
     expect(existsSync(path.join(artifactsDir, 'video', 'video.mp4'))).toBe(true);
     expect(existsSync(elsewhere)).toBe(false);
     await h.engine.endAttempt!(cleanup());

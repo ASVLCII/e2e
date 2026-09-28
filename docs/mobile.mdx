@@ -140,6 +140,8 @@ export interface DeviceProvider {
   acquire(request: DeviceRequest): Promise<DeviceLease>;
   /** Called once per lease when the run ends, on every exit path. */
   release(lease: DeviceLease, context: DeviceReleaseContext): Promise<void>;
+  /** Optional: the service's own recording of the device, in the worker, for an attempt that records video. */
+  record?(lease: DeviceLease, context: ProviderRecordContext): Promise<ProviderRecording>;
 }
 
 export interface DeviceLease {
@@ -151,6 +153,8 @@ export interface DeviceLease {
   readonly client?: DeviceClientConfig;
   /** Device to select inside that daemon, when it hosts more than one. */
   readonly device?: string;
+  /** Device to select inside that daemon by the id agent-device lists it under: a simulator UDID or an Android serial. */
+  readonly deviceId?: string;
   /** Bundle id or package the provider installed itself; skips `appPath`. */
   readonly installedApp?: string;
 }
@@ -165,8 +169,8 @@ fails to lease ends the run before any test, and the leases that succeeded
 are still released. Release happens after the last worker exits, on every
 exit path including failure, interrupt, and a `prepare` that threw, within
 `cleanupTimeout`. `release` receives the object `acquire` returned, so a
-provider can keep its own fields on it; only `daemon`, `client`, `device`,
-and `installedApp` travel to the workers. Report `installedApp` only for a
+provider can keep its own fields on it; only `id`, `daemon`, `client`,
+`device`, `deviceId`, and `installedApp` travel to the workers. Report `installedApp` only for a
 request that carried `appPath`.
 Leased devices are warmed like local ones: booted and opened once before
 the run's clock starts.
@@ -181,6 +185,20 @@ the lease scope on each command (`tenant`, `runId`, `leaseId`, `leaseBackend`,
 falls back to the local inventory. A `stateDir` in it points the worker at a
 daemon the provider started, so such a provider needs no `daemon` address at
 all.
+
+A service that records its devices can record the attempt's video too.
+Implement `record` and an attempt that records video calls it from the
+worker, with the lease that worker drives, instead of starting agent-device's
+screen recording. It returns a `ProviderRecording` (import the type from
+`e2e/engine`), stopped when the attempt's video ends: `stop` either writes a
+file into the directory it is given and returns `{ file }`, kept as
+`video/<file>` beside the attempt's other artifacts, or returns
+`{ url, mediaType }` for a recording the service keeps, which the report
+links to. The lease `record` gets is the lease as it traveled to the worker,
+so a field only `release` needs is not on it. A `record` that fails fails
+the attempt's launch, named after the provider and the lease; a `stop` that
+fails is tried once more when the attempt ends. A provider that cannot
+record leaves `record` out, and the engine records with agent-device.
 
 A provider against a typical session API has three requests: create a
 session, poll it until the daemon is reachable, stop it.
@@ -411,7 +429,7 @@ does not interrupt replay.
 | `test.setup` saves a session, `session:` restores it | Not available. A simulator has no portable session snapshot; sign in per test or seed the app |
 | Secret input | `type_secret` and `screen.getByLabel(...).fill(secret)` fill declared secrets into secure fields |
 | Playwright trace per attempt | No Playwright trace; screenshots mask secure fields |
-| `--video` writes a WebM screencast | `--video` writes an MP4 of the device screen with taps shown |
+| `--video` writes a WebM screencast | `--video` writes an MP4 of the device screen with taps shown, or keeps a device provider's own recording |
 | The cache anchors on the page path | The cache anchors on the location `<bundle id> / <screen title>`, the title read off the navigation bar |
 | `getByPlaceholder`, `getAttribute('placeholder')`, `toHaveAttribute('placeholder', ...)` | Work on Android, where a field's hint is the node's `placeholder` attribute whether or not it is showing. An iOS node carries no placeholder yet (agent-device reports only whether one is showing), so query an iOS field by role and name, test id, or display value. `placeholder` is the only attribute a device node has |
 | `getByRole('checkbox')`, `getByRole('radio')`, `check()`, `toBeChecked` on a custom control | Work on both platforms. iOS has no trait for a React Native view with `accessibilityRole="checkbox"` or `"radio"`, so React Native spells the role and state into the accessibility value and the engine reads them back; Android reports the `checked` state of a switch, checkbox, or radio button. `accessibilityRole="tab"` gets neither an iOS trait nor that spelling, so an iOS tab is `other` with a `selected` state: query tabs by test id or label and assert `toBeSelected`. On Android the role description React Native writes makes it a `tab` |

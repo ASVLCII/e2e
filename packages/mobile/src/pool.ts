@@ -22,7 +22,7 @@ import {
 import { bindingsVariable, decodeBindings, deviceLabel, encodeBindings, pinnedApp, type DeviceSource, type SlotBinding } from './bindings.ts';
 import { isRunnerFailure, message, runCommand } from './errors.ts';
 import type { AgentDeviceClient, MobileOptions, MobilePlatform, ClientFactory } from './options.ts';
-import { asDeviceProvider, LeasedDevices } from './provider.ts';
+import { asDeviceProvider, LeasedDevices, type RecordingDeviceProvider } from './provider.ts';
 
 /** An Apple simulator UDID. */
 const UDID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
@@ -141,6 +141,16 @@ export class DevicePool {
     private readonly createClient: ClientFactory,
   ) {
     this.source = sourceFor(options, createClient, (targetName, slot) => this.session(targetName, slot));
+  }
+
+  /**
+   * The device provider when its service records the devices it leases,
+   * in every process: the pool is built from the options in the runner and
+   * in each worker alike. `undefined` for a local pool, or a provider
+   * without `record`.
+   */
+  get recorder(): RecordingDeviceProvider | undefined {
+    return this.source instanceof LeasedDevices ? this.source.recorder : undefined;
   }
 
   /**

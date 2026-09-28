@@ -2,16 +2,27 @@
  * The seam a hosted device service plugs into: a `DeviceProvider` leases one
  * device per worker slot for the run and hands back the agent-device daemon
  * that drives it. The engine acquires in `prepare`, drives each lease from
- * its worker, and releases in `finish`, on every exit path. Nothing here
+ * its worker, and releases in `finish`, on every exit path. A provider whose
+ * service records its devices records an attempt's video in place of
+ * agent-device, from the worker that drives the lease. Nothing here
  * knows any vendor: a hosted simulator service, a device farm, or a daemon on
  * a machine down the hall are each one small provider in user code.
  */
 
 import path from 'node:path';
-import { ConfigurationError, EngineError, obj, type EngineFinishInfo, type EnginePrepareInfo } from 'e2e/engine';
+import {
+  ConfigurationError,
+  EngineError,
+  obj,
+  type EngineFinishInfo,
+  type EnginePrepareInfo,
+  type ProviderRecordContext,
+  type ProviderRecording,
+} from 'e2e/engine';
 import { isSlotBinding, type DeviceClientConfig, type DeviceDaemon, type DeviceSource, type SlotBinding } from './bindings.ts';
 import { message } from './errors.ts';
 import { isLink } from './links.ts';
+import { cancelled } from './support.ts';
 import type { MobileOptions, MobilePlatform } from './options.ts';
 
 /** What the engine asks a provider for: one device for one worker slot of a run. */
@@ -48,12 +59,12 @@ export interface DeviceRequest {
  * JSON data only: a lease travels from the runner process to the worker that
  * drives it through the environment.
  */
-export interface DeviceLease extends SlotBinding {
+export interface DeviceLease extends Omit<SlotBinding, 'leaseId'> {
   /**
    * The provider's handle on the lease (a session id); named in progress
    * lines and handed back to `release`. A provider may keep further fields on
    * the object it returns: `release` gets that same object, while only the
-   * fields declared here travel to the worker.
+   * fields declared here travel to the worker, and `record` gets those.
    */
   readonly id: string;
   /**
@@ -98,14 +109,32 @@ export interface DeviceReleaseContext {
  * A source of hosted devices. `acquire` is called once per worker slot, for
  * every slot at once; `release` once per lease acquired, at the end of the
  * run, also after an `acquire` of another slot failed. Both run in the
- * runner process, so a provider may keep state between them.
+ * runner process, so a provider may keep state between them. `record` runs
+ * in the worker that drives the lease, which may be another process, so it
+ * must not rely on state `acquire` kept.
  */
 export interface DeviceProvider {
   /** Label in progress lines and error messages. */
   readonly name: string;
   acquire(request: DeviceRequest): Promise<DeviceLease>;
   release(lease: DeviceLease, context: DeviceReleaseContext): Promise<void>;
+  /**
+   * Records the leased device for an attempt that records video, in place of
+   * the engine's agent-device screen recording: the service's own recording
+   * of the device, called from the worker when the attempt starts its video.
+   * A provider that cannot record its devices leaves it out, and the engine
+   * records with agent-device. `lease` is the lease as it traveled to the
+   * worker: its `id` and the other fields declared on `DeviceLease`, never
+   * what else the provider kept on the object `acquire` returned.
+   * `ProviderRecording` comes from `e2e/engine`: its `stop` writes a file
+   * into the directory it is given, or names a recording the service keeps
+   * by URL.
+   */
+  record?(lease: DeviceLease, context: ProviderRecordContext): Promise<ProviderRecording>;
 }
+
+/** A provider whose service records the devices it leases. */
+export type RecordingDeviceProvider = DeviceProvider & Required<Pick<DeviceProvider, 'record'>>;
 
 /** Narrows an intended provider, or names what it is missing. */
 export function asDeviceProvider(device: object): DeviceProvider {
@@ -118,7 +147,49 @@ export function asDeviceProvider(device: object): DeviceProvider {
       throw new ConfigurationError('INVALID_CONFIG', `mobile: device provider "${candidate.name}" must implement ${member}()`);
     }
   }
+  if (candidate.record !== undefined && typeof candidate.record !== 'function') {
+    throw new ConfigurationError('INVALID_CONFIG', `mobile: device provider "${candidate.name}" has a record that is not a function`);
+  }
   return device as DeviceProvider;
+}
+
+/**
+ * The lease a worker's binding stands for, as it traveled from the runner:
+ * its id and the fields `DeviceLease` declares, never anything else the
+ * provider kept on the object `acquire` returned. `undefined` for a binding
+ * no provider leased.
+ */
+export function travelledLease(binding: SlotBinding | undefined): DeviceLease | undefined {
+  if (binding?.leaseId === undefined) return undefined;
+  const { leaseId, device, deviceId, daemon, client, installedApp } = binding;
+  return obj({ id: leaseId, device, deviceId, daemon, client, installedApp });
+}
+
+/**
+ * Starts the provider's recording of a leased device for one attempt. A
+ * failure is named after the provider and the lease, and one met once the
+ * signal aborted is a cancellation. A recording without a `startedAt` and a
+ * `stop()` is refused: the engine trusts nothing it did not write.
+ */
+export async function recordLease(provider: RecordingDeviceProvider, lease: DeviceLease, context: ProviderRecordContext): Promise<ProviderRecording> {
+  const failure = (detail: string, cause?: unknown) =>
+    new EngineError('ENGINE_FAILURE', `device provider "${provider.name}" ${detail} for lease ${lease.id}`, { retryable: false, ...(cause === undefined ? {} : { cause }) });
+  let recording: unknown;
+  try {
+    recording = await provider.record(lease, context);
+  } catch (cause) {
+    if (context.signal.aborted) throw cancelled(`recording from device provider "${provider.name}" cancelled`);
+    throw failure(`could not start recording: ${message(cause)}`, cause);
+  }
+  if (!isRecording(recording)) throw failure('returned a recording without a startedAt and a stop()');
+  return recording;
+}
+
+/** A recording as `record` handed it back: a start time and a way to stop it. */
+function isRecording(value: unknown): value is ProviderRecording {
+  if (typeof value !== 'object' || value === null) return false;
+  const { startedAt, stop } = value as Partial<Record<keyof ProviderRecording, unknown>>;
+  return typeof startedAt === 'string' && typeof stop === 'function';
 }
 
 /** An object with a lease id: something the provider granted and `release` is owed, whatever the field check makes of it. */
@@ -154,11 +225,15 @@ async function allOrFirstFailure<T>(tasks: readonly (() => Promise<T>)[], descri
 export class LeasedDevices implements DeviceSource {
   /** Leases granted so far, per target, filled as each `acquire` settles; a lease the engine then rejects is among them. */
   private readonly held = new Map<string, DeviceLease[]>();
+  /** The provider when its service records the devices it leases; `undefined` leaves video to agent-device. */
+  readonly recorder: RecordingDeviceProvider | undefined;
 
   constructor(
     private readonly provider: DeviceProvider,
     private readonly options: Pick<MobileOptions, 'platform' | 'app' | 'appPath'>,
-  ) {}
+  ) {
+    this.recorder = provider.record === undefined ? undefined : (provider as RecordingDeviceProvider);
+  }
 
   async bind(info: EnginePrepareInfo): Promise<readonly SlotBinding[]> {
     const { provider } = this;
@@ -198,7 +273,9 @@ export class LeasedDevices implements DeviceSource {
       }),
       `device provider "${provider.name}" could not lease a device`,
     );
-    return leases.map((lease) => obj({ device: lease.device, deviceId: lease.deviceId, daemon: lease.daemon, client: lease.client, installedApp: lease.installedApp }));
+    return leases.map((lease) =>
+      obj({ leaseId: lease.id, device: lease.device, deviceId: lease.deviceId, daemon: lease.daemon, client: lease.client, installedApp: lease.installedApp }),
+    );
   }
 
   async finish(info: EngineFinishInfo): Promise<void> {
