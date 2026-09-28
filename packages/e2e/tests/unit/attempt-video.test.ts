@@ -81,6 +81,15 @@ describe('writeStepCaptions', () => {
     expect(readFileSync(path.join(dir, 'video/video.steps.vtt'), 'utf8')).toContain('00:00:01.000 --> 00:00:06.000\n1. tap');
   });
 
+  it('captions a step that was still running when a later recording began from that recording\'s first frame', () => {
+    setup();
+    const second = { path: 'video/video-part2.webm', startedAt: '2026-09-28T10:00:02.000Z' };
+    writeStepCaptions(dir, second, 1, undefined, [step(0, '2026-09-28T10:00:01.000Z', 3_000), step(1, '2026-09-28T10:00:00.000Z', 500)]);
+    const text = readFileSync(path.join(dir, 'video/video-part2.steps.vtt'), 'utf8');
+    expect(text).toContain('00:00:00.000 --> 00:00:02.000\n1. tap');
+    expect(text).not.toContain('2. tap');
+  });
+
   it('names a link recording by its place in the attempt, and writes nothing without a step inside it', () => {
     setup();
     rmSync(path.join(dir, 'video'), { recursive: true });

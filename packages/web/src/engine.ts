@@ -233,7 +233,12 @@ function validateVideo(video: unknown): void {
   }
   const { size, quality } = video as { size?: unknown; quality?: unknown };
   if (size !== undefined) {
-    const { width, height } = (typeof size === 'object' && size !== null ? size : {}) as { width?: unknown; height?: unknown };
+    const fields = typeof size === 'object' && size !== null && !Array.isArray(size) ? size : {};
+    const { width, height } = fields as { width?: unknown; height?: unknown };
+    const unknownKey = Object.keys(fields).find((key) => key !== 'width' && key !== 'height');
+    if (unknownKey !== undefined) {
+      throw new ConfigurationError('INVALID_CONFIG', `web({ video: { size } }) has unknown key "${unknownKey}"; it is { width, height }`);
+    }
     if (!Number.isInteger(width) || !Number.isInteger(height) || (width as number) < 1 || (height as number) < 1) {
       throw new ConfigurationError('INVALID_CONFIG', 'web({ video: { size } }) must be { width, height } in whole pixels, each at least 1');
     }

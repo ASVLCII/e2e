@@ -46,7 +46,9 @@ const MIN_CAPTION_MS = 1_000;
  * step that did not pass), timed from the recording's start. A caption shows
  * the current step: it stays up until the next step starts, or as long as
  * the step ran if that is longer, and the last one at least a second. A
- * recording ends where the next one of the attempt starts. Returns the report-relative path
+ * recording ends where the next one of the attempt starts; a step still
+ * running when a recording starts (a restart mid-step) is captioned from the
+ * recording's first frame. Returns the report-relative path
  * written, or undefined when no step falls inside the recording. Step labels
  * are the redacted ones the report carries, so a caption never shows a
  * secret the report does not.
@@ -63,15 +65,17 @@ export function writeStepCaptions(
   const inside = steps
     .filter((step) => {
       const at = Date.parse(step.startedAt);
-      return at >= start && at < end;
+      // Started before the recording ended, and was still running or not yet started when it began.
+      return at < end && (at >= start || at + step.durationMs > start);
     })
     .toSorted((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
   const cues = inside
     .map((step, index) => {
-      const from = Date.parse(step.startedAt) - start;
+      const began = Date.parse(step.startedAt) - start;
+      const from = Math.max(0, began);
       const next = inside[index + 1];
       const until = next === undefined ? from + MIN_CAPTION_MS : Date.parse(next.startedAt) - start;
-      const to = Math.max(from + step.durationMs, until);
+      const to = Math.max(began + step.durationMs, until);
       const text = `${step.index + 1}. ${step.api} ${step.label}${step.status === 'passed' ? '' : ` - ${step.status}`}`;
       return `${cueTime(from)} --> ${cueTime(to)}\n${cueText(text)}`;
     });

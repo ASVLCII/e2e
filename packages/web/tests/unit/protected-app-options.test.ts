@@ -107,6 +107,7 @@ describe('web({ video })', () => {
       { size: { width: 1280.5, height: 720 } },
       { quality: 101 },
       { quality: 0.5 },
+      { size: { width: 1280, height: 720, depth: 2 } },
       { mode: 'on' },
     ];
     for (const video of invalid) {
