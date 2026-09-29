@@ -5,6 +5,7 @@
  */
 
 import type { createAgentDeviceClient } from 'agent-device';
+import type { CommandConfig, ServiceConfig } from 'e2e/engine';
 import type { DeviceConnection } from './bindings.ts';
 import type { DeviceProvider } from './provider.ts';
 
@@ -74,6 +75,25 @@ export interface MobileOptions {
   readonly identity?: string | undefined;
   /** Report label joining the cache identity; a simulator or emulator defaults to `test`. */
   readonly environment?: 'test' | 'staging' | 'production' | undefined;
+  /**
+   * Process the runner starts before the first test and stops on every exit
+   * path: the dev server a development build loads its JavaScript from
+   * (Metro, `expo start`). A device has no URL to poll, so `readyUrl` is
+   * required beside it (`INVALID_CONFIG` without). Targets declaring the
+   * same command share one process; the browser engine's `command` is the
+   * same contract.
+   */
+  readonly command?: CommandConfig | undefined;
+  /** URL polled until `command` answers with a 200-499 status. */
+  readonly readyUrl?: string | undefined;
+  /**
+   * Dependency processes the app needs before it can boot (a mock API, an
+   * `adb reverse` that maps a host port into the emulator), started in
+   * declaration order before `command` and torn down in reverse after it.
+   * Valid without `command`: a release build embeds its JavaScript and needs
+   * only its backend.
+   */
+  readonly services?: readonly ServiceConfig[] | undefined;
   /**
    * Simulator or emulator to use, by name, simulator UDID, or emulator
    * serial (`emulator-5554`). A list is a pool: the

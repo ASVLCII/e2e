@@ -91,6 +91,16 @@ describe('manifest', () => {
     expect(Object.keys(free.session!)).toEqual(['back']);
   });
 
+  it('declares the processes the runner starts for the app, as the browser engine does', () => {
+    const metro = { executable: 'pnpm', args: ['exec', 'expo', 'start'], reuseExisting: true };
+    const mock = { name: 'mock-server', executable: 'node', args: ['mock.js'], readyUrl: 'http://localhost:1986/' };
+    const { engine } = harness({ command: metro, readyUrl: 'http://localhost:8081/status', services: [mock] });
+    expect(engine.app).toEqual({ identity: 'Settings', command: metro, readyUrl: 'http://localhost:8081/status', services: [mock] });
+    // A release build embeds its JavaScript: services without a command, and nothing declared stays undeclared.
+    expect(harness({ services: [mock] }).engine.app).toEqual({ identity: 'Settings', services: [mock] });
+    expect(Object.keys(harness({ command: undefined, readyUrl: undefined, services: undefined }).engine.app!)).toEqual(['identity']);
+  });
+
   it('declares the app identity from the option, the build path, or an explicit identity', () => {
     expect(harness({ appPath: './build/App.app' }, false).engine.app).toMatchObject({ identity: './build/App.app' });
     expect(harness({ identity: 'com.example.app', environment: 'staging' }).engine.app).toMatchObject({

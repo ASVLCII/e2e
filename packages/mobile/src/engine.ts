@@ -83,12 +83,19 @@ export function mobile(options: MobileOptions): EngineHandle {
 
 /**
  * What the device engine declares about its app: the pinned app (else the
- * build it installs) is the identity cache and session entries key on.
+ * build it installs) is the identity cache and session entries key on, and
+ * the processes the runner starts for it (`command`, `services`) pass
+ * through as the browser engine passes its own. No `url`: a device app is
+ * opened by launch, not by address.
  */
-function declaredApp(options: MobileOptions): Pick<EngineAppDeclaration, 'identity' | 'environment'> {
+function declaredApp(options: MobileOptions): Omit<EngineAppDeclaration, 'url'> {
+  const { environment, command, readyUrl, services } = options;
   return obj({
     identity: options.identity ?? options.app ?? options.appPath,
-    environment: options.environment,
+    environment,
+    command,
+    readyUrl,
+    services,
   });
 }
 
