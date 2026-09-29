@@ -106,11 +106,12 @@ interface Step {
 }
 
 /**
- * Whether a held-back report could still be confirmed: the step has time
- * for the wait and the recording, and the next turn still offers this tool.
+ * Whether a report held back now could still be confirmed: the step has
+ * `ms` left, and the next turn still offers this tool. Before the wait that
+ * is the wait and the recording; after it, the recording alone.
  */
-function canConfirm({ context, loop }: Step): boolean {
-  return context.budgets.remainingMs() >= RECHECK_DELAY_MS + RECHECK_RESERVE_MS && loop.nextTurnWorks();
+function canConfirm({ context, loop }: Step, ms: number): boolean {
+  return context.budgets.remainingMs() >= ms && loop.nextTurnWorks();
 }
 
 /** One report: recorded, or held back with the screen it became. */
@@ -122,12 +123,12 @@ async function report(recorder: Recorder, step: Step, input: FindingReport): Pro
   const basis = screen.held();
   const actions = context.budgets.actionsUsed();
   const evidence = await context.observe({ pixels: true }).catch(() => undefined);
-  if (basis !== undefined && basis.revision !== recorder.rechecked && canConfirm(step)) {
+  if (basis !== undefined && basis.revision !== recorder.rechecked && canConfirm(step, RECHECK_DELAY_MS + RECHECK_RESERVE_MS)) {
     const waited = await sleep(RECHECK_DELAY_MS, context.signal).then(() => true, () => false);
     const again = waited ? await context.observe().catch(() => undefined) : undefined;
     // The model's own action moved the screen, not the app: the report stands on its evidence.
     const acted = context.budgets.actionsUsed() !== actions;
-    if (again !== undefined && !acted && canConfirm(step)) {
+    if (again !== undefined && !acted && canConfirm(step, RECHECK_RESERVE_MS)) {
       if (screen.differs(basis, again)) {
         const update = screen.update(again);
         recorder.rechecked = again.revision;

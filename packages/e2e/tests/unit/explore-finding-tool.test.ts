@@ -25,7 +25,7 @@ function screen(revision: string, lines: readonly string[]): ExecutorObservation
  * A step whose model holds the loading screen while the app has already
  * rendered the test: every observe after the report reads the loaded screen.
  */
-function reportOnLoading(options: { remainingMs: number; signal?: AbortSignal; nextTurnWorks?: boolean }) {
+function reportOnLoading(options: { remainingMs: number | (() => number); signal?: AbortSignal; nextTurnWorks?: boolean }) {
   const state = new ExploreState('Find bugs', { maxSteps: 1, timeoutMs: 180_000 });
   const presenter = new ScreenPresenter();
   presenter.initial(screen('b1', LOADING));
@@ -35,7 +35,7 @@ function reportOnLoading(options: { remainingMs: number; signal?: AbortSignal; n
   const context: StepExecutorContext = {
     ...base,
     signal: options.signal ?? base.signal,
-    budgets: { ...base.budgets, remainingMs: () => options.remainingMs },
+    budgets: { ...base.budgets, remainingMs: typeof options.remainingMs === 'function' ? options.remainingMs : () => options.remainingMs as number },
     observe: async () => {
       revision += 1;
       observed.push(`b${String(revision)}`);
@@ -56,6 +56,14 @@ describe('report_finding', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(observed).toEqual(['b2']);
     expect(state.findings.map((finding) => finding.observationRevision)).toEqual(['b2']);
+  });
+
+  it('still holds back a changed screen when the wait itself spent the time the wait needed', async () => {
+    // 7 s at the report: room for the wait and the recording; after the wait, room for the confirmation only.
+    const deadline = Date.now() + 7_000;
+    const { state, run } = reportOnLoading({ remainingMs: () => deadline - Date.now() });
+    expect(String(await run())).toMatch(/^Not recorded/);
+    expect(state.findings).toEqual([]);
   });
 
   it('records at once when the next turn offers only complete_step, since nothing could confirm a held-back report', async () => {
