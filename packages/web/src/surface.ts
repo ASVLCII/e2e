@@ -389,6 +389,13 @@ export class PlaywrightSurface {
   /** Opens one attempt owner before setup starts, so cleanup can cancel pending attachment. */
   async startAttempt(context: EngineAttemptContext): Promise<void> {
     if (this.session !== undefined) throw invalidState('an attempt is already running');
+    // Raced with the launch budget: a provider still resolving when the
+    // runner gives up must not open a session after the runner ended it.
+    const basicAuth = this.basicAuth;
+    const credentials =
+      basicAuth === undefined
+        ? undefined
+        : await raceAbort(() => httpCredentials(basicAuth, context.resolveSecret), context.signal, 'resolving the basic-auth password');
     const persistent = await this.persistentBinding(context);
     this.artifactsDir = context.artifactsDir;
     this.artifactCounter = 0;
@@ -397,7 +404,6 @@ export class PlaywrightSurface {
     const dialogs = new DialogRouter(this.latch);
     this.routes = routes;
     this.dialogs = dialogs;
-    const credentials = this.basicAuth === undefined ? undefined : await httpCredentials(this.basicAuth, context.resolveSecret);
     const session = new AttemptSession({
       artifactsDir: context.artifactsDir,
       viewport: this.viewport,

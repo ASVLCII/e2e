@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Browser, Dialog, Route } from 'playwright';
+import { secrets } from 'e2e';
 import type { EngineFixtureContext, OperationContext } from 'e2e/engine';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { PlaywrightSurface } from '../../src/surface.ts';
@@ -159,4 +160,24 @@ it('rejects a focus read from a context replaced before typing dispatches', asyn
   await rejected;
   expect(press).not.toHaveBeenCalled();
   expect(type).not.toHaveBeenCalled();
+});
+
+it('opens no session for an attempt the runner gave up on while its basic-auth password resolved', async () => {
+  const protectedSurface = new PlaywrightSurface({ basicAuth: { username: 'ada', password: secrets.get('stagingPassword') } });
+  await protectedSurface.init({ runId: 'run', targetName: 'web', projectRoot: process.cwd(), app: {}, env: {}, headed: false, workerSlot: 0, signal: new AbortController().signal, log: () => undefined });
+  try {
+    let resolvePassword!: (value: string) => void;
+    const slow = new Promise<string>((resolve) => { resolvePassword = resolve; });
+    const controller = new AbortController();
+    const starting = protectedSurface.startAttempt({ attemptId: 'slow', artifactsDir, signal: controller.signal, resolveSecret: () => slow });
+    controller.abort();
+    await expect(starting).rejects.toMatchObject({ code: 'CANCELLED' });
+    await protectedSurface.endAttempt(cleanup());
+    resolvePassword('late-password');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await protectedSurface.startAttempt({ attemptId: 'next', artifactsDir, signal: new AbortController().signal, resolveSecret: async () => 'next-password' });
+    expect(vi.mocked(browser.newContext).mock.lastCall?.[0]).toMatchObject({ httpCredentials: { username: 'ada', password: 'next-password' } });
+  } finally {
+    await protectedSurface.dispose(cleanup());
+  }
 });
