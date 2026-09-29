@@ -8,13 +8,6 @@ description: Official integrations with hosted services, from the @e2e-dev/integ
 provider seams. Tests, config, and CI stay the same; the integration decides
 where a target's browser or device comes from.
 
-Each integration is its own subpath, and only that subpath imports the
-service's SDK. Install the package and the SDK of the service you use:
-
-```bash
-npm install --save-dev @e2e-dev/integrations @onkernel/sdk
-```
-
 <CardGroup cols={2}>
   <Card title="Kernel" icon="cloud" href="/integrations/kernel">
     Hosted Chromium for web targets, one browser per worker or per test.
