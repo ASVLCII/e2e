@@ -52,9 +52,10 @@ export class AttemptSession {
   private tracing = false;
   private traceSegments = 0;
   private traceParts: string[] = [];
+  private requestedViewport: { readonly width: number; readonly height: number } | undefined;
 
   constructor(private readonly options: SessionOptions) {
-    this.video = new VideoRecorder(options.viewport, options.artifactsDir);
+    this.video = new VideoRecorder(options.artifactsDir);
   }
 
   /** Captures an immutable connection generation for publication after asynchronous reads. */
@@ -161,7 +162,7 @@ export class AttemptSession {
         if (budget.signal.aborted) throw connectionAbort(budget.signal, 'connection');
         await this.options.configure(candidate.context);
         if (recover && candidate.page !== null) {
-          const size = previous?.page?.viewportSize() ?? this.options.viewport;
+          const size = previous?.page?.viewportSize() ?? this.requestedViewport ?? this.options.viewport;
           if (size !== null) await candidate.page.setViewportSize(size);
           await this.video.pageOpened(candidate.page);
         }
@@ -196,10 +197,9 @@ export class AttemptSession {
     const page = await this.nextPage(binding.context);
     try {
       let identity = binding.identity;
-      if (identity !== undefined) {
-        if (this.options.viewport !== null) await page.setViewportSize(this.options.viewport);
-        identity = { ...identity, target: await targetIdentity(page) };
-      }
+      const size = this.requestedViewport ?? (identity === undefined ? null : this.options.viewport);
+      if (size !== null) await page.setViewportSize(size);
+      if (identity !== undefined) identity = { ...identity, target: await targetIdentity(page) };
       this.check(token);
       await this.video.pageOpened(page);
       this.check(token);
@@ -230,6 +230,17 @@ export class AttemptSession {
       }
     }
     return context.newPage();
+  }
+
+  /** Sizes the open page, if any, and every page this attempt opens after it. */
+  async setViewport(size: { readonly width: number; readonly height: number }): Promise<void> {
+    const { width, height } = size;
+    if (![width, height].every((side) => Number.isInteger(side) && side >= 0)) {
+      throw new Error(`the viewport needs whole, non-negative pixels, got ${width}x${height}`);
+    }
+    const page = this.current().page;
+    if (page !== null && !page.isClosed()) await page.setViewportSize({ width, height });
+    this.requestedViewport = { width, height };
   }
 
   /** Restarts the document while retaining this context's storage. */
