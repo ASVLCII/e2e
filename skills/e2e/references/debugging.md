@@ -64,7 +64,7 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
 | `ONLY_IN_CI` | `test.only` reached CI | Remove it |
 | `BROWSER_INSTALL_FAILED`, `LAUNCH_TIMEOUT` | Browser download or launch failed | `npx playwright install chromium --with-deps`; raise `launchTimeout` on slow machines |
 | `AUTH_CREDENTIAL_UNAVAILABLE` | `credentials.user('x')` for an undeclared name | Add it to `config.credentials` |
-| `SECRET_UNAVAILABLE` | `secrets.get('x')` for an undeclared name | Add it to `config.secrets` or set `E2E_SECRET_X` |
+| `SECRET_UNAVAILABLE` | `secrets.get('x')` in a test for an undeclared name | Add it to `config.secrets` (an `E2E_SECRET_X` variable only overrides a declared one) |
 
 ## Tools
 

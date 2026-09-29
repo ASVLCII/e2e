@@ -6,7 +6,7 @@
  */
 
 import type { BrowserContext } from 'playwright';
-import { sameSite } from 'e2e/engine';
+import { sameSite, type Secret } from 'e2e/engine';
 import type { WebBasicAuth } from './surface.ts';
 
 /** The credentials Playwright answers an HTTP authentication challenge with. */
@@ -46,10 +46,13 @@ export async function installSiteHeaders(
  * The basic-auth credentials a context answers a challenge with, as
  * Playwright's own `httpCredentials` does: on a 401 from any origin. A site
  * cannot be enumerated into the exact origins Playwright scopes by, and a
- * challenge is answered only where one is issued.
+ * challenge is answered only where one is issued. A `Secret` password
+ * resolves through the attempt, which registers the value for redaction.
  */
-export function httpCredentials(basicAuth: WebBasicAuth | undefined): PlaywrightHttpCredential | undefined {
-  if (basicAuth === undefined) return undefined;
+export async function httpCredentials(
+  basicAuth: WebBasicAuth,
+  resolveSecret: (secret: Secret) => Promise<string>,
+): Promise<PlaywrightHttpCredential> {
   const { username, password } = basicAuth;
-  return { username, password };
+  return { username, password: typeof password === 'string' ? password : await resolveSecret(password) };
 }

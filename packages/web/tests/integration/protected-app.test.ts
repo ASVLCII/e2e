@@ -11,9 +11,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { EngineCleanupContext, EngineHandle, OperationContext } from 'e2e/engine';
+import { secrets } from 'e2e';
+import type { EngineCleanupContext, EngineHandle, OperationContext, Secret } from 'e2e/engine';
 import { web, surfaceOf } from '../../src/index.ts';
 import { PROTECTED_CREDENTIAL, startFixtureApp, type FixtureApp } from '../helpers/fixture-app.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 function cleanup(): EngineCleanupContext {
   return { signal: new AbortController().signal, timeoutMs: 30_000 };
@@ -23,7 +25,13 @@ function operation(attemptId: string): OperationContext {
   return { signal: new AbortController().signal, timeoutMs: 30_000, runId: 'run-protected', attemptId, origin: 'test' };
 }
 
-async function boot(engine: EngineHandle, app: FixtureApp, artifactsDir: string, attemptId: string): Promise<void> {
+async function boot(
+  engine: EngineHandle,
+  app: FixtureApp,
+  artifactsDir: string,
+  attemptId: string,
+  resolveSecret: (secret: Secret) => Promise<string> = noSecrets,
+): Promise<void> {
   await engine.init!({
     runId: 'run-protected',
     targetName: 'web',
@@ -35,7 +43,7 @@ async function boot(engine: EngineHandle, app: FixtureApp, artifactsDir: string,
     log: () => undefined,
     signal: new AbortController().signal,
   });
-  await engine.startAttempt!({ attemptId, artifactsDir, signal: new AbortController().signal });
+  await engine.startAttempt!({ attemptId, artifactsDir, signal: new AbortController().signal, resolveSecret });
 }
 
 async function shutdown(engine: EngineHandle): Promise<void> {
@@ -142,6 +150,21 @@ describe('web({ headers, basicAuth })', () => {
       await boot(engine, app, artifactsDir, 'b1');
       expect(await headingAt(engine, 'b1', `${app.url}/protected`)).toBe('Protected');
       expect(await headingAt(engine, 'b1', `${other.url}/protected`)).toBe('Protected');
+    } finally {
+      await shutdown(engine);
+    }
+  });
+
+  it('answers the challenge with a secrets.get() password the attempt resolves', async () => {
+    const asked: string[] = [];
+    const engine = web({ url: app.url, basicAuth: { username: PROTECTED_CREDENTIAL.username, password: secrets.get('previewPassword') } });
+    try {
+      await boot(engine, app, artifactsDir, 's1', async (secret) => {
+        asked.push(secret.name);
+        return PROTECTED_CREDENTIAL.password;
+      });
+      expect(await headingAt(engine, 's1', `${app.url}/protected`)).toBe('Protected');
+      expect(asked).toEqual(['previewPassword']);
     } finally {
       await shutdown(engine);
     }

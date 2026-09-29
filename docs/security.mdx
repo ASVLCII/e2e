@@ -113,6 +113,14 @@ After any secret fill, screenshot and pixel tools are unavailable,
 screenshots. The app could display the value anywhere, beyond the field's
 masked rectangle.
 
+A secret an engine option holds (`web({ basicAuth: { password: secrets.get(name) } })`)
+is resolved on the host when each attempt starts and registered for redaction
+then. It is not a fill and does not disable pixels: the value goes to the
+engine, not into the page. The Playwright trace records the `Authorization`
+header it produces, base64-encoded, which redaction does not match, and a
+trace is rewritten only after a fill; restrict access to traces of a
+protected app.
+
 The redactor matches each registered value character by character, in every
 spelling a serializer gives a character: as is; JSON-escaped once or twice,
 including `\uXXXX` escapes in either hex case; as an HTML character

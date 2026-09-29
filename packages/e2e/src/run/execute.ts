@@ -25,7 +25,7 @@ import { Deadline, NEVER_ABORTS, withAbort, withScopedBudget, withTimeout } from
 import { createAgentCacheContext, flushStagedTraces } from '../cache/context.ts';
 import type { ModuleRegistration, RegisteredTest } from '../collect/registry.ts';
 import { pairVideoMode, type TestTargetPair } from '../collect/select.ts';
-import type { ArtifactStore } from '../types.ts';
+import type { ArtifactStore, Secret } from '../types.ts';
 import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import { AttemptBudget } from './budget.ts';
 import { ENGINE_SPI_VERSION } from '../engine/contract.ts';
@@ -47,7 +47,8 @@ import { isFailedStatus } from './records.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialHost, type SharedSerialSession } from './serial.ts';
 import { interruptedSkip, pairKey, pairResult, repeatSegment, unstartedResult } from './units.ts';
-import { adoptSecrecy, carriedSecrecy, processSecrets, sessionSecrecy } from './secrecy.ts';
+import { adoptSecrecy, carriedSecrecy, processSecrets, resolveSecretValue, sessionSecrecy } from './secrecy.ts';
+import { isSecret } from '../secrets.ts';
 import { SessionStaging, SessionStore, type SessionIdentity } from './sessions.ts';
 import { redactTraceArchives } from './trace-redaction.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -590,7 +591,12 @@ export class TargetExecutor implements SerialHost {
       if (startAttempt !== undefined) {
         await this.debug.time('session.launch', () =>
           launch(`starting an attempt on engine ${engine?.name ?? 'none'}`, (launchSignal) =>
-            startAttempt({ attemptId, artifactsDir, signal: launchSignal }),
+            startAttempt({
+              attemptId,
+              artifactsDir,
+              signal: launchSignal,
+              resolveSecret: (secret) => this.resolveEngineSecret(session, secret),
+            }),
           ),
         );
       }
@@ -632,6 +638,24 @@ export class TargetExecutor implements SerialHost {
       throw cause;
     }
     return session;
+  }
+
+  /**
+   * The plaintext of a secret the target's engine declared, for an option it
+   * hands the app (basic-auth credentials). Registered for the session's and
+   * the process's redaction by `resolveSecretValue`; the viewport is not
+   * tainted, since the value goes to the engine, not into a field.
+   */
+  private async resolveEngineSecret(session: TargetSession, secret: Secret): Promise<string> {
+    const engine = this.target.engine;
+    if (!isSecret(secret) || !(engine?.secrets ?? []).some((declared) => declared.name === secret.name)) {
+      const name = isSecret(secret) ? `"${secret.name}"` : 'a value that is not a secrets.get() handle';
+      throw new ConfigurationError(
+        'SECRET_UNAVAILABLE',
+        `engine ${engine?.name ?? 'none'} asked for secret ${name}, which it did not declare in its secrets`,
+      );
+    }
+    return resolveSecretValue(secret, this.config.secrets, sessionSecrecy(session, this.config.secrets).ledger);
   }
 
   /**

@@ -13,8 +13,7 @@ import type { DebugTrace } from '../internal/debug.ts';
 import { ConfigurationError, errorMessage, InfrastructureError, TestError } from '../internal/errors.ts';
 import { Deadline } from '../internal/time.ts';
 import { didYouMean } from '../internal/suggest.ts';
-import { processSecrets, sessionSecrecy, type SessionSecrecy } from './secrecy.ts';
-import { unavailableCode } from '../secrets.ts';
+import { resolveSecretValue, sessionSecrecy, type SessionSecrecy } from './secrecy.ts';
 import { obj } from '../internal/objects.ts';
 import { resolveNavigationUrl } from '../internal/urls.ts';
 import { FixtureRecorder } from './fixture-recording.ts';
@@ -28,7 +27,6 @@ import {
   type SecretResolver,
 } from '../locator/screen.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
-import { MIN_SECRET_LENGTH, secretLength } from '../config/secrets.ts';
 import type { Agent, App, Expectable, SetupSession, TestFixtures } from '../types.ts';
 import type { ArtifactRecord } from './records.ts';
 import type { StepRecord, StepRecorder } from './steps.ts';
@@ -106,24 +104,10 @@ export function createFixtures(environment: AttemptEnvironment): AttemptFixtures
   const { ledger, taint } = sessionSecrecy(environment.session, environment.config.secrets);
   const secrets: SecretResolver = {
     async resolve(secret) {
-      const registered = environment.config.secrets.get(secret.name);
-      if (registered === undefined) {
-        throw new ConfigurationError(unavailableCode(secret), `secret "${secret.name}" is not configured`);
-      }
-      const value = registered.value;
-      const plaintext = typeof value === 'function' ? await value() : value;
-      if (typeof plaintext !== 'string' || secretLength(plaintext) < MIN_SECRET_LENGTH) {
-        throw new ConfigurationError(
-          unavailableCode(secret),
-          `secret "${secret.name}" provider did not return a string of at least ${MIN_SECRET_LENGTH} characters (code points)`,
-        );
-      }
+      const plaintext = await resolveSecretValue(secret, environment.config.secrets, ledger);
       // Only a value that exists can reach the screen: a failed provider
       // leaves nothing to taint the viewport with.
       taint.value = true;
-      // A provider-resolved value joins redaction the moment it exists.
-      ledger.register(secret.name, plaintext);
-      processSecrets.register(secret.name, plaintext);
       return plaintext;
     },
   };

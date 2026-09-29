@@ -30,6 +30,7 @@ import {
   type NodeRef,
   type OperationContext,
   type PointerAction,
+  type Secret,
   type SemanticNode,
   type VideoSegment,
   type ViewportPoint,
@@ -127,7 +128,12 @@ export interface WebConnectOptions {
 export interface WebBasicAuth {
   /** The user name; `:` is not allowed in one (RFC 7617). */
   readonly username: string;
-  readonly password: string;
+  /**
+   * The password, or `secrets.get(name)` for one in `config.secrets`: resolved
+   * when each attempt starts and redacted from reports, logs, and observations
+   * like any configured secret.
+   */
+  readonly password: string | Secret;
 }
 
 /** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
@@ -391,7 +397,7 @@ export class PlaywrightSurface {
     const dialogs = new DialogRouter(this.latch);
     this.routes = routes;
     this.dialogs = dialogs;
-    const credentials = httpCredentials(this.basicAuth);
+    const credentials = this.basicAuth === undefined ? undefined : await httpCredentials(this.basicAuth, context.resolveSecret);
     const session = new AttemptSession({
       artifactsDir: context.artifactsDir,
       viewport: this.viewport,

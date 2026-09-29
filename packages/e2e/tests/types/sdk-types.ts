@@ -40,7 +40,7 @@ import {
   type ExecutorObservation,
   type ValueExpectation,
 } from '../../src/index.ts';
-import type { EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
+import type { Engine, EngineAttemptContext, EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
 import { createAgent, defineTool, type DefaultAgent } from '../../src/agent/public.ts';
 import type { Report } from '../../src/index.ts';
 import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/provider';
@@ -107,6 +107,12 @@ subscriptionModel satisfies ModelInstance;
 // @ts-expect-error a secret needs a value; an env variable that may be unset must be defaulted.
 ({ targets, secrets: { key: process.env['STRIPE_KEY'] } }) satisfies E2EConfig;
 secrets.get('key') satisfies Secret;
+// An engine declares the secrets its options hold and resolves them per attempt.
+({ name: 'gated', version: '1.0.0', spiVersion: 1, secrets: [secrets.get('key')] }) satisfies Engine;
+// @ts-expect-error an engine declares secrets.get() handles, never the values.
+({ name: 'gated', version: '1.0.0', spiVersion: 1, secrets: ['sk_test'] }) satisfies Engine;
+declare const attemptContext: EngineAttemptContext;
+attemptContext.resolveSecret(secrets.get('key')) satisfies Promise<string>;
 credentials.user('admin').password satisfies Secret;
 // @ts-expect-error a Secret has no plaintext accessor.
 secrets.get('key').value;

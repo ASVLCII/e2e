@@ -154,6 +154,14 @@ observation, and compatible editable field. The engine receives a
 `UNSUPPORTED_CAPABILITY`. Screenshots are withheld after a secret fill;
 `app.screenshot()` then raises `POLICY_DENIED`.
 
+An engine option can take a secret too, such as a password the engine sends
+the app. Accept `string | Secret` (tell them apart with `isSecret` from
+`e2e/engine`), list each handle in the engine's `secrets`, and read the value
+in `startAttempt` through `context.resolveSecret(secret)`. The config load
+rejects a name no secret has, and the runner redacts the value from the
+moment it resolves. A config calls `secrets.get()` before any run exists, so
+the handle is a reference by name until then.
+
 ### Lifecycle
 
 - `prepare` runs once per target in the runner process, before the run's

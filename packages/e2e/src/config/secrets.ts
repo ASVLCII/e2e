@@ -41,9 +41,13 @@ export interface Credentials {
 
 export interface Secrets {
   /**
-   * The opaque handle of a secret declared under `config.secrets`. Test code
-   * cannot read the value; `locator.fill` and `agent.act` params accept the
-   * handle and the runner fills the field itself.
+   * The opaque handle of a secret declared under `config.secrets` (or a
+   * credential's password, by the credential's name). Test code cannot read
+   * the value; `locator.fill` and `agent.act` params accept the handle and
+   * the runner fills the field itself. Called while `e2e.config.ts`
+   * evaluates, it returns a reference by name for an engine option such as
+   * `web({ basicAuth: { password } })`, resolved when the engine starts an
+   * attempt; a name no secret has fails the config load with `INVALID_CONFIG`.
    */
   get(name: string): Secret;
 }

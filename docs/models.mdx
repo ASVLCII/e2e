@@ -116,7 +116,9 @@ npx e2e run
 The token is a valid `VERCEL_OIDC_TOKEN`, otherwise one minted for the
 project in `.vercel/project.json`, found by walking up from the working
 directory. e2e loads no `.env` files, so a token pulled with
-`npx vercel env pull` reaches the gateway only when your shell exports it.
+`npx vercel env pull` reaches the gateway only when your shell exports it or
+the config loads the file with
+[`process.loadEnvFile()`](/reference/config#loading).
 
 An OIDC failure is the same `MODEL_PROVIDER_FAILED` as a bad key, and the AI
 SDK's message names only `AI_GATEWAY_API_KEY`. With no key set, check that the

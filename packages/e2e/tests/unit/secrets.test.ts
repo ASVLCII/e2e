@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { credentials, holdSecretRegistry, secrets, setSecretRegistry, type SecretRegistry } from '../../src/secrets.ts';
+import { credentials, holdSecretRegistry, isSecret, secrets, setSecretRegistry, type SecretRegistry } from '../../src/secrets.ts';
 import { ConfigurationError } from '../../src/internal/errors.ts';
 import type { ResolvedCredential, ResolvedSecret } from '../../src/config/resolve.ts';
 
@@ -68,8 +68,7 @@ describe('credentials.user', () => {
 });
 
 describe('secrets.get', () => {
-  it('throws SECRET_UNAVAILABLE outside a runner and for an unconfigured name', () => {
-    expect(() => secrets.get('api-key')).toThrow(expect.objectContaining({ code: 'SECRET_UNAVAILABLE' }));
+  it('throws SECRET_UNAVAILABLE for a name the running config does not declare', () => {
     setSecretRegistry(registry([], [apiKey]));
     expect(() => secrets.get('missing')).toThrow(expect.objectContaining({ code: 'SECRET_UNAVAILABLE' }));
     expect(() => secrets.get('missing')).toThrow(/E2E_SECRET_MISSING/);
@@ -86,6 +85,20 @@ describe('secrets.get', () => {
   it('hands out a credential password by its name with the password purpose', () => {
     setSecretRegistry(registry([admin], [adminPassword]));
     expect(secrets.get('admin').purpose).toBe('password');
+  });
+
+  it('returns a reference by name before any run exists, for the config to hand an engine', () => {
+    const deferred = secrets.get('admin');
+    const unknown = secrets.get('not-declared-yet');
+    expect(isSecret(deferred)).toBe(true);
+    expect(Object.isFrozen(deferred)).toBe(true);
+    expect(deferred.name).toBe('admin');
+    expect(deferred.purpose).toBe('generic-secret');
+    expect(unknown.name).toBe('not-declared-yet');
+    // Only the resolved config knows the name is a credential's password.
+    setSecretRegistry(registry([admin], [adminPassword]));
+    expect(deferred.purpose).toBe('password');
+    expect(JSON.stringify(deferred)).not.toContain('super-secret-password');
   });
 });
 

@@ -6,6 +6,7 @@ import type { Page } from 'playwright';
 import type { EngineFixtureContext } from 'e2e/engine';
 import { PlaywrightSurface } from '../../src/surface.ts';
 import { createWebFixture, type Web } from '../../src/web.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 describe('web.evaluate error boundaries', () => {
   const surface = new PlaywrightSurface({});
@@ -20,7 +21,7 @@ describe('web.evaluate error boundaries', () => {
   });
 
   beforeEach(async () => {
-    await surface.startAttempt({ attemptId: 'evaluate', artifactsDir, signal });
+    await surface.startAttempt({ attemptId: 'evaluate', artifactsDir, signal, resolveSecret: noSecrets });
     page = await surface.ensurePage();
     web = createWebFixture(surface, {
       operation: () => ({ signal, timeoutMs: 1_000, runId: 'evaluate', attemptId: 'evaluate', origin: 'test' }),

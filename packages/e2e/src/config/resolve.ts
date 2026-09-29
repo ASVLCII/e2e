@@ -293,6 +293,7 @@ export function resolveConfig(
 
   const projectId = resolveProjectId(raw.projectId, options.projectRoot);
   const { credentials, secrets } = resolveSecrets(raw, env);
+  checkEngineSecrets(targets, secrets);
   // Limits first: the agent context budget is a limits key, and the resolved
   // observation budget is agent-owned, so the dependency runs one way.
   const baseLimits = resolveLimits(raw);
@@ -810,6 +811,23 @@ function resolveSecrets(
     secrets.set(name, { name, purpose: 'generic-secret', value });
   }
   return { credentials, secrets };
+}
+
+/**
+ * Every secret an engine's options hold (a `secrets.get()` the config
+ * evaluated before any run existed) names a configured secret, so a typo
+ * fails the config load instead of the first attempt that resolves it.
+ */
+function checkEngineSecrets(targets: readonly ResolvedTarget[], secrets: ReadonlyMap<string, ResolvedSecret>): void {
+  for (const target of targets) {
+    for (const secret of target.engine?.secrets ?? []) {
+      if (secrets.has(secret.name)) continue;
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `target "${target.name}" engine ${target.engine!.name} uses secrets.get(${JSON.stringify(secret.name)}), which is not configured; add it to config.secrets or config.credentials${didYouMean(secret.name, [...secrets.keys()])}`,
+      );
+    }
+  }
 }
 
 /**

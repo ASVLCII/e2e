@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { isCiMode, resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine, type EngineAppDeclaration } from '../../src/engine/index.ts';
+import { secrets } from '../../src/secrets.ts';
 import type { E2EConfig, Target } from '../../src/types.ts';
 import { snapshot } from '../helpers/snapshot.ts';
 
@@ -432,6 +433,27 @@ describe('resolveConfig', () => {
     expect(() => resolve({ retries: -1 })).toThrow(/retries/);
     expect(() => resolve({ timeout: 0 })).toThrow(/timeout/);
     expect(() => resolve({ workers: 0 })).toThrow(/workers/);
+  });
+
+  it('checks every secret an engine option holds against the configured secrets and credentials', () => {
+    const engine = (name: string) =>
+      defineEngine({ name: 'fake', version: '1.0.0', spiVersion: 1, observe: async () => snapshot([]), secrets: [secrets.get(name)] });
+    const declared = { secrets: { stagingPassword: 'staging-pass' }, credentials: { admin: { username: 'admin', password: 'admin-pass' } } };
+    expect(() => resolve({ ...declared, targets: [{ ...WEB, engine: engine('stagingPassword') }] })).not.toThrow();
+    expect(() => resolve({ ...declared, targets: [{ ...WEB, engine: engine('admin') }] })).not.toThrow();
+    expect(() => resolve({ ...declared, targets: [{ ...WEB, engine: engine('stagingPasword') }] })).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_CONFIG',
+        message:
+          'target "web" engine fake uses secrets.get("stagingPasword"), which is not configured; add it to config.secrets or config.credentials; did you mean "stagingPassword"?',
+      }),
+    );
+  });
+
+  it('keeps an engine option\'s secret out of the config digest', () => {
+    const engine = defineEngine({ name: 'fake', version: '1.0.0', spiVersion: 1, observe: async () => snapshot([]), secrets: [secrets.get('key')] });
+    const digest = (value: string) => resolve({ secrets: { key: value }, targets: [{ ...WEB, engine }] }).configDigest;
+    expect(digest('first-value')).toBe(digest('second-value'));
   });
 
   it('resolves E2E_USER_* environment credentials over config values', () => {

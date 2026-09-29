@@ -22,6 +22,7 @@ import type {
 import { web, surfaceOf } from '../../src/index.ts';
 import { startFixtureApp, type FixtureApp } from '../helpers/fixture-app.ts';
 import { decodePng } from '../helpers/png.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 /** The segments as files: a local recording never links, so a link here is a failure. */
 function videoFiles(segments: readonly VideoSegment[]): VideoFile[] {
@@ -40,7 +41,7 @@ function operation(attemptId: string, signal = new AbortController().signal): Op
 }
 
 function attempt(attemptId: string, artifactsDir: string) {
-  return { attemptId, artifactsDir, signal: new AbortController().signal };
+  return { attemptId, artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets };
 }
 
 function byRole(role: string): LocatorExpression {
@@ -133,7 +134,7 @@ async function openAttempt(
   artifactsDir: string,
   attemptId: string,
 ): Promise<string> {
-  await engine.startAttempt!({ attemptId, artifactsDir, signal: new AbortController().signal });
+  await engine.startAttempt!({ attemptId, artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
   await engine.session!.open!(`${app.url}/`, operation(attemptId));
   const nodes = await engine.locate!(
     { kind: 'query', query: { kind: 'role', value: { kind: 'string', value: 'heading', exact: true } } },
@@ -207,7 +208,7 @@ describe('web engine lifecycle', () => {
     const engine = web();
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'd1', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'd1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await engine.session!.open!(`${app.url}/form`, operation('d1'));
 
       const snapshot = await engine.observe!(operation('d1'));
@@ -246,7 +247,7 @@ describe('web engine lifecycle', () => {
     const engine = web();
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'pointer1', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'pointer1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       const op = () => operation('pointer1');
       await engine.session!.open!(`${app.url}/pointer`, op());
 
@@ -315,7 +316,7 @@ describe('web engine lifecycle', () => {
     const engine = web();
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'attributes1', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'attributes1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await engine.session!.open!(`${app.url}/`, operation('attributes1'));
 
       const snapshot = await engine.observe!(operation('attributes1'));
@@ -353,7 +354,7 @@ describe('web engine lifecycle', () => {
     const names = (nodes: readonly SemanticNode[]) => nodes.map((node) => node.name);
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'dv1', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'dv1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await engine.session!.open!(`${app.url}/values`, operation('dv1'));
 
       // Positions are relative to the value-filtered matches, not to every
@@ -459,7 +460,7 @@ describe('web engine lifecycle', () => {
     });
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'v1', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'v1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await engine.session!.open!(`${app.url}/twins`, operation('v1'));
 
       const twins: Array<[Parameters<typeof query>[0], string]> = [
@@ -555,7 +556,7 @@ describe('web engine lifecycle', () => {
     const ariaHidden = (nodes: readonly SemanticNode[]) => nodes.map((node) => node.attributes?.['aria-hidden']);
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'v2', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'v2', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await engine.session!.open!(`${app.url}/twins`, operation('v2'));
       const locate = (expression: LocatorExpression) => engine.locate!(expression, operation('v2'));
 
@@ -605,7 +606,7 @@ describe('web engine lifecycle', () => {
     const hidden = (nodes: readonly SemanticNode[]) => nodes.map((node) => node.states?.hidden);
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'dv2', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'dv2', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await engine.session!.open!(`${app.url}/twins`, operation('dv2'));
       const locate = (expression: LocatorExpression) => engine.locate!(expression, operation('dv2'));
 
@@ -646,7 +647,7 @@ describe('web engine lifecycle', () => {
     const engine = web();
     try {
       await boot(engine, app);
-      await engine.startAttempt!({ attemptId: 'c1', artifactsDir, signal: new AbortController().signal });
+      await engine.startAttempt!({ attemptId: 'c1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
       await expect(engine.observe!(operation('c1'))).rejects.toMatchObject({ code: 'INVALID_STATE' });
     } finally {
       await engine.endAttempt!(cleanup());

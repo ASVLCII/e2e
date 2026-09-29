@@ -10,6 +10,7 @@ import type { BrowserContext, Page } from 'playwright';
 import {
   ConfigurationError,
   defineEngine,
+  isSecret,
   LOCATOR_ACTION_KINDS,
   POINTER_ACTION_KINDS,
   obj,
@@ -116,6 +117,7 @@ export function web(options: WebOptions = {}): EngineHandle {
       press: (key, operation) => surface.pressKey(key, operation),
     },
     app: declaredApp(options),
+    ...(isSecret(options.basicAuth?.password) ? { secrets: [options.basicAuth.password] } : {}),
     session: {
       open: (url, operation) => surface.open(url, operation),
       back: (operation) => surface.back(operation),
@@ -198,8 +200,8 @@ function validateBasicAuth(basicAuth: unknown): void {
   if (username.includes(':')) {
     throw new ConfigurationError('INVALID_CONFIG', 'web({ basicAuth }) username must not contain ":"');
   }
-  if (typeof password !== 'string') {
-    throw new ConfigurationError('INVALID_CONFIG', 'web({ basicAuth }) requires a password string');
+  if (typeof password !== 'string' && !isSecret(password)) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ basicAuth }) requires a password string or secrets.get(name)');
   }
 }
 

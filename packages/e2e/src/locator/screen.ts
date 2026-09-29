@@ -4,7 +4,8 @@ import nodePath from 'node:path';
 import { describeValue } from '../config/validate.ts';
 import { isKeyModifier, KEY_MODIFIERS, type KeyModifier } from '../engine/contract.ts';
 import type { LocatorAction, LocatorExpression, SemanticNode } from '../engine/surface.ts';
-import { locatorBrand, secretBrand } from '../internal/brands.ts';
+import { locatorBrand } from '../internal/brands.ts';
+import { isSecret } from '../secrets.ts';
 import { asEngineError, TestError } from '../internal/errors.ts';
 import { requireFinitePoint } from '../internal/geometry.ts';
 import { isPlainObject, rejectUnknownOptions } from '../internal/options.ts';
@@ -58,14 +59,6 @@ export interface ScreenContext {
   readonly secrets: SecretResolver;
   /** Base directory for resolving relative file paths, e.g. uploads. */
   readonly projectRoot?: string;
-}
-
-export function isSecret(value: unknown): value is Secret {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<PropertyKey, unknown>)[secretBrand] === true
-  );
 }
 
 /** Internal accessor used by expect() to reach a locator's expression/engine. */

@@ -52,6 +52,17 @@ only directories that could match, never enters one an exclusion takes whole,
 skips `node_modules`, and ignores symlinks. A dot directory is included only
 when a glob segment explicitly starts with a dot.
 
+e2e loads no `.env` file itself. Load one at the top of `e2e.config.ts` with
+Node's `process.loadEnvFile()`; every worker imports the config again, so the
+variables reach the workers too:
+
+```ts title="e2e.config.ts"
+process.loadEnvFile('.env');
+```
+
+It throws when the file is missing; guard it with `existsSync` from
+`node:fs` when only some machines have one.
+
 Config and test files run as ESM whatever the nearest `package.json` `type`
 says, and so does the TypeScript they import: a helper by path, or a
 workspace package that exports its `.ts` source by name. An installed package
@@ -672,6 +683,16 @@ no plaintext accessor and is accepted only by `locator.fill` and `agent.act`
 params; the runner fills the field, masks the value in every observation, and
 redacts it from logs, traces, and the report. An unconfigured name throws
 `SECRET_UNAVAILABLE`.
+
+Called while `e2e.config.ts` evaluates, before any run exists, `secrets.get(name)`
+returns a reference by name that an engine option can hold, such as
+`web({ basicAuth: { username, password: secrets.get('previewPassword') } })`.
+The engine declares it, the config load fails with `INVALID_CONFIG` when no
+`secrets` entry or credential has the name, and the engine resolves the value
+when each attempt starts (a provider runs again every time). The value joins
+the attempt's redaction then, without the screenshot restrictions a fill
+brings, since it goes to the engine rather than onto the page. The digest
+records the name only.
 
 ```ts
 /**

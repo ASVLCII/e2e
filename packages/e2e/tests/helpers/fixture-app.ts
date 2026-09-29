@@ -46,7 +46,7 @@ const PATTERNS: readonly { readonly pattern: RegExp; readonly render: (match: Re
 
 type Responder = (request: IncomingMessage, response: ServerResponse, state: FixtureState) => void;
 
-/** Everything that is not a page: the todo API, a download, a JSON endpoint, and a request that never answers. */
+/** Everything that is not a page: the todo API, a download, a JSON endpoint, a basic-auth echo, and a request that never answers. */
 const RESPONDERS: Record<string, Responder> = {
   '/api/todos': (request, response, state) => {
     if (request.method !== 'POST') {
@@ -76,6 +76,22 @@ const RESPONDERS: Record<string, Responder> = {
       'content-disposition': 'attachment; filename="export.csv"',
     });
     response.end(`id,key\n1,${value}\n`);
+  },
+  // Basic auth that takes any account and echoes its password, so a suite can
+  // prove the value the engine sent is redacted wherever the page shows it.
+  '/basic-auth': (request, response) => {
+    const [scheme, encoded] = (request.headers.authorization ?? '').split(' ');
+    if (scheme !== 'Basic' || encoded === undefined) {
+      response.writeHead(401, { 'www-authenticate': 'Basic realm="fixture"', 'content-type': 'text/plain' });
+      response.end('unauthorized');
+      return;
+    }
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const separator = decoded.indexOf(':');
+    html(
+      response,
+      `<!doctype html><title>Basic auth</title><h1>Signed in as ${decoded.slice(0, separator)}</h1><p data-testid="echo">${decoded.slice(separator + 1)}</p>`,
+    );
   },
   '/api/flags': (_request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });

@@ -72,6 +72,32 @@ function makeSecret(name: string, purpose: SecretPurpose): Secret {
   return Object.freeze({ name, purpose, [secretBrand]: true as const });
 }
 
+/**
+ * The handle `secrets.get()` returns before any run installed a registry: at
+ * config evaluation, where an engine option holds it until the engine
+ * resolves it during an attempt. Only the resolved config knows whether the
+ * name is a credential's password, so the purpose is read from the run's
+ * registry when asked; the config load checks the name.
+ */
+function deferredSecret(name: string): Secret {
+  return Object.freeze({
+    name,
+    get purpose(): SecretPurpose {
+      return registrySlot.get(globalThis)?.secrets.get(name)?.purpose ?? 'generic-secret';
+    },
+    [secretBrand]: true as const,
+  });
+}
+
+/** Whether a value is a `Secret` handle, from this module instance or another realm's. */
+export function isSecret(value: unknown): value is Secret {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<PropertyKey, unknown>)[secretBrand] === true
+  );
+}
+
 export const credentials: Credentials = {
   user(name: string): Credential {
     const registry = requireRegistry('credentials.user()', 'AUTH_CREDENTIAL_UNAVAILABLE');
@@ -93,7 +119,8 @@ export const credentials: Credentials = {
 
 export const secrets: Secrets = {
   get(name: string): Secret {
-    const registry = requireRegistry('secrets.get()', 'SECRET_UNAVAILABLE');
+    const registry = registrySlot.get(globalThis);
+    if (registry === undefined) return deferredSecret(name);
     const resolved = registry.secrets.get(name);
     if (resolved === undefined) {
       throw new ConfigurationError(

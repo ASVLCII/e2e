@@ -22,6 +22,7 @@ import type {
   OperationContext,
   PointerAction,
   PointerActionKind,
+  Secret,
   SemanticNode,
   ViewportPoint,
 } from '../../src/engine/index.ts';
@@ -143,6 +144,8 @@ export interface FakeEngineBehavior {
   fixtures?: boolean;
   /** What the engine declares about its app; defaults to `FAKE_APP_URL`, which every observation reports as its location. */
   app?: EngineAppDeclaration;
+  /** The secrets the engine declares, which `onStartAttempt` may resolve through its context. */
+  secrets?: readonly Secret[];
 }
 
 /** The app URL the fake serves and declares by default. */
@@ -282,6 +285,7 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
     },
     actions: behavior.actions ?? LOCATOR_ACTION_KINDS.filter((kind) => kind !== 'swipe'),
     app: behavior.app ?? { url: FAKE_APP_URL },
+    ...(behavior.secrets === undefined ? {} : { secrets: behavior.secrets }),
     session: {
       async open(url, operation) {
         record(`session.open(${url})`, operation);

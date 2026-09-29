@@ -1,4 +1,5 @@
 /** Compile-time assertions for endpoint provisioning, transport recovery, and the browser provider seam. */
+import { secrets } from 'e2e';
 import type { BrowserLease, BrowserProvider, WebConnectOptions, WebOptions } from '../../src/index.ts';
 
 ({ cdpEndpoint: () => 'ws://localhost:9222', reconnectEndpoint: async (signal) => {
@@ -26,6 +27,10 @@ import type { BrowserLease, BrowserProvider, WebConnectOptions, WebOptions } fro
 ({ headers: { 'x-vercel-protection-bypass': 'token' }, basicAuth: { username: 'preview', password: 'secret' }, viewport: { width: 390, height: 844 }, testIdAttribute: 'data-qa', userAgent: 'Mozilla/5.0 playwright' }) satisfies WebOptions;
 // @ts-expect-error basic auth is a username and a password; one without the other is no credential.
 ({ basicAuth: { username: 'preview' } }) satisfies WebOptions;
+// A configured secret keeps the password out of the config file.
+({ basicAuth: { username: 'preview', password: secrets.get('previewPassword') } }) satisfies WebOptions;
+// @ts-expect-error a password is a string or a secrets.get() handle.
+({ basicAuth: { username: 'preview', password: 42 } }) satisfies WebOptions;
 // @ts-expect-error a header value is a string; nothing else is sent.
 ({ headers: { 'x-vercel-protection-bypass': 1 } }) satisfies WebOptions;
 // @ts-expect-error a viewport is a width and a height.

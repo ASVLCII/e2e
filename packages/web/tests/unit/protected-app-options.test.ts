@@ -1,11 +1,12 @@
 /**
- * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `video` options are checked at
+ * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `screencast` options are checked at
  * config load, so a header the browser could never send or an attribute no
  * element could carry fails the run before a browser launches. What the
  * browser does with valid ones is in tests/integration.
  */
 
 import { describe, expect, it } from 'vitest';
+import { secrets } from 'e2e';
 import { web } from '../../src/index.ts';
 
 describe('web({ headers })', () => {
@@ -42,6 +43,13 @@ describe('web({ headers })', () => {
 describe('web({ basicAuth })', () => {
   it('accepts a username and password', () => {
     expect(() => web({ basicAuth: { username: 'ada', password: '' } })).not.toThrow();
+    expect(web({ basicAuth: { username: 'ada', password: 'plain' } }).secrets).toBeUndefined();
+  });
+
+  it('declares a secrets.get() password as the engine secret it resolves per attempt', () => {
+    const password = secrets.get('stagingPassword');
+    const engine = web({ basicAuth: { username: 'ada', password } });
+    expect(engine.secrets?.map((secret) => secret.name)).toEqual(['stagingPassword']);
   });
 
   it('rejects credentials that are not a plain object, null included', () => {
@@ -57,7 +65,10 @@ describe('web({ basicAuth })', () => {
     expect(() => web({ basicAuth: { username: 'ada:x', password: 'x' } })).toThrowError(/":"/);
     expect(() =>
       web({ basicAuth: { username: 'ada', password: undefined as unknown as string } }),
-    ).toThrowError(/password string/);
+    ).toThrowError(/password string or secrets\.get\(name\)/);
+    expect(() =>
+      web({ basicAuth: { username: 'ada', password: { name: 'stagingPassword' } as unknown as string } }),
+    ).toThrowError(/password string or secrets\.get\(name\)/);
   });
 });
 

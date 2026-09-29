@@ -45,7 +45,7 @@ export type {
 export { Deadline, pollCondition, withTimeout, withinCleanupBudget, type PollConditionOptions } from '../internal/time.ts';
 export { sameSite, siteOf, urlMatches } from '../internal/urls.ts';
 export { obj, type WithoutUndefined } from '../internal/objects.ts';
-import type { CommandConfig, Expectable, Locator, Screen, ServiceConfig } from '../types.ts';
+import type { CommandConfig, Expectable, Locator, Screen, Secret, ServiceConfig } from '../types.ts';
 import type {
   EngineSpiVersion,
   LocatorAction,
@@ -75,7 +75,8 @@ export {
   RETRYABLE_ENGINE_ERROR_CODES,
   parseKey,
 } from './contract.ts';
-export type { CommandConfig, ServiceConfig, Expectable, JsonValue, Locator, Screen } from '../types.ts';
+export type { CommandConfig, ServiceConfig, Expectable, JsonValue, Locator, Screen, Secret } from '../types.ts';
+export { isSecret } from '../secrets.ts';
 
 /**
  * Capability names: the closed harness capabilities plus one name per
@@ -530,6 +531,15 @@ export interface EngineAttemptContext {
   /** Absolute directory every artifact of this attempt is written under. */
   readonly artifactsDir: string;
   /**
+   * The plaintext of a secret the engine declared in `secrets`, for an
+   * option the engine hands the app itself (basic-auth credentials). A
+   * provider runs again on every call. The value joins the attempt's
+   * redaction before this resolves, so reports, logs, and every observation
+   * redact it; unlike a fill, it does not taint the viewport.
+   * A secret the engine did not declare is `SECRET_UNAVAILABLE`.
+   */
+  readonly resolveSecret: (secret: Secret) => Promise<string>;
+  /**
    * Aborts with the attempt, and the moment `startAttempt` fails or exceeds
    * the launch timeout: a hook still running then must stop, because the
    * harness ends the attempt's isolation right behind it and may retry.
@@ -634,6 +644,14 @@ export interface Engine {
    * targets without being over-subscribed. Omit when there is no such bound.
    */
   readonly workers?: number;
+  /**
+   * The `secrets.get()` handles the engine's options hold, such as a
+   * basic-auth password. The config load checks each names a configured
+   * secret (`INVALID_CONFIG` otherwise), and only these resolve through
+   * `EngineAttemptContext.resolveSecret`. The handles carry names only, so
+   * no value reaches the config digest.
+   */
+  readonly secrets?: readonly Secret[];
   /** capability: observation. */
   observe?(context: OperationContext, options?: EngineObserveOptions): Promise<EngineSnapshot>;
   /**

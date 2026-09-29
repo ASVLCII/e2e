@@ -7,7 +7,7 @@
 import { ConfigurationError, TestError } from '../internal/errors.ts';
 import { validateJsonValue } from '../internal/json-value.ts';
 import { paramPointer, type ParamTemplate } from '../cache/template.ts';
-import { isSecret } from '../locator/screen.ts';
+import { isSecret } from '../secrets.ts';
 import { isUnique } from '../params.ts';
 import type { ActOptions, AgentErrorCode, AgentParams, JsonValue, Secret } from '../types.ts';
 import { AgentError, CATEGORY_BY_CODE } from './error.ts';

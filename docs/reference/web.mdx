@@ -102,6 +102,8 @@ browsers and releases them when the run or the attempt ends; see
 [Hosted browsers](/browser#hosted-browsers) for the `BrowserProvider`
 contract and an example provider. `browser: provider` together with
 `connect` is `INVALID_CONFIG`. `:` is not allowed in the `basicAuth` user name.
+The `basicAuth` password is a string or `secrets.get(name)`: a secret the
+engine resolves when each attempt starts, redacted like any configured one.
 
 `headers` and `basicAuth` are how a test reaches a [protected preview](/starting-your-app#protected-previews).
 
