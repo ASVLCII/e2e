@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "trace-1",
+  "createdAt": "2026-09-29T15:56:07.211Z",
+  "payload": {
+    "actions": [
+      {
+        "name": "tap",
+        "summary": "tap other \"Buy with Apple Pay\"",
+        "target": {
+          "role": "other",
+          "name": "Buy with Apple Pay",
+          "testId": "apple-pay-button",
+          "selector": "id=apple-pay-button"
+        }
+      },
+      {
+        "name": "tap",
+        "summary": "tap button \"Simulated Card - Visa, ‪•••• 1234‬, Add…\"",
+        "target": {
+          "role": "button",
+          "name": "Simulated Card - Visa, ‪•••• 1234‬, Add Billing Address",
+          "testId": "pass",
+          "selector": "id=pass"
+        }
+      },
+      {
+        "name": "tap",
+        "summary": "tap button \"Add Billing Address\"",
+        "target": {
+          "role": "button",
+          "name": "Add Billing Address",
+          "testId": "billing-address",
+          "selector": "id=billing-address"
+        }
+      },
+      {
+        "name": "tool",
+        "summary": "tool type (run-time value)",
+        "derived": "pixels"
+      },
+      {
+        "name": "tool",
+        "summary": "tool type (run-time value)",
+        "derived": "pixels"
+      },
+      {
+        "name": "tool",
+        "summary": "tool type (run-time value)",
+        "derived": "pixels"
+      },
+      {
+        "name": "press",
+        "summary": "press \"Enter\" on button \"return\"",
+        "target": {
+          "role": "button",
+          "name": "return",
+          "testId": "Return",
+          "selector": "id=Return"
+        },
+        "key": "Enter"
+      },
+      {
+        "name": "tool",
+        "summary": "tool type (run-time value)",
+        "derived": "pixels"
+      },
+      {
+        "name": "tool",
+        "summary": "tool type (run-time value)",
+        "derived": "pixels"
+      },
+      {
+        "name": "tool",
+        "summary": "tool type (run-time value)",
+        "derived": "pixels"
+      },
+      {
+        "name": "tap",
+        "summary": "tap button \"Done\"",
+        "target": {
+          "role": "button",
+          "name": "Done",
+          "testId": "next",
+          "selector": "id=next"
+        }
+      },
+      {
+        "name": "tap",
+        "summary": "tap button \"Done\"",
+        "target": {
+          "role": "button",
+          "name": "Done",
+          "testId": "dismiss",
+          "selector": "id=dismiss"
+        }
+      },
+      {
+        "name": "tap",
+        "summary": "tap button \"Pay with Passcode\"",
+        "target": {
+          "role": "button",
+          "name": "Pay with Passcode",
+          "testId": "footer",
+          "selector": "id=footer"
+        }
+      }
+    ],
+    "executor": {
+      "name": "e2e-default-agent",
+      "version": "2"
+    },
+    "recordedFor": {
+      "testId": "tests-agent/scenarios.e2e.ts::act%20completes%20Apple%20Pay%20Billing%20Address",
+      "targetId": "ios-simulator",
+      "instructionDigest": "bdc2a58d2726e93ed533d5388d2ac639914cbfa62317aebc063aebace72496ff"
+    },
+    "summary": "Completed the Apple Pay payment after entering the billing address (Alex Tester, 1 Infinite Loop, Cupertino, CA 95014). The app confirms “Payment complete: $8.99” and displays billing ZIP 95014.",
+    "startPath": "dev.e2e.benchmark / Benchmark Examples",
+    "endPath": "dev.e2e.benchmark / Apple Pay Billing Address",
+    "endAnchors": [
+      {
+        "role": "text",
+        "name": "Payment complete: $8.99",
+        "testId": "success-message"
+      },
+      {
+        "role": "text",
+        "name": "Billing ZIP: 95014",
+        "testId": "billing-zip"
+      },
+      {
+        "role": "navigation",
+        "testId": "Apple Pay Billing Address"
+      }
+    ],
+    "endWaitMs": 17163
+  }
+}

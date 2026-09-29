@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "trace-1",
+  "createdAt": "2026-09-29T15:49:52.486Z",
+  "payload": {
+    "actions": [
+      {
+        "name": "tap",
+        "summary": "tap other \"Enable microphone\"",
+        "target": {
+          "role": "other",
+          "name": "Enable microphone",
+          "testId": "request-permission",
+          "selector": "id=request-permission"
+        }
+      },
+      {
+        "name": "tap",
+        "summary": "tap button \"Allow\"",
+        "target": {
+          "role": "button",
+          "name": "Allow"
+        }
+      }
+    ],
+    "executor": {
+      "name": "e2e-default-agent",
+      "version": "2"
+    },
+    "recordedFor": {
+      "testId": "tests-agent/scenarios.e2e.ts::act%20completes%20Permission%20Prompt",
+      "targetId": "ios-simulator",
+      "instructionDigest": "b0942b32f51f5f05d38db2a1978624dad1187acfb8aca674dbbb09cc9c29ac87"
+    },
+    "summary": "Tapped Enable microphone, then allowed microphone access in the system dialog. The screen now shows “Microphone enabled.”",
+    "startPath": "dev.e2e.benchmark / Benchmark Examples",
+    "endPath": "dev.e2e.benchmark / Benchmark Examples",
+    "endAnchors": [
+      {
+        "role": "text",
+        "name": "Microphone enabled",
+        "testId": "success-message"
+      },
+      {
+        "role": "other",
+        "name": "Microphone enabled"
+      }
+    ],
+    "endWaitMs": 12004
+  }
+}
