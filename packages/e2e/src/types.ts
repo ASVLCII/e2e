@@ -181,7 +181,7 @@ export interface ActOptions extends AgentOption {
   /**
    * JSON-safe values the instruction refers to, at most 64 KiB and 32 levels
    * deep. A `Secret` reaches the model by name only; the runner fills it. A
-   * value wrapped in `unique()` is different on every run, and the trace
+   * value wrapped in `unique()` is different on every run, and the replay
    * cache records a slot for it instead of the value.
    */
   params?: AgentParams;

@@ -27,7 +27,7 @@ Two kinds of input exist here, and the line between them is the whole model.
 
 **Code-trust.** Everything you run has your OS authority, with no sandbox in
 between: test files, `e2e.config.ts`, custom tools, engines, and any
-`command`, `services`, or `cache.store` you configure. A trace cache committed
+`command`, `services`, or `cache.store` you configure. A replay cache committed
 to the repository is code-trust as well: the runner replays recorded actions
 from it without asking the model, so a bad entry is a bad test, not a
 compromise of the runner. If the code came from an untrusted pull request, run

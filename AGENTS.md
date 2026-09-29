@@ -345,7 +345,7 @@ trees, on both platforms, without a device.
   locate cache are both gone, for example). Verify against `src/` before
   repeating or relying on any "not implemented yet" list — and fix the prose
   when you find it stale.
-- Committed recordings. The two benchmarks commit their agentic suites' trace
+- Committed recordings. The two benchmarks commit their agentic suites' replay
   cache (`apps/web-benchmark/.e2e/cache/`,
   `apps/mobile-benchmark/.e2e/cache/`; their `.gitignore`s leave it
   tracked, the testbed's ignores its own, since fixture-app recordings are

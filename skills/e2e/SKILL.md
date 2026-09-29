@@ -136,4 +136,5 @@ one. Without them, the installed CLI prints the same text:
   fails, tighten the goal first, then the context, then the agent. Topic
   `agent` has the loop.
 - `.e2e/` is output (`report.json`, `artifacts/`, `cache/`, `logs/`; the
-  config's `output` moves all but `cache/`). Read it, never edit it.
+  config's `output` moves the report and artifacts, never `cache/` or the
+  app's log). Read it, never edit it.

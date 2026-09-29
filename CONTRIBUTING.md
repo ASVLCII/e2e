@@ -194,7 +194,7 @@ breaking change and follows the rules below:
 - Config keys in `e2e.config.ts`, their types, and their defaults.
 - CLI commands, flags, exit codes, and environment variables (`E2E_*`).
 - Wire formats: the report, session, and agent protocol schemas in
-  `packages/e2e/schema/`, and the trace cache layout under `.e2e/cache/`.
+  `packages/e2e/schema/`, and the replay cache layout under `.e2e/cache/`.
   Adding an optional field is compatible; renaming, removing, or changing the
   meaning of one is not.
 

@@ -319,7 +319,7 @@ npx e2e run --reporter list,junit
 | Reporter | Writes |
 | --- | --- |
 | `list` | Terminal progress, failures with code frames, and a run summary. On a TTY, live progress includes the current agent step, model turns, tool calls, and reasoning excerpts. Untrusted fields are capped at 8 KiB and stripped of control characters. |
-| `json` | The report document to stdout and nothing else there, so `e2e run --reporter json \| jq` works. Same document as `.e2e/report.json`, described by `schema/report-v1.schema.json` in the package. The shape changes only with the `schemaVersion` field (`report-1` today). Cannot be combined with `list`. |
+| `json` | The report document to stdout and nothing else there, so `e2e run --reporter json \| jq` works. Same document as `<output>/report.json`, described by `schema/report-v1.schema.json` in the package. The shape changes only with the `schemaVersion` field (`report-1` today). Cannot be combined with `list`. |
 | `junit` | `junit.xml` beside the report. One `<testsuite>` per file, one `<testcase>` per test-target pair named `title > path [target]`. A test-class error is a `<failure>`, any other an `<error>`, a skip a `<skipped>` with its reason. Run-level errors form a `run` suite. |
 | `markdown` | `summary.md` beside the report with counts, cost, errors, and failure details. Failed and flaky tests also get a page under `failures/` there, with steps, model turns, and the screen at failure. Exploration runs show findings. [`@e2e-dev/github`](/github) uses this summary for pull request comments. |
 
@@ -328,11 +328,11 @@ Every run writes `report.json` under the [output directory](/reference/config#ou
 beside it. A `junit.xml` or `summary.md` that could not be written is a
 line on stderr, never a run error.
 
-With `--ai-trace`, the run also writes `.e2e/ai-trace.json`: one entry per
+With `--ai-trace`, the run also writes `<output>/ai-trace.json`: one entry per
 model round trip with the exact prompt, tool definitions, response, usage,
 and provider metadata. Observations in it are already redacted. Inline image
 and file bytes are replaced with byte counts. Open it with
-`npx unbox-ai .e2e/ai-trace.json`; see [Debugging a run](/debugging#agent-steps).
+`npx unbox-ai .e2e/ai-trace.json` for the default output; see [Debugging a run](/debugging#agent-steps).
 
 ### Signals
 

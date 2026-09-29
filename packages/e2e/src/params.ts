@@ -2,7 +2,7 @@
  * The run-unique value marker for `agent.act` params. A timestamped company
  * name or a fresh email is different on every run so the record it creates
  * never collides with the last run's; recorded verbatim, it would also defeat
- * the trace cache on every run. `unique()` names such a value: the model sees
+ * the replay cache on every run. `unique()` names such a value: the model sees
  * the string as given, and the cache keys and records a slot in its place
  * (`cache/template.ts`).
  */
@@ -10,7 +10,7 @@
 import { uniqueBrand } from './internal/brands.ts';
 import { TestError } from './internal/errors.ts';
 
-/** A string param that differs on every run; the model sees `value`, the trace cache a slot. */
+/** A string param that differs on every run; the model sees `value`, the replay cache a slot. */
 export interface Unique {
   readonly value: string;
   readonly [uniqueBrand]: true;

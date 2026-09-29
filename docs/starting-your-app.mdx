@@ -200,7 +200,7 @@ engine: web({
 To keep the password out of reports, logs, and what the agent reads, declare
 it under `secrets` and pass `secrets.get(name)`. The engine resolves it when
 each attempt starts, and the runner redacts it like any configured secret; a
-name `secrets` does not declare fails the config load with `INVALID_CONFIG`:
+name that `secrets` does not declare fails the config load with `INVALID_CONFIG`:
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
@@ -216,7 +216,7 @@ export default {
       }),
     },
   ],
-  secrets: { previewPassword: process.env.PREVIEW_PASSWORD ?? '' },
+  secrets: { previewPassword: () => process.env.PREVIEW_PASSWORD ?? '' },
 } satisfies E2EConfig;
 ```
 
