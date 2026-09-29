@@ -67,17 +67,18 @@ export function web(options: WebOptions = {}): EngineHandle {
   if (options.headers !== undefined) validateHeaders(options.headers);
   if (options.basicAuth !== undefined) validateBasicAuth(options.basicAuth);
   if (options.testIdAttribute !== undefined) validateTestIdAttribute(options.testIdAttribute);
+  if (options.userAgent !== undefined) validateUserAgent(options.userAgent, options.headers);
   const reconnecting = options.connect?.reconnectEndpoint !== undefined;
   if (reconnecting && typeof options.connect?.reconnectEndpoint !== 'function') {
     throw new ConfigurationError('INVALID_CONFIG', 'connect.reconnectEndpoint must be a function');
   }
   // A per-attempt lease rides the same persistent context as `reconnectEndpoint`, with the same limits.
   const recoverable = reconnecting || provider?.scope === 'attempt';
-  if (recoverable && (options.headers !== undefined || options.basicAuth !== undefined)) {
+  if (recoverable && (options.headers !== undefined || options.basicAuth !== undefined || options.userAgent !== undefined)) {
     const mode = provider === undefined ? 'connect.reconnectEndpoint' : `browser provider "${provider.name}" with scope "attempt"`;
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      `${mode} uses a persistent context; headers and basicAuth require a newly created context`,
+      `${mode} uses a persistent context; headers, basicAuth, and userAgent require a newly created context`,
     );
   }
   const surface = new PlaywrightSurface(options);
@@ -192,6 +193,23 @@ function validateBasicAuth(basicAuth: unknown): void {
   }
   if (typeof password !== 'string') {
     throw new ConfigurationError('INVALID_CONFIG', 'web({ basicAuth }) requires a password string');
+  }
+}
+
+/**
+ * Refuses a user agent the browser could not send (not a string, empty, or
+ * carrying a control character) and one a `user-agent` header would override
+ * on the app's site while `navigator.userAgent` kept reporting it.
+ */
+function validateUserAgent(userAgent: unknown, headers: Readonly<Record<string, string>> | undefined): void {
+  if (typeof userAgent !== 'string' || userAgent === '') {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ userAgent }) must be a non-empty string');
+  }
+  if (FIELD_VALUE_CONTROL.test(userAgent)) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ userAgent }) must not contain a control character');
+  }
+  if (headers !== undefined && Object.keys(headers).some((name) => name.toLowerCase() === 'user-agent')) {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ userAgent }) and a user-agent header in web({ headers }) conflict; set userAgent only');
   }
 }
 

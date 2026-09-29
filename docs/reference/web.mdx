@@ -67,6 +67,14 @@ export interface WebOptions extends EngineAppDeclaration {
    * Defaults to `data-testid`.
    */
   readonly testIdAttribute?: string;
+  /**
+   * The `User-Agent` every attempt's context sends and `navigator.userAgent`
+   * reports, for an app that switches into a test mode on a marker in the
+   * agent string. Defaults to the browser's own. A `user-agent` entry in
+   * `headers` beside it is `INVALID_CONFIG`, and so is a persistent context
+   * (`connect.reconnectEndpoint`, or a provider with `scope: 'attempt'`).
+   */
+  readonly userAgent?: string;
 }
 ```
 
@@ -137,7 +145,7 @@ recording resume, but a segment lost during the disconnect cannot be recovered.
 Code using `surfaceOf(engine)` must read its accessors again after recovery;
 previously retained Playwright objects belong to the disconnected transport.
 
-Persistent recovery does not support `headers`, `basicAuth`, `app.clearState`,
+Persistent recovery does not support `headers`, `basicAuth`, `userAgent`, `app.clearState`,
 or session state capture and restore. `app.restart` remains available. Omit
 `reconnectEndpoint` to keep ordinary isolated contexts and the existing behavior.
 A `browser` provider with `scope: 'attempt'` rides the same persistent
