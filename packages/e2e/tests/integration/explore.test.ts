@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createAgent, defineTool } from '../../src/agent/public.ts';
 import type { StepExecutor } from '../../src/agent/executor.ts';
 import { explore, type ExploreOptions, type ExploreOutcome } from '../../src/explore/index.ts';
-import { FINDING_TOOL_NAME } from '../../src/explore/executor.ts';
+import { FINDING_TOOL_NAME } from '../../src/explore/finding-tool.ts';
 import type { ModelInstance } from '../../src/types.ts';
 import { installFakeLoopModel, loopCalls, nodeIdFor, type LoopCall, type LoopToolCall } from '../helpers/fake-loop-model.ts';
 import { fakeCalls, installFakeModel, type FakeCall } from '../helpers/fake-model.ts';
@@ -36,7 +36,7 @@ type PlanAnswer = { decision: 'step'; title: string; instruction: string } | { d
  */
 function installExploreModel(options: {
   plan: (call: FakeCall) => PlanAnswer;
-  loop: (call: LoopCall) => readonly LoopToolCall[];
+  loop: (call: LoopCall) => readonly LoopToolCall[] | Promise<readonly LoopToolCall[]>;
 }): ModelInstance {
   const loop = installFakeLoopModel(options.loop) as ModelInstance & { doGenerate: (request: unknown) => Promise<unknown> };
   // Strict providers want every planner field present; the scripts name only the ones they use.
@@ -50,25 +50,28 @@ function installExploreModel(options: {
   } as ModelInstance;
 }
 
-/** The finding the scripted explorer reports on the home page. */
+/**
+ * The finding the scripted explorer reports on the counter page, which holds
+ * still from its first frame, so every report on it records at the first call.
+ */
 const COUNTER_FINDING = {
   title: 'Counter starts at 0 with no label of what it counts',
   kind: 'issue',
   severity: 3,
   expected: 'The counter says what it counts',
   actual: 'output "Counter" reads 0',
-  reproduction: ['Open the home page', 'Look at the counter next to Increment'],
+  reproduction: ['Open the counter page', 'Look at the counter next to Increment'],
 };
 
-/**
- * Whether the newest tool result is a report the runner held back because the
- * screen changed under it. The home page adds a button a beat after it loads,
- * so a report made at once can land on either side of it; a script that means
- * to record reports again, as a model confirming on the new screen would.
- */
-function withheld(call: LoopCall): boolean {
-  return call.lastToolResult.startsWith('Not recorded');
-}
+/** The finding a scripted explorer makes on the saved test's loading state. */
+const EMPTY_FINDING = {
+  title: 'Opening Checkout smoke lands on an empty test page',
+  kind: 'issue',
+  severity: 4,
+  expected: 'The saved test shows its steps',
+  actual: 'The page shows only "Loading test…"',
+  reproduction: ['Open Saved tests', 'Open Checkout smoke'],
+};
 
 async function runExplore(
   project: FixtureProject,
@@ -76,7 +79,7 @@ async function runExplore(
   model: ModelInstance,
   options: Partial<ExploreOptions> & { projectAgent?: StepExecutor | undefined; path?: string | undefined } = {},
 ): Promise<ExploreOutcome> {
-  const { projectAgent, path: start = '', ...rest } = options;
+  const { projectAgent, path: start = '/counter', ...rest } = options;
   const notices: string[] = [];
   const outcome = await explore({
     cwd: project.dir,
@@ -118,7 +121,7 @@ describe('e2e explore', () => {
           : { decision: 'finish', summary: 'Two defects on the home page.' },
       loop: (call) => {
         // Read-only tools run in parallel: both findings pick their evidence name before either is recorded.
-        if (call.turn === 1 || withheld(call)) {
+        if (call.turn === 1) {
           return [
             { toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING },
             { toolName: FINDING_TOOL_NAME, input: SECOND_FINDING },
@@ -128,6 +131,8 @@ describe('e2e explore', () => {
       },
     });
     const outcome = await runExplore(project, app, model);
+    // Both were based on one still screen: both record at the first call.
+    expect(loopCalls[1]!.toolResults.filter((result) => /^Finding [12] recorded/.test(result))).toHaveLength(2);
     const record = outcome.report.run.explore!;
     expect(record.findings.map((finding) => finding.title).toSorted()).toEqual([COUNTER_FINDING.title, SECOND_FINDING.title].toSorted());
     const artifacts = outcome.report.run.results[0]!.attempts[0]!.artifacts;
@@ -166,46 +171,67 @@ describe('e2e explore', () => {
     expect(outcome.explore.findings[0]).toMatchObject({ path: '/about', artifactId: expect.any(String) });
   }, 120_000);
 
-  it('holds back a finding made on a loading screen until the model confirms it on the settled one', async () => {
-    const EMPTY_FINDING = {
-      title: 'Opening Checkout smoke lands on an empty test page',
-      kind: 'issue',
-      severity: 4,
-      expected: 'The saved test shows its steps',
-      actual: 'The page shows only "Loading test…"',
-      reproduction: ['Open Saved tests', 'Open Checkout smoke'],
-    };
-    const SETTLED_FINDING = { ...EMPTY_FINDING, title: 'Checkout smoke lists no step for paying', actual: 'The steps go from Check out to the confirmation', severity: 3 };
+  it('holds back a finding made on a loading screen, answers with the whole new screen, and records the next report at once', async () => {
+    const SETTLED_FINDING = { ...EMPTY_FINDING, title: 'Checkout smoke lists 450 steps', actual: 'The list runs from Step 1 to Step 450', severity: 3 };
     const seen: string[] = [];
     const model = installExploreModel({
       plan: (call) =>
         call.instruction.includes('(none yet')
           ? { decision: 'step', title: 'Saved test', instruction: 'Open Checkout smoke' }
           : { decision: 'finish', summary: 'The saved test opens.' },
-      loop: (call) => {
+      loop: async (call) => {
         seen.push(call.lastToolResult);
         if (call.turn === 1) return [{ toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Checkout smoke"/) } }];
-        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: EMPTY_FINDING }];
+        if (call.turn === 2) {
+          // The test loads only now, after the model has read the fallback and while it reports.
+          await fetch(`${app.url}/api/saved-test/release`);
+          return [{ toolName: FINDING_TOOL_NAME, input: EMPTY_FINDING }];
+        }
         if (call.turn === 3) return [{ toolName: FINDING_TOOL_NAME, input: SETTLED_FINDING }];
         return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Opened the test' } }];
       },
     });
-    const outcome = await runExplore(project, app, model, { path: '/saved-tests' });
-    // The model reported while the fallback was the screen it held.
+    // Past the 400 lines a project tool's answer is cut to, so a cut screen would show.
+    const outcome = await runExplore(project, app, model, { path: '/saved-tests/long' });
     expect(seen[1]).toContain('Loading test…');
-    // The runner looked again, found the test rendered, and recorded nothing: the model got the new screen instead.
-    expect(seen[2]).toMatch(/^Not recorded: the screen changed after revision \S+, the one this finding is based on/);
-    expect(seen[2]).toContain('heading "Checkout smoke"');
-    expect(seen[2]).toContain(`call ${FINDING_TOOL_NAME} again`);
+    const answer = seen[2]!;
+    expect(answer).toMatch(/^Not recorded: the screen changed after revision \S+, the one this finding is based on/);
+    // What to do comes first, then the new screen, whole: the model holds exactly what it was sent.
+    expect(answer.indexOf(`call ${FINDING_TOOL_NAME} again`)).toBeLessThan(answer.indexOf('heading "Checkout smoke"'));
+    expect(answer).toContain('listitem "Step 450"');
+    expect(answer).not.toMatch(/truncated|omitted/i);
+    expect(answer.split('\n').length).toBeGreaterThan(450);
     // The report on the screen already looked at records at once, with evidence from that screen.
     expect(seen[3]).toMatch(/^Finding 1 recorded/);
     const record = outcome.explore;
     expect(record.findings.map((finding) => finding.title)).toEqual([SETTLED_FINDING.title]);
-    const basis = /after revision (\S+),/.exec(seen[2]!)![1];
+    const basis = /after revision (\S+),/.exec(answer)![1];
     expect(record.findings[0]!.observationRevision).not.toBe(basis);
     const artifacts = outcome.report.run.results[0]!.attempts[0]!.artifacts;
     expect(artifacts.find((artifact) => artifact.id === record.findings[0]!.artifactId)?.path).toMatch(/\/finding-1\.png$/);
     assertValidReport(outcome.report);
+  }, 120_000);
+
+  it('records a report batched with an action on its evidence, since the model moved the screen, not the app', async () => {
+    const model = installExploreModel({
+      plan: (call) =>
+        call.instruction.includes('(none yet')
+          ? { decision: 'step', title: 'Counter', instruction: 'Report the counter and tap Increment' }
+          : { decision: 'finish', summary: 'One defect.' },
+      loop: (call) =>
+        call.turn === 1
+          ? [
+              { toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING },
+              { toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Increment"/) } },
+            ]
+          : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Counter went to 1' } }],
+    });
+    const outcome = await runExplore(project, app, model);
+    const results = loopCalls[1]!.toolResults;
+    // The tap landed during the report's wait and changed the counter.
+    expect(results.find((result) => result.startsWith('Tapped'))).toMatch(/changed .*Counter/);
+    expect(results.find((result) => result.startsWith('Finding') || result.startsWith('Not recorded'))).toMatch(/^Finding 1 recorded/);
+    expect(outcome.explore.findings.map((finding) => finding.title)).toEqual([COUNTER_FINDING.title]);
   }, 120_000);
 
   it('plans steps, records the finding with its evidence, and fails the run for the issue', async () => {
@@ -218,7 +244,7 @@ describe('e2e explore', () => {
       },
       loop: (call) => {
         if (call.turn === 1) return [{ toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Increment"/) } }];
-        if (call.turn === 2 || withheld(call)) return [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }];
+        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }];
         return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Counter went to 1' } }];
       },
     });
@@ -244,7 +270,8 @@ describe('e2e explore', () => {
     expect(record.steps[0]).toMatchObject({ index: 1, title: 'Counter', status: 'passed', summary: 'Counter went to 1' });
     expect(record.findings).toHaveLength(1);
     const finding = record.findings[0]!;
-    expect(finding).toMatchObject({ step: 1, kind: 'issue', severity: 3, title: COUNTER_FINDING.title, path: '/' });
+    expect(loopCalls[2]!.lastToolResult).toMatch(/^Finding 1 recorded/);
+    expect(finding).toMatchObject({ step: 1, kind: 'issue', severity: 3, title: COUNTER_FINDING.title, path: '/counter' });
     expect(finding.observationRevision).toBeDefined();
 
     // The one result is the exploration, under the virtual file, failed by the issue.
@@ -284,7 +311,7 @@ describe('e2e explore', () => {
       loop: (call) => {
         seen.push([...call.toolNames]);
         if (call.turn === 1) return [{ toolName: 'ping', input: {} }];
-        if (call.turn === 2 || withheld(call)) return [{ toolName: FINDING_TOOL_NAME, input: { ...COUNTER_FINDING, kind: 'warning', severity: 1 } }];
+        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: { ...COUNTER_FINDING, kind: 'warning', severity: 1 } }];
         return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Menu toggles' } }];
       },
     });

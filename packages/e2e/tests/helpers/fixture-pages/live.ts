@@ -2,6 +2,42 @@
 
 import { constant, type PageRenderer } from './page.ts';
 
+/**
+ * A saved test that opens into a loading state, the way a suspended route
+ * shows its fallback while its data loads. The data request is answered only
+ * once `/api/saved-test/release` is called, so the fallback is the screen
+ * until the test says otherwise. The loaded test lists `steps` steps.
+ */
+function savedTests(steps: number): string {
+  return `<!doctype html>
+<html>
+<head><title>Saved tests</title></head>
+<body>
+  <h1>Saved tests</h1>
+  <main id="view"><button id="open">Checkout smoke</button></main>
+  <script>
+    document.getElementById('open').addEventListener('click', async () => {
+      const view = document.getElementById('view');
+      const loading = document.createElement('p');
+      loading.setAttribute('role', 'status');
+      loading.textContent = 'Loading test…';
+      view.replaceChildren(loading);
+      await fetch('/api/saved-test');
+      const heading = document.createElement('h2');
+      heading.textContent = 'Checkout smoke';
+      const steps = document.createElement('ol');
+      for (let index = 1; index <= ${steps}; index += 1) {
+        const item = document.createElement('li');
+        item.textContent = 'Step ' + index;
+        steps.append(item);
+      }
+      view.replaceChildren(heading, steps);
+    });
+  </script>
+</body>
+</html>`;
+}
+
 export const LIVE_PAGES: Record<string, PageRenderer> = {
   // Two identically named fields on a page whose layout keeps moving, the way a
   // lazily-loaded banner or an expanding summary shifts a booking form under the
@@ -177,35 +213,19 @@ export const LIVE_PAGES: Record<string, PageRenderer> = {
   </script>
 </body>
 </html>`),
-  // A saved test that opens into a loading state, the way a suspended route
-  // shows its fallback while its data loads. The fallback holds still long
-  // enough for a settled look to read it as the page, then the test renders.
-  '/saved-tests': constant(`<!doctype html>
+  '/saved-tests': constant(savedTests(3)),
+  // Past the 400 lines a project tool's answer is cut to.
+  '/saved-tests/long': constant(savedTests(450)),
+  // A counter that holds still from the first frame: the screen a finding is
+  // recorded on at once, with nothing arriving late to hold it back.
+  '/counter': constant(`<!doctype html>
 <html>
-<head><title>Saved tests</title></head>
+<head><title>Counter</title></head>
 <body>
-  <h1>Saved tests</h1>
-  <main id="view"><button id="open">Checkout smoke</button></main>
-  <script>
-    document.getElementById('open').addEventListener('click', () => {
-      const view = document.getElementById('view');
-      const loading = document.createElement('p');
-      loading.setAttribute('role', 'status');
-      loading.textContent = 'Loading test…';
-      view.replaceChildren(loading);
-      setTimeout(() => {
-        const heading = document.createElement('h2');
-        heading.textContent = 'Checkout smoke';
-        const steps = document.createElement('ol');
-        for (const text of ['Add an item to the cart', 'Check out', 'See the confirmation']) {
-          const item = document.createElement('li');
-          item.textContent = text;
-          steps.append(item);
-        }
-        view.replaceChildren(heading, steps);
-      }, 900);
-    });
-  </script>
+  <h1>Counter</h1>
+  <button id="increment" onclick="document.getElementById('count').textContent = String(Number(document.getElementById('count').textContent) + 1)">Increment</button>
+  <output id="count" role="status" aria-label="Counter">0</output>
+  <button aria-expanded="false" id="menu" onclick="this.setAttribute('aria-expanded', this.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')">Menu</button>
 </body>
 </html>`),
 };

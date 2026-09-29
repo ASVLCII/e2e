@@ -43,7 +43,10 @@ export interface LoopToolCall {
 /** A turn's scripted answer: tool calls, or prose without any (`{ text }`). Either form may carry `reasoning`. */
 export type LoopResponder = (
   call: LoopCall,
-) =>
+) => LoopAnswer | Promise<LoopAnswer>;
+
+/** One turn's tool calls, or its prose. */
+type LoopAnswer =
   | readonly LoopToolCall[]
   | { readonly text: string; readonly reasoning?: string }
   | { readonly toolCalls: readonly LoopToolCall[]; readonly reasoning?: string };
@@ -102,7 +105,7 @@ export function installFakeLoopModel(respond: LoopResponder): ModelInstance {
             : options.toolChoice.type,
     };
     loopCalls.push(call);
-    const answer = respond(call);
+    const answer = await respond(call);
     const toPart = (toolCall: LoopToolCall) => ({
       type: 'tool-call' as const,
       toolCallId: `scripted_${(callCounter += 1)}`,

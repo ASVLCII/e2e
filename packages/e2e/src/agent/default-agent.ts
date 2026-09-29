@@ -15,7 +15,7 @@ import { AgentError } from './error.ts';
 import type { ReplayedPrefix, StepExecutor, StepExecutorContext } from './executor.ts';
 import { interactiveNodeCount } from './observation.ts';
 import { createGrammarTools, GRAMMAR_TOOL_NAMES } from './primitives.ts';
-import { ScreenPresenter, type HeldScreenView } from './screen-update.ts';
+import { ScreenPresenter } from './screen-update.ts';
 import { compactScreenHistory, compactScreenshotHistory } from './transcript-compaction.ts';
 import { createToolLoopExecutor, type ToolLoopHelpers } from './tool-loop.ts';
 import type { DefinedTool } from './tool.ts';
@@ -108,6 +108,25 @@ export function isDefaultAgent(value: unknown): value is DefaultAgent {
 
 /** Builds the default AI SDK step executor. */
 export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
+  return buildAgent(options, undefined);
+}
+
+/**
+ * Tools a host adds beside the project's, built per step with the step's
+ * context and the screen its model holds. Unlike a project tool, a host tool
+ * owns its accounting (`budgets.runTool`) and its result goes to the model
+ * unbounded, so a screen it presents arrives whole. Internal: `e2e explore`
+ * adds its finding tool this way.
+ */
+export type HostTools = (context: StepExecutorContext, screen: ScreenPresenter) => ToolSet;
+
+/** `createAgent` with host tools; a host tool of a project tool's name replaces it. */
+export function createHostedAgent(options: CreateAgentOptions, hostTools: HostTools): DefaultAgent {
+  return buildAgent(options, hostTools);
+}
+
+/** Builds the default executor, with the host's tools when a host adds any. */
+function buildAgent(options: CreateAgentOptions, hostTools: HostTools | undefined): DefaultAgent {
   const userTools = validateUserTools(options.tools);
   const system = (): string =>
     [BASE_RULES, options.system]
@@ -122,7 +141,8 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
     ...(options.providerOptions === undefined ? {} : { providerOptions: options.providerOptions }),
     prepareMessages: (messages) => compactScreenshotHistory(compactScreenHistory(messages)),
     tools: (context, helpers) => ({
-      ...guardedTools(helpers, projectTools(context, userTools, presenterFor(context))),
+      ...guardedTools(helpers, projectTools(context, userTools)),
+      ...(hostTools === undefined ? {} : guardedTools(helpers, hostTools(context, presenterFor(context)))),
       ...createGrammarTools(context, { guard: helpers.guard, screen: presenterFor(context) }),
     }),
     buildPrompt: async (context) => {
@@ -229,13 +249,11 @@ function validateUserTools(
  * reached, consumed whether it succeeds or fails, exactly like a grammar
  * action), and a text result is bounded like everything else the model reads.
  * Failures propagate: the model loop turns them into text through its guard,
- * and a host outside the loop reports them its own way. `screen` is the
- * screen the model holds, when there is a model loop to hold one.
+ * and a host outside the loop reports them its own way.
  */
 export function projectTools(
   context: StepExecutorContext,
   tools: Readonly<Record<string, DefinedTool>>,
-  screen?: HeldScreenView,
 ): ToolSet {
   const wrapped: Record<string, ToolSet[string]> = {};
   for (const [name, defined] of Object.entries(tools)) {
@@ -257,7 +275,6 @@ export function projectTools(
               return context.observe(options);
             },
             attachScreenshot: (pixels, label) => context.attachScreenshot(pixels, label),
-            ...(mutates || screen === undefined ? {} : { screen }),
           })),
         );
         // A text result is bounded like every other thing the model reads;

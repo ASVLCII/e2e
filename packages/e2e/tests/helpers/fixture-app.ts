@@ -81,6 +81,27 @@ const RESPONDERS: Record<string, Responder> = {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ betaBoard: false }));
   },
+  // The saved test's data: held until a release, so the page stays in its
+  // loading state for exactly as long as the test wants and no clock decides.
+  '/api/saved-test': (_request, response, state) => {
+    const answer = () => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{}');
+    };
+    if (state.savedTestReleases > 0) {
+      state.savedTestReleases -= 1;
+      answer();
+    } else {
+      state.savedTestLoads.push(answer);
+    }
+  },
+  '/api/saved-test/release': (_request, response, state) => {
+    const waiting = state.savedTestLoads.splice(0);
+    if (waiting.length === 0) state.savedTestReleases += 1;
+    for (const answer of waiting) answer();
+    response.writeHead(204);
+    response.end();
+  },
   // Never responds: exercises operation timeouts on a page that never
   // settles. The socket stays open until the client gives up.
   '/hang': () => undefined,
@@ -121,7 +142,7 @@ function serve(request: IncomingMessage, response: ServerResponse, state: Fixtur
 
 /** Starts the fixture app on an ephemeral loopback port. */
 export async function startFixtureApp(): Promise<FixtureApp> {
-  const state: FixtureState = { searches: 0, feedRequests: 0, todos: new Set() };
+  const state: FixtureState = { searches: 0, feedRequests: 0, todos: new Set(), savedTestLoads: [], savedTestReleases: 0 };
   const server: Server = createServer((request, response) => serve(request, response, state));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;

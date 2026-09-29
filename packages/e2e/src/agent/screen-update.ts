@@ -33,7 +33,7 @@ const MAX_DIFF_SHARE = 0.5;
 export const FULL_SCREEN_PATTERN = /Current screen \(revision /;
 
 /** The screen as the model last received it, indexed for comparison. */
-export interface ShownScreen {
+interface ShownScreen {
   readonly revision: string;
   /** Node lines in document order, without indentation or focus; the truncation marker is not a node. */
   readonly order: readonly string[];
@@ -106,14 +106,6 @@ export function toolResultTexts(output: ToolResultPart['output']): string[] {
   if (output.type !== 'content') return [];
   return output.value.flatMap((item) => (item.type === 'text' ? [item.text] : []));
 }
-
-/**
- * What a read-only project tool may read of the screen the model holds: the
- * held screen, whether a fresh look differs from it, and the text update that
- * brings the model up to date. No pixels are presented through it, so a tool
- * never switches the step into pixel mode.
- */
-export type HeldScreenView = Pick<ScreenPresenter, 'held' | 'differs' | 'update'>;
 
 /** Renders one step's screens for the model and remembers what it has seen. */
 export class ScreenPresenter {

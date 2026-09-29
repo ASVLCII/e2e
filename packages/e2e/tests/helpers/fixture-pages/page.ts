@@ -11,6 +11,10 @@ export interface FixtureState {
   feedRequests: number;
   /** Todos added through `/api/todos`. */
   readonly todos: Set<string>;
+  /** Saved-test loads waiting for `/api/saved-test/release`; each answers when called. */
+  readonly savedTestLoads: (() => void)[];
+  /** Releases that came before any load was waiting, owed to the next loads. */
+  savedTestReleases: number;
 }
 
 /** Renders one page for one request. */

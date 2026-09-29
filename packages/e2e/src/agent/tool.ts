@@ -2,7 +2,6 @@
 
 import type { Tool, ToolExecutionOptions } from 'ai';
 import type { StepExecutorContext } from './executor.ts';
-import type { HeldScreenView } from './screen-update.ts';
 import { TestError } from '../internal/errors.ts';
 
 /** Cross-realm identity marker for defined tools. */
@@ -89,21 +88,7 @@ export function getToolContext(options: object): ToolContext {
 
 const TOOL_CONTEXT = Symbol.for('e2e.tool-context.v1');
 
-/**
- * The public capabilities plus what only the built-in agent can supply: the
- * screen its model holds. Not part of the public surface; `e2e explore`'s
- * finding tool reads it to tell a screen still loading from a defect.
- */
-interface HarnessToolContext extends ToolContext {
-  readonly screen?: HeldScreenView | undefined;
-}
-
 /** Carries harness capabilities alongside SDK options without replacing the project's SDK context. */
-export function withToolContext(options: ToolExecutionOptions<unknown>, context: HarnessToolContext): ToolExecutionOptions<unknown> {
+export function withToolContext(options: ToolExecutionOptions<unknown>, context: ToolContext): ToolExecutionOptions<unknown> {
   return Object.assign({}, options, { [TOOL_CONTEXT]: context });
-}
-
-/** The screen the built-in agent's model holds, when the running tool was dispatched by that agent. */
-export function getHeldScreen(options: object): HeldScreenView | undefined {
-  return (options as { [TOOL_CONTEXT]?: HarnessToolContext })[TOOL_CONTEXT]?.screen;
 }
