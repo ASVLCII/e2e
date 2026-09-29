@@ -48,10 +48,13 @@ describe('clearArtifacts', () => {
     mkdirSync(path.join(root, 'artifacts', 'web'), { recursive: true });
     symlinkSync(path.join(root, 'outside'), path.join(root, 'artifacts', 'web', 'linked'));
     symlinkSync(path.join(root, 'outside'), path.join(root, 'artifacts-link'));
+    mkdirSync(path.join(root, 'artifacts', 'web', 'sessions'));
+    symlinkSync(path.join(root, 'outside'), path.join(root, 'artifacts', 'web', 'sessions', uuidv7()));
     await clearArtifacts(path.join(root, 'artifacts'));
     await clearArtifacts(path.join(root, 'artifacts-link'));
     expect(existsSync(outside)).toBe(true);
-    expect(readdirSync(path.join(root, 'artifacts', 'web'))).toEqual([]);
+    expect(readdirSync(path.join(root, 'artifacts', 'web'))).toEqual(['sessions']);
+    expect(readdirSync(path.join(root, 'artifacts', 'web', 'sessions'))).toEqual([]);
     expect(existsSync(path.join(root, 'artifacts-link'))).toBe(false);
   });
 

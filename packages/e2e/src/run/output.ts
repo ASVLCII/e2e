@@ -107,7 +107,7 @@ export async function clearArtifacts(artifacts: string, now: number = Date.now()
       }
       for (const attempt of await entriesOf(entryPath)) {
         const minted = uuidv7Time(attempt.name);
-        if (minted === undefined || now - minted > SESSION_RETENTION_MS) await remove(path.join(entryPath, attempt.name));
+        if (!attempt.isDirectory() || minted === undefined || now - minted > SESSION_RETENTION_MS) await remove(path.join(entryPath, attempt.name));
       }
     }
   }
