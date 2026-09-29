@@ -31,7 +31,7 @@ function runtime(overrides: Partial<E2EConfig>, agentContext?: string) {
     runId: 'run',
     attemptId: 'attempt',
     attempt: { testId: 'test', attemptId: 'attempt', index: 0, signal, memory: new Map() },
-    artifacts: { dir: '/tmp', register: () => 'artifact' },
+    artifacts: { dir: '/tmp', register: () => 'artifact', link: () => 'artifact' },
     priorSteps: () => steps.completed(),
     agentContext,
     saveSession: undefined,

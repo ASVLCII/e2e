@@ -695,6 +695,26 @@ describe('renderMarkdownReport evidence paths', () => {
     const named2 = renderMarkdownReport(page({ status: 'failed', results: [named({ title: 't', status: 'failed', attempts: [withheld] })] }), { artifactsDir: '.e2e/artifacts' });
     expect(named2).toContain('\n\nEvidence: screenshot\n');
   });
+
+  it('links a video a hosted service keeps to its own URL', () => {
+    const base = attempt({ status: 'failed', error: { code: 'E', message: 'm' }, artifacts: ['screenshot'] });
+    const evidence = { ...base, artifacts: [...base.artifacts, {
+      id: 'attempt-1:artifact:1',
+      kind: 'video' as const,
+      mediaType: 'video/mp4',
+      url: 'https://recordings.example/r1.mp4',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      redaction: 'incomplete' as const,
+      producer: { kind: 'attempt' as const },
+    }] };
+    const document = page({ status: 'failed', results: [named({ title: 't', status: 'failed', attempts: [evidence] })] });
+    expect(renderMarkdownReport(document, { artifactsDir: '.e2e/artifacts' })).toContain(
+      '\n\nEvidence: screenshot `.e2e/artifacts/t/attempt-0/screenshot-0.bin`, [video](https://recordings.example/r1.mp4)\n',
+    );
+    expect(renderMarkdownReport(document, { artifactsUrl: 'https://ci.test/run/1' })).toContain(
+      '\n\nEvidence: [screenshot](https://ci.test/run/1), [video](https://recordings.example/r1.mp4)\n',
+    );
+  });
 });
 
 describe('markdownReporter', () => {

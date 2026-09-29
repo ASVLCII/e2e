@@ -20,6 +20,7 @@ import {
   KEY_NAMES,
   parseKey,
   raceAbort,
+  stopProviderRecording,
   withinCleanupBudget,
   type EngineAttemptContext,
   type EngineCleanupContext,
@@ -32,6 +33,7 @@ import {
   type ObservationPixels,
   type OperationContext,
   type PointerAction,
+  type ProviderRecording,
   type VideoSegment,
   type SemanticNode,
   type ViewportPoint,
@@ -57,6 +59,7 @@ import { maskPng } from './png.ts';
 import { deviceLabel, pinnedApp, type SlotBinding } from './bindings.ts';
 import { assertAppId, assertConfiguredApp } from './links.ts';
 import { DevicePool, deviceSelection, type DeviceSelection } from './pool.ts';
+import { recordLease, travelledLease, type DeviceLease, type RecordingDeviceProvider } from './provider.ts';
 import {
   invalidState,
   notActionable,
@@ -199,6 +202,7 @@ function sameRect(a: Rect | undefined, b: Rect | undefined): boolean {
 const MAX_LOCATED_REFS = 2048;
 
 interface Attempt {
+  readonly attemptId: string;
   readonly artifactsDir: string;
   screenshots: number;
   /**
@@ -209,11 +213,33 @@ interface Attempt {
   video: Recording | undefined;
 }
 
-/** One device recording: where its file lands, and when the device confirmed it was on. */
-interface Recording {
+/** One recording of the device: agent-device's screen recording, or the device provider's own. */
+type Recording = ScreenRecording | LeaseRecording;
+
+/** agent-device's screen recording: where its file lands, and when the device confirmed it was on. */
+interface ScreenRecording {
+  readonly kind: 'screen';
   readonly relative: string;
   readonly absolute: string;
   startedAt: string;
+}
+
+/** The device provider's recording of the leased device, as its `record` is starting it or started it. */
+interface LeaseRecording {
+  readonly kind: 'lease';
+  readonly recorder: LeaseRecorder;
+  readonly started: Promise<ProviderRecording>;
+  /** The stop in flight, shared: a retry while a stop that ran out of budget is still running waits for it instead of stopping twice. */
+  stopping?: Promise<VideoSegment> | undefined;
+}
+
+/** What a worker records its device through when its provider records: the provider, and the lease the slot rides. */
+interface LeaseRecorder {
+  readonly provider: RecordingDeviceProvider;
+  readonly lease: DeviceLease;
+  readonly runId: string;
+  readonly targetName: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -292,6 +318,8 @@ export class AgentDeviceSurface {
   private projectRoot = process.cwd();
   /** The session and device this worker drives, for the error messages whose recovery is per device; set in init. */
   private where: string | undefined;
+  /** How this worker's device records through its provider: set in init when the pool's provider records and the slot rides one of its leases. */
+  private leaseRecorder: LeaseRecorder | undefined;
   /**
    * Commands still running on the device. agent-device takes no abort
    * signal, so a cancelled or timed-out call is only abandoned by its
@@ -410,6 +438,12 @@ export class AgentDeviceSurface {
     const label = deviceLabel(binding);
     this.where = `session ${session}${label === undefined ? '' : ` on ${label}`}`;
     this.client ??= this.createClient(session, binding);
+    const provider = this.pool.recorder;
+    const lease = travelledLease(binding);
+    this.leaseRecorder =
+      provider === undefined || lease === undefined
+        ? undefined
+        : { provider, lease, runId: info.runId, targetName: info.targetName, env: info.env };
     await this.command('boot', (client) => client.devices.boot(this.selection()), info.signal);
     this.sessionApp = binding?.sessionApp === undefined ? undefined : await this.resumedSessionApp(session, binding.sessionApp, info.signal);
     // Nothing is installed here: a device provider that installed the build
@@ -445,13 +479,14 @@ export class AgentDeviceSurface {
     // worker's `prepare`, left it, and a test that wants it fresh calls
     // `app.open()`, which is `restart` below. The bindings are forgotten, the
     // screen is not, so a control still in place is acted on at once.
-    this.attempt = { artifactsDir: context.artifactsDir, screenshots: 0, video: undefined };
+    this.attempt = { attemptId: context.attemptId, artifactsDir: context.artifactsDir, screenshots: 0, video: undefined };
     this.generation = new Map();
     this.located.clear();
   }
 
   async endAttempt(context: EngineCleanupContext): Promise<void> {
-    const dangling = this.attempt?.video;
+    const attempt = this.attempt;
+    const dangling = attempt?.video;
     this.attempt = undefined;
     this.generation = new Map();
     this.located.clear();
@@ -460,7 +495,9 @@ export class AgentDeviceSurface {
     // and the device must not keep recording into the next one. A start that
     // outlived its budget may still be landing: it settles first, so the stop
     // cannot overtake it.
-    if (dangling !== undefined) {
+    if (attempt !== undefined && dangling?.kind === 'lease') {
+      await this.stopLeaseRecording(dangling, attempt.artifactsDir, context.signal).catch(() => undefined);
+    } else if (dangling !== undefined) {
       await this.settleInflight(context.signal).catch(() => undefined);
       await this.command('stop video recording', (client) => client.recording.record({ action: 'stop' }), context.signal).catch(
         () => undefined,
@@ -473,18 +510,23 @@ export class AgentDeviceSurface {
   /**
    * Asks the device to record its screen into the attempt directory. Taps stay
    * visible in the recording (agent-device's touch indicator), which is the
-   * closest a phone comes to a cursor.
+   * closest a phone comes to a cursor. A device provider that records its
+   * devices records the attempt instead, when the slot rides one of its leases.
    */
   async startVideo(operation: OperationContext): Promise<void> {
     const attempt = this.attempt;
     if (attempt === undefined) throw invalidState('startVideo outside an attempt');
     if (attempt.video !== undefined) throw invalidState('a video is already recording');
+    if (this.leaseRecorder !== undefined) {
+      await this.startLeaseRecording(attempt, this.leaseRecorder, operation.signal);
+      return;
+    }
     const relative = path.join('video', 'video.mp4');
     const absolute = path.join(attempt.artifactsDir, relative);
     mkdirSync(path.dirname(absolute), { recursive: true });
     // Marked before the device is asked: a start that outlives its budget
     // still records, and `endAttempt` must be able to stop it.
-    const recording: Recording = { relative, absolute, startedAt: new Date().toISOString() };
+    const recording: ScreenRecording = { kind: 'screen', relative, absolute, startedAt: new Date().toISOString() };
     attempt.video = recording;
     await this.command(
       'start video recording',
@@ -501,6 +543,12 @@ export class AgentDeviceSurface {
     if (attempt === undefined) throw invalidState('stopVideo outside an attempt');
     const video = attempt.video;
     if (video === undefined) return [];
+    if (video.kind === 'lease') {
+      const segment = await this.stopLeaseRecording(video, attempt.artifactsDir, operation.signal);
+      // Cleared only now: a stop that failed leaves the recording for `endAttempt`.
+      attempt.video = undefined;
+      return [segment];
+    }
     const result = await this.command(
       'stop video recording',
       (client) => client.recording.record({ action: 'stop' }),
@@ -516,8 +564,36 @@ export class AgentDeviceSurface {
     return [{ path: video.relative, startedAt: video.startedAt }];
   }
 
+  /**
+   * Starts the device provider's recording of the leased device. Marked
+   * the moment `record` is called, before it settles, as the screen
+   * recording is before its start command: a start that outlives its budget
+   * may still come up, and `endAttempt` then stops it.
+   */
+  private async startLeaseRecording(attempt: Attempt, recorder: LeaseRecorder, signal: AbortSignal): Promise<void> {
+    const { provider, lease, runId, targetName, env } = recorder;
+    const started = recordLease(provider, lease, { runId, targetName, attemptId: attempt.attemptId, env, signal });
+    attempt.video = { kind: 'lease', recorder, started };
+    await raceAbort(started, signal, 'start video recording');
+  }
+
+  /** Ends the provider's recording as the attempt's one segment, a file in its `video` directory or a link. */
+  private async stopLeaseRecording(video: LeaseRecording, artifactsDir: string, signal: AbortSignal): Promise<VideoSegment> {
+    const { provider, lease } = video.recorder;
+    video.stopping ??= (async () =>
+      stopProviderRecording(await video.started, { artifactsDir, provider: `device provider "${provider.name}"`, leaseId: lease.id, signal }))().finally(() => {
+      video.stopping = undefined;
+    });
+    return raceAbort(video.stopping, signal, 'stop video recording');
+  }
+
   async dispose(context: EngineCleanupContext): Promise<void> {
     const client = this.client;
+    const attempt = this.attempt;
+    // A worker torn down mid-attempt must not leave the provider recording the device.
+    if (attempt?.video?.kind === 'lease') {
+      await withinCleanupBudget(this.stopLeaseRecording(attempt.video, attempt.artifactsDir, context.signal), context).catch(() => undefined);
+    }
     this.client = undefined;
     this.attempt = undefined;
     this.generation = new Map();

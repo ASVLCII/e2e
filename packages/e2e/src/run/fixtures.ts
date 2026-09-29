@@ -42,6 +42,8 @@ export interface ArtifactSink {
     relativePath: string,
     options?: ArtifactRegistration,
   ): string;
+  /** Registers a video a hosted service keeps, by URL, and returns its report artifact ID; nothing is read or stored. */
+  link(url: string, options: { readonly mediaType: string; readonly startedAt: string }): string;
 }
 
 /** Facts about a produced artifact its file does not carry. */

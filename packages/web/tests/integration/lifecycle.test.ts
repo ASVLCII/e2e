@@ -11,6 +11,8 @@ import path from 'node:path';
 import type { BrowserContext, Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
+  VideoFile,
+  VideoSegment,
   EngineCleanupContext,
   EngineHandle,
   LocatorExpression,
@@ -20,6 +22,14 @@ import type {
 import { web, surfaceOf } from '../../src/index.ts';
 import { startFixtureApp, type FixtureApp } from '../helpers/fixture-app.ts';
 import { decodePng } from '../helpers/png.ts';
+
+/** The segments as files: a local recording never links, so a link here is a failure. */
+function videoFiles(segments: readonly VideoSegment[]): VideoFile[] {
+  return segments.map((segment) => {
+    if (!('path' in segment)) throw new Error(`expected a video file, got a link to ${segment.url}`);
+    return segment;
+  });
+}
 
 function cleanup(signal = new AbortController().signal): EngineCleanupContext {
   return { signal, timeoutMs: 30_000 };
@@ -993,7 +1003,7 @@ describe('web engine lifecycle', () => {
         expect(surfaceOf(engine)!.page().url()).toBe('about:blank');
         await engine.session!.open!(`${app.url}/`, operation('v1'));
         await settle();
-        const segments = await engine.artifacts!.stopVideo!(operation('v1'));
+        const segments = videoFiles(await engine.artifacts!.stopVideo!(operation('v1')));
         // The restart and the state reset each closed a trace segment before the final archive.
         expect(await engine.artifacts!.stopTrace!(operation('v1'))).toEqual([
           'trace/trace-part1.zip',
@@ -1038,12 +1048,12 @@ describe('web engine lifecycle', () => {
         await engine.session!.open!(`${app.url}/`, operation('v3'));
         const viewer = surfaceOf(engine)!.page();
         const viewport = viewer.viewportSize()!;
-        const segments = [];
+        const segments: VideoFile[] = [];
         for (const url of [`${app.url}/form`, `${app.url}/`]) {
           await engine.artifacts!.startVideo!(operation('v3'));
           await engine.session!.open!(url, operation('v3'));
           await viewer.screenshot();
-          segments.push(...(await engine.artifacts!.stopVideo!(operation('v3'))));
+          segments.push(...videoFiles(await engine.artifacts!.stopVideo!(operation('v3'))));
         }
         expect(segments.map((segment) => segment.path)).toEqual(['video/video.webm', 'video/video-part2.webm']);
         for (const segment of segments) {
@@ -1097,7 +1107,7 @@ describe('web engine lifecycle', () => {
         expect(surfaceOf(engine)!.page().url()).toBe('about:blank');
         await engine.artifacts!.startTrace!(operation('v2'));
         await engine.session!.open!(`${app.url}/`, operation('v2'));
-        const segments = await engine.artifacts!.stopVideo!(operation('v2'));
+        const segments = videoFiles(await engine.artifacts!.stopVideo!(operation('v2')));
         expect(segments.map((segment) => segment.path)).toEqual(['video/video.webm']);
         expect(await engine.artifacts!.stopTrace!(operation('v2'))).toBe('trace/trace.zip');
         expect(statSync(path.join(videoDir, 'video/video.webm')).size).toBeGreaterThan(0);

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { collectFromRegistration, type Collection } from '../../src/collect/collect.ts';
 import { collectModule, test } from '../../src/collect/registry.ts';
-import { repeatEach, resolveOptions, select } from '../../src/collect/select.ts';
+import { pairVideoMode, repeatEach, resolveOptions, select } from '../../src/collect/select.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine } from '../../src/engine/index.ts';
 import { resultId } from '../../src/internal/ids.ts';
@@ -165,6 +165,50 @@ describe('resolveOptions', () => {
 
     const inherits = resolveOptions(col.tests[1]!, cfg);
     expect(inherits.timeout).toBe(20_000);
+  });
+
+  it("resolves a test's video innermost first, and leaves a test that sets none to its target", async () => {
+    const col = await collection(() => {
+      test('unset', noop);
+      test('off', { video: 'off' }, noop);
+      test.describe('outer', { video: 'on' }, () => {
+        test('inherits', noop);
+        test('on failure', { video: 'retain-on-failure' }, noop);
+        test.describe('inner', { video: 'off' }, () => {
+          test('opted out', noop);
+        });
+      });
+    });
+    const [unset, off, inherits, onFailure, optedOut] = col.tests;
+    const plain = config();
+    expect(resolveOptions(unset!, plain).video).toBeUndefined();
+    expect(resolveOptions(off!, plain).video).toBe('off');
+    expect(resolveOptions(inherits!, plain).video).toBe('on');
+    expect(resolveOptions(onFailure!, plain).video).toBe('retain-on-failure');
+    expect(resolveOptions(optedOut!, plain).video).toBe('off');
+    const target = { ...plain.targets[0]!, video: 'on-first-retry' as const };
+    expect(pairVideoMode({ options: resolveOptions(unset!, plain), target })).toBe('on-first-retry');
+    expect(pairVideoMode({ options: resolveOptions(off!, plain), target })).toBe('off');
+  });
+
+  it('gives serial members the video of the chain up to the serial root, like retries', async () => {
+    const col = await collection(() => {
+      test.describe('outer', { video: 'retain-on-failure', retries: 2 }, () => {
+        test.describe('wizard', { serial: true }, () => {
+          test.describe('nested', { retries: 0 }, () => {
+            test('step', noop);
+          });
+        });
+        test.describe('recorded wizard', { serial: true, video: 'on' }, () => {
+          test('step', noop);
+        });
+      });
+    });
+    const [nested, recorded] = col.tests;
+    const inherited = resolveOptions(nested!, config());
+    expect(inherited.retries).toBe(2);
+    expect(inherited.video).toBe('retain-on-failure');
+    expect(resolveOptions(recorded!, config()).video).toBe('on');
   });
 
   it('concatenates agentContext outer-to-inner with newlines', async () => {

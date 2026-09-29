@@ -42,7 +42,7 @@ usernames, and the agent fills passwords with `type_secret` by name.
 | `--agent <name>` | `default` | Build the explorer from another configured agent (`agents.<name>`). |
 | `--max-steps <n>` | 8 (1 to 12) | Exploration steps at most. |
 | `--timeout <ms>` | 600000 (180000 to 900000) | Wall clock; the last minute is for the assessment. |
-| `--headed`, `--reporter`, `--artifacts`, `--debug`, `--ai-trace`, `--video` | as `run` | Same meaning as for `e2e run`. |
+| `--headed`, `--reporter`, `--artifacts`, `--debug`, `--ai-trace`, `--video [mode]` | as `run` | Same meaning as for `e2e run`. One attempt, so `--video=on-first-retry` records nothing; put the goal before a bare `--video`. |
 
 Per-step action and model-call budgets default to 40 each; `agent.maxSteps`
 and `agent.maxModelCalls` in the config override them. The trace cache is off

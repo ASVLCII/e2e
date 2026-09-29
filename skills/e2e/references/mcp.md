@@ -54,7 +54,7 @@ The catalog, per session:
 | `press_at` | Sends one `key` (`Enter`, `Escape`, `Tab`) to the control at a point: a listed control gets it by id; with a keyboard, anything else is tapped to focus it and the key goes through the keyboard. Listed when the engine declares `press` or a keyboard. |
 | `select_at` | Picks the option whose visible label is `value` in the select-like control at a point; the point must land on a listed select. Listed when the engine declares `select`. |
 | `start_recording` | Starts a video of the app (`name` optional, for the file name). Listed when the engine records video. |
-| `stop_recording` | Stops it and returns the absolute path of each video file, under `.e2e/videos/<session>/`. |
+| `stop_recording` | Stops it and returns the absolute path of each video file, under `.e2e/videos/<session>/`, or the URL of a provider's own recording. |
 | Project tools | Every `defineTool` passed to `createAgent({ tools })` that applies to the target's platform, under its own name; an engine pack such as `mobileTools` adds `open_app`, `swipe`, `alert`. |
 
 The five point tools and `screenshot` stay in the catalog once a secret has

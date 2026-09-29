@@ -179,7 +179,8 @@ layout as `Report`; the `json` reporter does not carry them:
 Artifact paths in the report are POSIX paths relative to `artifactsRoot`.
 `path`, `size`, and `sha256` are optional: an artifact whose file never
 appeared, or that a redaction withheld, is recorded without them. Check for
-`path` before reading.
+`path` before reading. A video a hosted service keeps has an `http(s)` `url`
+in place of `path`.
 
 ## What `--reporter` does to reporter objects
 

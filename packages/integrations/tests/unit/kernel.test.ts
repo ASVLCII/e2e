@@ -1,10 +1,14 @@
 /**
  * `kernel()` against a mocked `@onkernel/sdk`: the create body and its tags,
  * the live view line, delete on release and after a cancelled request, a
- * browser Kernel no longer knows, and one SDK client per API key.
+ * browser Kernel no longer knows, one SDK client per API key, and replays.
  */
 
-import type { BrowserReleaseContext, BrowserRequest } from '@e2e-dev/web';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import type { BrowserLease, BrowserReleaseContext, BrowserRequest } from '@e2e-dev/web';
+import type { ProviderRecordContext } from 'e2e/engine';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { kernel } from '../../src/kernel/index.ts';
 
@@ -14,6 +18,9 @@ const sdk = vi.hoisted(() => {
     apiKeys: [] as string[],
     created: [] as { body: unknown; signal: AbortSignal | undefined }[],
     deleted: [] as string[],
+    replays: [] as string[],
+    replaySignals: [] as (AbortSignal | undefined)[],
+    downloadFailures: 0,
     create: async (_body: unknown): Promise<unknown> => {
       state.counter += 1;
       return { session_id: `b${state.counter}`, cdp_ws_url: `wss://kernel/b${state.counter}`, browser_live_view_url: `https://view/b${state.counter}` };
@@ -34,6 +41,26 @@ const sdk = vi.hoisted(() => {
         state.deleted.push(id);
         return state.deleteByID(id);
       },
+      replays: {
+        start: async (id: string, body: unknown, options?: { signal?: AbortSignal }) => {
+          state.replays.push(`start ${id} ${JSON.stringify(body)}`);
+          state.replaySignals.push(options?.signal);
+          return { replay_id: 'r1' };
+        },
+        stop: async (replayId: string, params: { id_or_name: string }, options?: { signal?: AbortSignal }) => {
+          state.replays.push(`stop ${replayId} ${params.id_or_name}`);
+          state.replaySignals.push(options?.signal);
+        },
+        download: async (replayId: string, params: { id_or_name: string }, options?: { signal?: AbortSignal }) => {
+          state.replays.push(`download ${replayId} ${params.id_or_name}`);
+          state.replaySignals.push(options?.signal);
+          if (state.downloadFailures > 0) {
+            state.downloadFailures -= 1;
+            throw new Error('503 replay still processing');
+          }
+          return new Response('mp4 bytes', { headers: { 'content-type': 'video/mp4' } });
+        },
+      },
     };
   }
   return { state, Kernel, NotFoundError };
@@ -45,7 +72,7 @@ const defaultCreate = sdk.state.create;
 const defaultDelete = sdk.state.deleteByID;
 
 beforeEach(() => {
-  Object.assign(sdk.state, { apiKeys: [], created: [], deleted: [], counter: 0, create: defaultCreate, deleteByID: defaultDelete });
+  Object.assign(sdk.state, { apiKeys: [], created: [], deleted: [], replays: [], replaySignals: [], downloadFailures: 0, counter: 0, create: defaultCreate, deleteByID: defaultDelete });
 });
 
 const env = { KERNEL_API_KEY: 'k-test' };
@@ -156,5 +183,53 @@ describe('kernel()', () => {
       throw new Error('401 invalid api key');
     };
     await expect(kernel().acquire(request())).rejects.toThrow('401 invalid api key');
+  });
+
+  describe('record', () => {
+    const lease: BrowserLease = { id: 'b1', cdpEndpoint: 'wss://kernel/b1' };
+    const recordContext = (): ProviderRecordContext => ({ runId: 'run-1', targetName: 'web', attemptId: 'a1', env, signal: new AbortController().signal });
+
+    it('records a Kernel replay of the browser and saves it as replay.mp4 in the directory it is given', async () => {
+      const before = Date.now();
+      const recording = await kernel().record!(lease, recordContext());
+      expect(recording).toBeDefined();
+      expect(Date.parse(recording!.startedAt)).toBeGreaterThanOrEqual(before - 1);
+      const dir = mkdtempSync(path.join(tmpdir(), 'e2e-kernel-replay-'));
+      const stopSignal = new AbortController().signal;
+      await expect(recording!.stop({ dir, signal: stopSignal })).resolves.toEqual({ file: 'replay.mp4' });
+      expect(readFileSync(path.join(dir, 'replay.mp4'), 'utf8')).toBe('mp4 bytes');
+      expect(sdk.state.replays).toEqual(['start b1 {}', 'stop r1 b1', 'download r1 b1']);
+      // Every Kernel call carries the signal of the step it serves.
+      expect(sdk.state.replaySignals.map((signal) => signal instanceof AbortSignal)).toEqual([true, true, true]);
+      expect(sdk.state.replaySignals[1]).toBe(stopSignal);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('retries a failed download without stopping the replay a second time', async () => {
+      sdk.state.downloadFailures = 1;
+      const recording = await kernel().record!(lease, recordContext());
+      const dir = mkdtempSync(path.join(tmpdir(), 'e2e-kernel-replay-'));
+      await expect(recording.stop({ dir, signal: new AbortController().signal })).rejects.toThrow('503 replay still processing');
+      await expect(recording.stop({ dir, signal: new AbortController().signal })).resolves.toEqual({ file: 'replay.mp4' });
+      expect(sdk.state.replays).toEqual(['start b1 {}', 'stop r1 b1', 'download r1 b1', 'download r1 b1']);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('passes the replay options through', async () => {
+      await kernel({ replay: { framerate: 20, max_duration_in_seconds: 300 } }).record!(lease, recordContext());
+      expect(sdk.state.replays).toEqual(['start b1 {"framerate":20,"max_duration_in_seconds":300}']);
+      expect(sdk.state.created).toEqual([]);
+    });
+
+    it('does not record with replay: false or for a headless browser, which Kernel cannot replay', () => {
+      expect(kernel({ replay: false }).record).toBeUndefined();
+      expect(kernel({ headless: true }).record).toBeUndefined();
+      expect(kernel({ headless: false }).record).toBeTypeOf('function');
+    });
+
+    it('never passes replay to Kernel as a create-browser field', async () => {
+      await kernel({ replay: { framerate: 20 } }).acquire(request());
+      expect(sdk.state.created[0]?.body).not.toHaveProperty('replay');
+    });
   });
 });

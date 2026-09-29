@@ -103,10 +103,11 @@ it('collects saved trace and video segments after ordinary context replacement f
   vi.mocked(browser.newContext).mockRejectedValueOnce(new Error('replacement failed'));
   await expect(surface.reset(operation())).rejects.toThrow(/replacement failed/);
   await expect(surface.stopTrace(operation())).resolves.toEqual(['trace/trace-part1.zip']);
-  const video = await surface.stopVideo(operation());
-  expect(video.map((segment) => segment.path)).toEqual(['video/video.webm']);
+  const videos = await surface.stopVideo(operation());
+  expect(videos).toHaveLength(1);
+  expect(videos[0]).toMatchObject({ path: 'video/video.webm' });
   expect(readFileSync(path.join(artifactsDir, 'trace/trace-part1.zip'), 'utf8')).toBe('trace');
-  expect(readFileSync(path.join(artifactsDir, video[0]!.path), 'utf8')).toBe('recording');
+  expect(readFileSync(path.join(artifactsDir, 'video/video.webm'), 'utf8')).toBe('recording');
   await expect(surface.open('https://example.test/', operation())).rejects.toThrow(/replacement failed/);
 });
 

@@ -19,6 +19,16 @@
                 "producer": {
                   "kind": "attempt"
                 }
+              },
+              {
+                "id": "local-link",
+                "kind": "video",
+                "mediaType": "video/mp4",
+                "url": "file:///tmp/replay.mp4",
+                "redaction": "incomplete",
+                "producer": {
+                  "kind": "attempt"
+                }
               }
             ],
             "steps": [

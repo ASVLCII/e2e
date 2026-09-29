@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeEngine, type FakeEngineHandle } from '../helpers/fake-engine.ts';
+import type { VideoMode } from '../../src/types.ts';
 
 const sessionModule = new URL('../../dist/mcp/session.js', import.meta.url).href;
 const { SessionHost } = (await import(sessionModule)) as typeof import('../../src/mcp/session.ts');
@@ -25,12 +26,12 @@ describe('SessionHost', { timeout: 60_000 }, () => {
   let dir: string;
   let logs: string[];
 
-  const host = (fake: FakeEngineHandle, options: { headed?: boolean; idleMs?: number; ttlMs?: number; artifacts?: readonly string[] } = {}) => {
+  const host = (fake: FakeEngineHandle, options: { headed?: boolean; idleMs?: number; ttlMs?: number; video?: VideoMode } = {}) => {
     const config = resolveConfig(
       {
         targets: [{ name: 'kiosk', platform: 'kiosk', engine: fake.engine }],
         credentials: { admin: { username: 'admin', password: 'kiosk-pw' } },
-        ...(options.artifacts === undefined ? {} : { artifacts: options.artifacts }),
+        ...(options.video === undefined ? {} : { video: options.video }),
       } as never,
       { projectRoot: dir, env: {} },
     );
@@ -138,8 +139,8 @@ describe('SessionHost', { timeout: 60_000 }, () => {
 
   it('records only between start_recording and stop_recording, and saves a recording still running at close', async () => {
     const fake = createFakeEngine({ video: true });
-    // The config's video kind is for runs: the session must not record from launch.
-    const recording = host(fake, { artifacts: ['video'] });
+    // The config's video mode is for runs: the session must not record from launch.
+    const recording = host(fake, { video: 'on' });
     const opened = await recording.open({});
     expect(opened).toMatch(/^- start_recording \{name\?\}: Start recording a video of the app, for a person to watch: .*\.$/m);
     expect(opened).toMatch(/^- stop_recording: Stop the running recording and save it: .*\.$/m);

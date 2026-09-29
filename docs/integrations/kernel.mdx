@@ -68,6 +68,7 @@ the page cut off or in part of the window.
 | Option   | Default    | Meaning |
 | -------- | ---------- | ------- |
 | `scope`  | `'worker'` | `'worker'`: one browser per worker slot for the run. `'attempt'`: a fresh browser per test attempt, retries included. See [Scopes](#scopes). |
+| `replay` | `true`     | How an attempt that records video is recorded. `true`, or Kernel's start-replay body (`framerate`, `max_duration_in_seconds`, `record_audio`): a Kernel replay of the browser's screen. `false`: the web engine's screencast of the page. See [Recordings](#recordings). |
 
 ## Scopes
 
@@ -84,10 +85,42 @@ and the live view shows one tab. It costs a browser start per test and
 carries the limits of a [per-attempt lease](/browser#hosted-browsers): no
 `headers` or `basicAuth`, no `app.clearState()`, no session state.
 
-## Video
+## Recordings
 
-`--video` records each attempt with the web engine's screencast of the page,
-as it does for a local browser.
+An attempt that records [video](/reference/config#video) gets a Kernel
+replay of the browser's screen, saved as `video/replay.mp4` under the
+attempt's artifact directory. The replay shows the whole window, tabs and
+address bar included, where the web engine's screencast shows only the page.
+
+```ts title="e2e.config.ts"
+export default {
+  targets: [
+    {
+      name: 'kernel',
+      engine: web({ url: 'https://staging.example.com', browser: kernel(), viewport: null }),
+      video: 'retain-on-failure',
+    },
+  ],
+} satisfies E2EConfig;
+```
+
+A test's own `video` overrides the target's, so one flow can keep its
+recording even when it passes:
+
+```ts
+test('checkout', { video: 'on' }, async ({ agent }) => {
+  await agent.act('Buy the first product in the catalog');
+});
+```
+
+A replay has the screen's size, 1920 by 1080 in our runs, at Kernel's
+default frame rate, 10 fps. Pass Kernel's start-replay body to change it:
+`kernel({ replay: { framerate: 20, max_duration_in_seconds: 600 } })`. A
+`framerate` above 20 needs `gpu: true` on the browser.
+
+Kernel replays headed browsers only, its default. With `headless: true`, or
+`replay: false`, the provider does not record, and the web engine records
+its screencast of the page instead, as it does for a local browser.
 
 ## What the provider does
 

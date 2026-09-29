@@ -216,6 +216,8 @@ const STEP_GLYPH: Record<ReportStep['status'], string> = { passed: '✓', failed
 /** `[screenshot](run#artifacts) \`web/.../screenshot-1.png\``: the kind, linked to the run's artifacts when there is a URL, and the file's path so the reader finds it. */
 function artifactPath(artifact: ReportArtifact, options: FailurePageOptions): string {
   const kind = cell(artifact.kind, MAX_ID_CHARS);
+  // A video a hosted service keeps is its own link, wherever the run's files are.
+  if (artifact.url !== undefined) return link(kind, artifact.url);
   const named = options.artifactsUrl === undefined ? kind : link(kind, options.artifactsUrl);
   if (artifact.path === undefined) return named;
   const shown = options.artifactsDir === undefined ? artifact.path : `${options.artifactsDir}/${artifact.path}`;

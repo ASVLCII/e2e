@@ -19,21 +19,26 @@ const VIEWPORT = { width: 320, height: 200 };
 function fakePage(options: { writes?: boolean; stopError?: Error; startError?: Error; viewport?: { width: number; height: number } } = {}) {
   const started: string[] = [];
   const sizes: { width: number; height: number }[] = [];
+  const startOptions: Record<string, unknown>[] = [];
+  const stopped = { count: 0 };
   const page = {
     viewportSize: () => options.viewport ?? VIEWPORT,
     screencast: {
-      start: async ({ path: file, size }: { path: string; size: { width: number; height: number } }) => {
+      start: async (start: { path: string; size: { width: number; height: number } }) => {
+        const { path: file, size } = start;
         if (options.startError !== undefined) throw options.startError;
         started.push(file);
         sizes.push(size);
+        startOptions.push({ ...start });
         if (options.writes !== false) writeFileSync(file, 'webm');
       },
       stop: async () => {
+        stopped.count += 1;
         if (options.stopError !== undefined) throw options.stopError;
       },
     },
   } as unknown as Page;
-  return { page, started, sizes };
+  return { page, started, sizes, startOptions, stopped };
 }
 
 describe('VideoRecorder', () => {
@@ -52,11 +57,10 @@ describe('VideoRecorder', () => {
     const second = fakePage({ viewport: { width: 390, height: 600 } });
     await video.arm(first.page);
     expect(video.isArmed).toBe(true);
-    expect(video.isRecording).toBe(true);
     expect(first.started).toEqual([path.join(dir, 'video', 'video.webm')]);
     // A restart ends the segment before its page closes, then opens another page: the next segment.
     await video.pageClosing();
-    expect(video.isRecording).toBe(false);
+    expect(first.stopped.count).toBe(1);
     expect(video.isArmed).toBe(true);
     await video.pageOpened(second.page);
     expect(second.started).toEqual([path.join(dir, 'video', 'video-part2.webm')]);
@@ -65,7 +69,22 @@ describe('VideoRecorder', () => {
     expect(segments.map((segment) => segment.path)).toEqual(['video/video.webm', 'video/video-part2.webm']);
     for (const segment of segments) expect(Number.isNaN(Date.parse(segment.startedAt))).toBe(false);
     expect(video.isArmed).toBe(false);
-    expect(video.isRecording).toBe(false);
+    expect([first.stopped.count, second.stopped.count]).toEqual([1, 1]);
+  });
+
+  it('records at the viewport size by default, and at the configured size and quality when given', async () => {
+    const plain = fakePage();
+    await recorder().arm(plain.page);
+    expect(plain.startOptions[0]).toMatchObject({ size: VIEWPORT });
+    expect(plain.startOptions[0]).not.toHaveProperty('quality');
+    const tuned = fakePage();
+    const dirTuned = mkdtempSync(path.join(tmpdir(), 'e2e-video-unit-'));
+    try {
+      await new VideoRecorder(dirTuned, { size: { width: 640, height: 400 }, quality: 70 }).arm(tuned.page);
+      expect(tuned.startOptions[0]).toMatchObject({ size: { width: 640, height: 400 }, quality: 70 });
+    } finally {
+      rmSync(dirTuned, { recursive: true, force: true });
+    }
   });
 
   it('keeps a segment whose stop failed but whose file exists', async () => {
@@ -106,12 +125,24 @@ describe('VideoRecorder', () => {
     expect((await video.stop()).map((segment) => segment.path)).toEqual(['video/video.webm']);
   });
 
+  it('starts no segment for a page opened after the attempt abandoned its recording', async () => {
+    const video = recorder();
+    const first = fakePage();
+    const late = fakePage();
+    await video.arm(first.page);
+    await video.abandon();
+    expect(video.isArmed).toBe(false);
+    await video.pageOpened(late.page);
+    expect(late.started).toEqual([]);
+  });
+
   it('stays disarmed when the first segment cannot start', async () => {
     const video = recorder();
     const dead = fakePage({ startError: new Error('screencast unavailable') });
     await expect(video.arm(dead.page)).rejects.toThrow('screencast unavailable');
     expect(video.isArmed).toBe(false);
-    expect(video.isRecording).toBe(false);
+    expect(await video.stop()).toEqual([]);
+    expect(dead.stopped.count).toBe(0);
   });
 
   it('runs every hook straight through until armed', async () => {

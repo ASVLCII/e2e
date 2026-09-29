@@ -6,9 +6,10 @@
  * attempt's page; a page about to close (a restart, a context replaced by a
  * state reset) ends its segment first, since Playwright writes nothing for a
  * screencast whose page closed under it, and the next page the attempt opens
- * starts the next segment. Each segment is captured at its page's viewport
- * size when it starts (the window's under `viewport: null`, so a page
- * `web.setViewport` sized is recorded at that size) and carries the instant it began, so a consumer can place step
+ * starts the next segment. Each segment is captured at `web({ video: { size } })`
+ * when set, else at its page's viewport size when it starts (the window's
+ * under `viewport: null`, so a page `web.setViewport` sized is recorded at
+ * that size), and carries the instant it began, so a consumer can place step
  * timestamps on it. The first segment is `video/video.webm`; later ones are
  * `video/video-part<n>.webm`. Without a recording, every hook here is a no-op.
  */
@@ -16,8 +17,29 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
-import { EngineError, type VideoSegment } from 'e2e/engine';
+import { EngineError, type VideoFile, type VideoSegment } from 'e2e/engine';
+import type { WebVideoOptions } from './surface.ts';
 import { currentViewport, message } from './support.ts';
+
+/**
+ * An attempt's video as its session drives it: armed once the attempt's page
+ * is open, told when pages open and close, stopped for its segments when the
+ * attempt collects its video, and abandoned when the attempt ends without
+ * collecting. `VideoRecorder` is the screencast; `ProviderVideo` is the
+ * browser provider's own recording.
+ */
+export interface AttemptVideo {
+  /** True while pages the attempt opens start segments of their own. */
+  readonly isArmed: boolean;
+  /** True when `arm` would start a screencast on the page, which a running trace sized for itself. */
+  readonly startsScreencast: boolean;
+  arm(page: Page, signal: AbortSignal): Promise<void>;
+  pageOpened(page: Page): Promise<void>;
+  pageClosing(): Promise<void>;
+  stop(signal: AbortSignal): Promise<readonly VideoSegment[]>;
+  /** Ends a recording the attempt never collected; nothing it recorded is reported. */
+  abandon(signal: AbortSignal): Promise<void>;
+}
 
 /** One segment in progress: the page it records and where its file lands. */
 interface Segment {
@@ -27,27 +49,30 @@ interface Segment {
   readonly startedAt: string;
 }
 
-export class VideoRecorder {
+export class VideoRecorder implements AttemptVideo {
   /** Set by `arm`, cleared by `stop`; pages the attempt opens in between start segments. */
   private armed = false;
   private current: Segment | null = null;
   /** Segments finished this attempt, in order; `stop` hands them over. */
-  private finished: VideoSegment[] = [];
+  private finished: VideoFile[] = [];
   /** Segments started this attempt, for their file names. */
   private count = 0;
   /** The first segment whose stop failed and left no file; `stop` reports it. */
   private lost: { readonly relative: string; readonly cause: unknown } | undefined;
 
-  constructor(private readonly artifactsDir: string) {}
+  constructor(
+    private readonly artifactsDir: string,
+    private readonly options: WebVideoOptions = {},
+  ) {}
 
   /** True between `arm` and `stop`: a page the attempt opens then starts a segment. */
   get isArmed(): boolean {
     return this.armed;
   }
 
-  /** True while a segment records, so a context closing early can end it within a budget. */
-  get isRecording(): boolean {
-    return this.current !== null;
+  /** True while no segment records: `arm` then starts one on the page it is given. */
+  get startsScreencast(): boolean {
+    return this.current === null;
   }
 
   /** Starts the recording on `page`, unless a segment already records, and arms it. */
@@ -66,13 +91,19 @@ export class VideoRecorder {
     return this.end();
   }
 
+  /** The attempt closes uncollected: disarmed first, so no late page starts a segment, then the one in progress ends and its file is complete on disk. */
+  abandon(): Promise<void> {
+    this.armed = false;
+    return this.end();
+  }
+
   /**
    * Ends the recording and returns every segment written this attempt, in
    * order. A segment that was lost (its stop failed and left no file) is
    * reported instead: the harness records that as a cleanup failure, and the
    * segments that did finalize stay on disk.
    */
-  async stop(): Promise<readonly VideoSegment[]> {
+  async stop(): Promise<readonly VideoFile[]> {
     await this.end();
     this.armed = false;
     const lost = this.lost;
@@ -98,10 +129,12 @@ export class VideoRecorder {
     const relative = path.posix.join('video', `${name}.webm`);
     const absolute = path.join(this.artifactsDir, relative);
     mkdirSync(path.dirname(absolute), { recursive: true });
-    const size = await currentViewport(page);
+    const { quality } = this.options;
+    const size = this.options.size ?? await currentViewport(page);
     await page.screencast.start({
       path: absolute,
       size: { width: size.width, height: size.height },
+      ...(quality === undefined ? {} : { quality }),
     });
     this.current = { page, relative, absolute, startedAt: new Date().toISOString() };
   }

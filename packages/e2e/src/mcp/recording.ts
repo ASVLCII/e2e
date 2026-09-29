@@ -37,7 +37,7 @@ export interface SessionRecorderOptions {
 export interface FinishedRecording {
   readonly index: number;
   readonly name: string | undefined;
-  /** Absolute paths, in the order they play; several when the surface replaced its page mid-recording. */
+  /** Absolute paths, or the URL a browser or device provider keeps one at, in the order they play; several when the surface replaced its page mid-recording. */
   readonly files: readonly string[];
   readonly startedAt: string;
   readonly durationMs: number;
@@ -128,8 +128,13 @@ export class SessionRecorder {
     return run;
   }
 
-  /** Moves one segment to `<outDir>/<index>[-<name>][-part<n>]<ext>`, unless an earlier try did, and returns where it landed. */
+  /**
+   * Moves one segment to `<outDir>/<index>[-<name>][-part<n>]<ext>`, unless
+   * an earlier try did, and returns where it landed; a provider's link stays
+   * where the provider keeps it.
+   */
   private keep(recording: ActiveRecording, segment: VideoSegment, position: number): string {
+    if (!('path' in segment)) return segment.url;
     const stem = [String(recording.index), recording.name, position === 0 ? undefined : `part${String(position + 1)}`]
       .filter((part) => part !== undefined)
       .join('-');

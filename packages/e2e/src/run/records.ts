@@ -13,6 +13,8 @@ export interface ArtifactRecord {
   kind: 'screenshot' | 'trace' | 'video' | 'download' | 'log';
   mediaType: string;
   path?: string;
+  /** A video a hosted service keeps: the `http(s)` URL the report links to, in place of a local `path`. */
+  url?: string;
   size?: number;
   sha256?: string;
   /** The configured `ArtifactStore`'s reference for this artifact, when one accepted it. */
@@ -33,8 +35,9 @@ export interface ArtifactRecord {
    * `incomplete` too, bytes the app served and the runner did not rewrite,
    * unless a secret was filled on the session and the file is text the
    * ledger was run over, which makes it `complete`. report-1 also admits an
-   * `incomplete` artifact without a `path`, one its producer withheld; this
-   * runner never writes one.
+   * `incomplete` artifact without a `path`: a video a hosted service keeps,
+   * recorded by `url`, or one its producer withheld, which this runner never
+   * writes.
    */
   redaction: 'complete' | 'not-required' | 'incomplete';
   producer: ArtifactProducer;

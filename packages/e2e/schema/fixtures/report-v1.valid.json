@@ -185,6 +185,17 @@
                 "producer": {
                   "kind": "attempt"
                 }
+              },
+              {
+                "id": "018f0f5c-7b2a-7abc-8abc-1123456789ab:artifact:1",
+                "kind": "video",
+                "mediaType": "video/mp4",
+                "url": "https://recordings.example.com/sessions/abc/replay.mp4",
+                "startedAt": "2026-07-24T12:00:00.000Z",
+                "redaction": "incomplete",
+                "producer": {
+                  "kind": "attempt"
+                }
               }
             ],
             "secondaryErrors": [],

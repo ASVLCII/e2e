@@ -55,7 +55,7 @@ A Playwright key the runner recognizes (`testDir`, `baseURL`, `webServer`,
 | `use.navigationTimeout` | `timeout`, the test budget; `web.goto(url, { timeout })` overrides one call | config | renamed |
 | `use.storageState` | `test.setup` and `{ session }`; no file import, see [By design](#by-design) | config | by design |
 | `use.trace` | `artifacts.kinds`; a trace is on for every attempt by default, `artifacts: { trace: { record: 'retries' } }` for `on-all-retries` | config | renamed |
-| `use.video` | `artifacts: { kinds: ['video'], video: { retain: 'on-failure' } }`, or `--video` for one run | config | renamed |
+| `use.video` | `video` with the same modes (`'off'`, `'on'`, `'retain-on-failure'`, `'on-first-retry'`), at the top of the config, per target in place of a project, `test('x', { video }, ...)` in place of `test.use`, or `--video [mode]` for one run | config | renamed |
 | `use.headless: false` | `--headed` on the CLI | CLI | renamed |
 | `use.locale`, `timezoneId`, `colorScheme`, `geolocation`, `permissions` | not yet | config | missing |
 | `use.userAgent` | `web({ userAgent })` | config | renamed |

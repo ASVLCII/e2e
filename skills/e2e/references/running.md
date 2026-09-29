@@ -37,7 +37,7 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the s
 | `--pass-with-no-tests` | Exit 0 when nothing matches instead of `NO_TESTS`. |
 | `--debug` | Phase timings and an agent step table on stderr; step transcripts saved as artifacts. |
 | `--ai-trace` | Record every model call to `.e2e/ai-trace.json`. |
-| `--video` | Record every attempt (WebM on a browser engine, MP4 on a device engine) under its artifact directory; the failure recap names the file. Fails with `UNSUPPORTED_ARTIFACT` when the engine cannot record. |
+| `--video [mode]` | Which attempts record a video (WebM on a browser engine, MP4 on a device engine), over the config and every target: bare is `on`; `--video=retain-on-failure` keeps only failed attempts' recordings; `on-first-retry` records only first retries. A test's own `video` still wins. The value is greedy: write `--video=<mode>` or put test files before the flag. The failure recap names the file. `UNSUPPORTED_ARTIFACT` when a test would record on an engine that cannot. |
 
 ```bash
 npx e2e run tests/signup.e2e.ts
@@ -117,9 +117,10 @@ recorded flow is stale — `--no-cache` only skips the cache for one run.
 - `github()` from `@e2e-dev/github`: on GitHub Actions, one pull request comment per
   run (edited on rerun) and the job summary; needs `pull-requests: write` and
   `GITHUB_TOKEN` in the step's env.
-- Artifacts (screenshots, Playwright traces, `--video` recordings, `--debug`
+- Artifacts (screenshots, Playwright traces, video recordings, `--debug`
   transcripts, downloads) live under `.e2e/artifacts/`; every path is
-  recorded in the report.
+  recorded in the report, and a video a hosted service keeps is recorded by
+  its URL.
 
 ## Exit codes
 

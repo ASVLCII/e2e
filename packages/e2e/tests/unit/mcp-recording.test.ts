@@ -10,7 +10,7 @@ describe('SessionRecorder', () => {
   let attemptDir: string;
   let outDir: string;
   let calls: string[];
-  /** What the next stopVideo writes, relative to the attempt directory, and returns. */
+  /** What the next stopVideo writes, relative to the attempt directory, and returns; an https URL is a provider's link, written nowhere. */
   let written: string[];
 
   const operation = (timeoutMs: number): OperationContext => ({
@@ -38,6 +38,7 @@ describe('SessionRecorder', () => {
         calls.push('stop');
         if (failing.has('stop')) throw new Error('device lost the recording');
         return written.map((relative, index) => {
+          if (relative.startsWith('https://')) return { url: relative, mediaType: 'video/mp4', startedAt: new Date(Date.now() - 2_000).toISOString() };
           mkdirSync(path.dirname(path.join(attemptDir, relative)), { recursive: true });
           writeFileSync(path.join(attemptDir, relative), `${calls.length}:${index}`);
           return { path: relative, startedAt: new Date(Date.now() - 2_000).toISOString() };
@@ -82,6 +83,15 @@ describe('SessionRecorder', () => {
     expect(existsSync(path.join(attemptDir, 'video', 'video.mp4'))).toBe(false);
     expect(first!.durationMs).toBeGreaterThanOrEqual(1_900);
     expect(recordings.isRecording).toBe(false);
+  });
+
+  it("lists a provider's link where the provider keeps it, beside the files it moved", async () => {
+    written = ['https://recordings.example/r/1', 'video/video.mp4'];
+    const recordings = recorder();
+    await recordings.start('demo');
+    const stopped = await recordings.stop();
+    expect(stopped?.files).toEqual(['https://recordings.example/r/1', path.join(outDir, '1-demo-part2.mp4')]);
+    expect(describeRecording(stopped!)).toContain('- https://recordings.example/r/1');
   });
 
   it('reports a recording already running instead of restarting it, and a stop with nothing running as undefined', async () => {

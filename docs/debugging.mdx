@@ -120,19 +120,46 @@ artifact with `TRACE_WITHHELD` and leaves the file untouched. See the
 ## Watch it happen
 
 ```bash
-npx e2e run --headed          # a visible browser
-npx e2e run --video           # requires an engine that records video
+npx e2e run --headed                      # a visible browser
+npx e2e run --video                       # record every attempt
+npx e2e run --video=retain-on-failure     # record every attempt, keep the failures
 ```
 
-`--video` requires recording support from every selected engine. Unsupported
-engines fail configuration with `UNSUPPORTED_ARTIFACT`. Playwright records
-WebM files; agent-device records MP4. Restarts can produce multiple files.
+Each recording lands under its attempt's artifact directory. Playwright
+writes WebM, one file per page the attempt opened; agent-device writes MP4.
+The failure recap prints the path, or the URL of a recording a hosted
+browser keeps. Each recording carries `startedAt`, so a step's `startedAt`
+minus the recording's is where that step is in the video.
 
-To keep recordings only for failed attempts, configure:
+To record without the flag, set `video` in the config. `on-first-retry` is
+the cheap CI mode: a test that passes first time records nothing, and a
+flaky one leaves a recording of its retry.
 
 ```ts
-artifacts: { kinds: ['video'], video: { retain: 'on-failure' } },
+export default {
+  video: 'on-first-retry',
+  retries: 1,
+  targets: [
+    { name: 'chromium', engine: web({ url }) },
+    { name: 'firefox', engine: web({ url, browser: 'firefox' }), video: 'retain-on-failure' },
+  ],
+} satisfies E2EConfig;
 ```
+
+A target's `video` wins over the config's, `--video` over both. A test's own
+option wins over all of them, which records one flow you are chasing
+without recording the suite:
+
+```ts
+test('checkout', { video: 'on' }, async ({ agent }) => {
+  await agent.act('Buy the first product in the catalog');
+});
+```
+
+`--video [mode]` takes an optional value, so put test files before it or
+write `--video=<mode>`. An engine that cannot record fails the run with
+`UNSUPPORTED_ARTIFACT` before any test starts, as soon as one test would
+record on it. [video](/reference/config#video) has every mode and file.
 
 ## Console output
 

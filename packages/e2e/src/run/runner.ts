@@ -43,7 +43,7 @@ import { lastFailedIds, readLastRun } from './last-run.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setSecretRegistry } from '../secrets.ts';
 import { withAbort } from '../internal/time.ts';
-import type { BuiltinReporter, E2EConfig, FinishedRun, Reporter, ReporterSummary } from '../types.ts';
+import type { BuiltinReporter, E2EConfig, FinishedRun, Reporter, ReporterSummary, VideoMode } from '../types.ts';
 import { modelLabel } from '../config/agent.ts';
 import { positiveInt } from '../config/validate.ts';
 import { detectVcs, type VcsInfo } from '../internal/vcs.ts';
@@ -107,11 +107,12 @@ export interface RunOptions {
   /** Records every model call to `.e2e/ai-trace.json` (`--ai-trace`). */
   aiTrace?: boolean | undefined;
   /**
-   * Records a video of every attempt (`--video`), on top of the configured
-   * artifact kinds. The engine must be able to record; one that cannot fails
-   * the run with `UNSUPPORTED_ARTIFACT` before any test starts.
+   * Which attempts record a video (`--video [mode]`), over the config's and
+   * every target's `video`; a test's own `video` still wins. An engine that
+   * cannot record fails the run with `UNSUPPORTED_ARTIFACT` before any test
+   * starts, when a test that runs on it would record.
    */
-  video?: boolean | undefined;
+  video?: VideoMode | undefined;
   /**
    * A config value instead of a discovered file, for the test harness. May
    * hold live values (executors, engine handles, model instances, cache
@@ -289,7 +290,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   if (options.reporters !== undefined) cli.reporters = options.reporters;
   if (options.noCache === true) cli.cache = 'off';
   if (options.strictCache === true) cli.cacheStrict = true;
-  if (options.video === true) cli.video = true;
+  if (options.video !== undefined) cli.video = options.video;
   if (options.agent !== undefined) cli.agents = typeof options.agent === 'string' ? [options.agent] : options.agent;
 
   // Config resolves before anything is emitted, and its failure is kept rather
@@ -602,8 +603,8 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // Pre-flight: grade every selected target from its engine declaration
     // before any worker starts, so a config that asks for more than the
     // engine offers fails here, once, instead of inside a launch budget.
-    for (const { target } of selection.perTarget) {
-      targetProvenance.set(target.name, validateEngine(target, config));
+    for (const { target, pairs } of selection.perTarget) {
+      targetProvenance.set(target.name, validateEngine(target, config, pairs));
     }
 
     // The work units, built once: the same plans tell each engine's `prepare`

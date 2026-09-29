@@ -181,13 +181,19 @@ function evidencePaths(sorted: readonly ReportArtifact[], dir: string): string[]
  * otherwise. Paths are POSIX, as the report keeps them.
  */
 function evidence(artifacts: readonly ReportArtifact[], options: MarkdownReportOptions): string {
-  if (artifacts.length === 0) return '';
-  const sorted = artifacts.toSorted((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind]);
+  // A video a hosted service keeps links to itself, wherever the run's files are.
+  const hosted = artifacts.flatMap((artifact) => (artifact.url === undefined ? [] : [link(artifact.kind, artifact.url)]));
+  const local = artifacts.filter((artifact) => artifact.url === undefined);
+  if (local.length === 0) return hosted.join(', ');
+  const sorted = local.toSorted((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind]);
   const kinds = [...new Set(sorted.map((artifact) => artifact.kind))];
   const url = options.artifactsUrl;
-  if (url !== undefined) return kinds.map((kind) => link(kind, url)).join(', ');
-  const shown = options.artifactsDir === undefined ? [] : evidencePaths(sorted, options.artifactsDir);
-  return shown.length === 0 ? kinds.join(', ') : shown.join(', ');
+  const shown = url !== undefined
+    ? kinds.map((kind) => link(kind, url))
+    : options.artifactsDir === undefined
+      ? []
+      : evidencePaths(sorted, options.artifactsDir);
+  return [...(shown.length === 0 ? kinds : shown), ...hosted].join(', ');
 }
 
 // --- a test that did not pass ---

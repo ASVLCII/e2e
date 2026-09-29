@@ -607,6 +607,12 @@ export interface TestOptions {
    * a pin the flag does not name.
    */
   agent?: string | readonly string[];
+  /**
+   * Which of the test's attempts record a video, in place of the run's:
+   * the same modes as the config's `video`. Innermost wins; inside a serial
+   * group the group's value applies, since the group records as one unit.
+   */
+  video?: VideoMode;
 }
 
 export interface DescribeOptions extends Omit<TestOptions, 'only'> {
@@ -952,7 +958,18 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
+  /** Which attempts on this target record a video, in place of the config's `video`; `--video` and a test's own `video` win over it. */
+  video?: VideoMode;
 }
+
+/**
+ * Which attempts record a video, and which recordings are kept. `off`: none.
+ * `on`: every attempt, every recording kept. `retain-on-failure`: every
+ * attempt records, only the recordings of attempts that did not pass are
+ * kept. `on-first-retry`: only the first retry records, so a test that passes
+ * first time costs nothing and a flaky one leaves a recording of the retry.
+ */
+export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
 
 /**
  * A live AI SDK language model instance: `gateway('openai/gpt-6-luna-fast')`
@@ -1050,23 +1067,8 @@ export interface ArtifactStore {
   put(artifact: StoredArtifact): Promise<{ readonly ref: string }>;
 }
 
-/**
- * Artifact kinds a config may ask for. `video` is never in the default set:
- * asking for it, in the config or with `--video`, is always a contract, and
- * it never enters the config digest, so recording a run cannot invalidate
- * its cached traces.
- */
-export type ConfiguredArtifactKind = 'trace' | 'screenshot' | 'video';
-
-/** Options of the `video` artifact. */
-export interface VideoArtifactConfig {
-  /**
-   * Which attempts keep their recording: every attempt (`all`, the default),
-   * or only the ones that did not pass (`on-failure`), so a CI run records
-   * everything and keeps only what needs watching.
-   */
-  retain?: 'all' | 'on-failure';
-}
+/** Artifact kinds a config may ask for. Video has its own `video` option. */
+export type ConfiguredArtifactKind = 'trace' | 'screenshot';
 
 /** Options of the `trace` artifact. */
 export interface TraceArtifactConfig {
@@ -1085,8 +1087,6 @@ export interface ArtifactsConfig {
   kinds?: readonly ConfiguredArtifactKind[];
   /** Host store every produced artifact is handed to; omit it to keep files local only. */
   store?: ArtifactStore;
-  /** Options of the `video` kind; ignored unless `video` is among the kinds. */
-  video?: VideoArtifactConfig;
   /** Options of the `trace` kind; ignored unless `trace` is among the kinds. */
   trace?: TraceArtifactConfig;
 }
@@ -1225,8 +1225,13 @@ export interface E2EConfig {
   retries?: number;
   /** Parallel workers, 1 through 1024; default 1 in CI, else half the cores. An engine may cap it lower. */
   workers?: number;
-  /** Artifact kinds, or `{ kinds, store, video, trace }` to also hand every artifact to a host store. */
+  /** Artifact kinds, or `{ kinds, store, trace }` to also hand every artifact to a host store. */
   artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
+  /**
+   * Which attempts record a video; default `off`. A target's `video` wins
+   * over it, `--video [mode]` over both, and a test's own `video` over all.
+   */
+  video?: VideoMode;
   /**
    * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
    * `markdown` writes `.e2e/summary.md`, `json` prints the report and

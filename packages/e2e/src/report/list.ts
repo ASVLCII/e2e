@@ -106,7 +106,7 @@ interface ResultDetails {
   readonly models: ModelTally;
   readonly cache: CacheTally;
   readonly error: SerializedError | undefined;
-  /** Report-relative paths of the recordings the attempts kept, in attempt order. */
+  /** Where the recordings the attempts kept are, in attempt order: report-relative paths, or hosted URLs. */
   readonly videos: readonly string[];
   /** What the runner saw when the last failure landed, with the screen text's report path when it kept one. */
   readonly failure: FailureEvidence | undefined;
@@ -136,12 +136,14 @@ function failureOf(
   return { failure, screenPath: screen?.path };
 }
 
-/** Report-relative paths of the video artifacts these attempts kept, in order. */
+/** Where each video these attempts kept is, in order: a report-relative path, or the URL of one a hosted service keeps. */
 function videoPaths(attempts: readonly { readonly artifacts: readonly ArtifactRecord[] }[]): string[] {
   const paths: string[] = [];
   for (const attempt of attempts) {
     for (const artifact of attempt.artifacts) {
-      if (artifact.kind === 'video' && artifact.path !== undefined) paths.push(artifact.path);
+      if (artifact.kind !== 'video') continue;
+      const where = artifact.url ?? artifact.path;
+      if (where !== undefined) paths.push(where);
     }
   }
   return paths;
@@ -181,7 +183,7 @@ interface Failure {
   readonly title: string;
   readonly status: ResultStatus;
   readonly error: SerializedError | undefined;
-  /** Report-relative paths of the recordings the failed attempts kept, if any. */
+  /** Where the recordings the failed attempts kept are, if any: report-relative paths, or hosted URLs. */
   readonly videos: readonly string[];
   readonly failure: FailureEvidence | undefined;
   readonly screenPath: string | undefined;
@@ -960,8 +962,9 @@ export class ListReporter implements Reporter {
   private printVideos(videos: readonly string[]): void {
     const { pc } = this;
     for (const video of videos) {
-      const target = this.artifactsRoot === undefined ? video : path.join(this.artifactsRoot, video);
-      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${this.displayPath(target)}`));
+      const hosted = /^https?:\/\//.test(video);
+      const target = hosted || this.artifactsRoot === undefined ? video : path.join(this.artifactsRoot, video);
+      this.print(pc.cyan(` ${pc.dim(F_POINTER)} ${pc.dim('video')} ${hosted ? bounded(video) : this.displayPath(target)}`));
     }
   }
 

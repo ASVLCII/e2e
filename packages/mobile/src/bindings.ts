@@ -48,6 +48,11 @@ export interface SlotBinding {
   /** App a provider already installed from `appPath`, so the worker installs nothing and opens this. */
   readonly installedApp?: string | undefined;
   /**
+   * The id of the provider lease the slot rides, set only for a provider's
+   * lease: with it the worker hands the lease to the provider's `record`.
+   */
+  readonly leaseId?: string | undefined;
+  /**
    * App the warm-up in `prepare` opened in the slot's session, which the
    * worker resumes: a permission command there already acts on it. Absent
    * when nothing was opened, or the open failed. Every worker of the slot
@@ -114,6 +119,7 @@ export function encodeBindings(bindings: readonly SlotBinding[]): string {
         daemon: binding.daemon === undefined ? undefined : obj({ baseUrl: binding.daemon.baseUrl, authToken: binding.daemon.authToken }),
         client: binding.client,
         installedApp: binding.installedApp,
+        leaseId: binding.leaseId,
         sessionApp: binding.sessionApp,
       }),
     ),
@@ -148,11 +154,12 @@ function isOptionalString(value: unknown): value is string | undefined {
 /** A binding as JSON parses it back, or as a provider returned it: nothing the engine did not write is trusted. */
 export function isSlotBinding(value: unknown): value is SlotBinding {
   if (typeof value !== 'object' || value === null) return false;
-  const { device, deviceId, daemon, client, installedApp, sessionApp } = value as Record<keyof SlotBinding, unknown>;
+  const { device, deviceId, daemon, client, installedApp, leaseId, sessionApp } = value as Record<keyof SlotBinding, unknown>;
   return (
     isOptionalString(device) &&
     isOptionalString(deviceId) &&
     isOptionalString(installedApp) &&
+    isOptionalString(leaseId) &&
     isOptionalString(sessionApp) &&
     (daemon === undefined || isDaemon(daemon)) &&
     (client === undefined || isClientConfig(client))

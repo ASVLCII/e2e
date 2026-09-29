@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { testCaseBrand } from '../internal/brands.ts';
 import { describeValue } from '../config/validate.ts';
+import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
 import { CollectionError } from '../internal/errors.ts';
 import { validateTitle } from '../internal/ids.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
@@ -262,6 +263,9 @@ function validateCommonOptions(options: TestOptions | DescribeOptions, label: st
   }
   if (options.agent !== undefined) validateAgentOption(options.agent, label);
   if (options.tags !== undefined) validateTagsOption(options.tags, label);
+  if (options.video !== undefined && !isVideoMode(options.video)) {
+    throw new CollectionError(`${label}: video must be one of ${VIDEO_MODES.join(', ')}, got ${describeValue(options.video)}`);
+  }
 }
 
 /**
@@ -327,6 +331,7 @@ function validateTestOptions(options: TestOptions, group: GroupNode | undefined)
   if (insideSerial(group)) {
     const forbidden: (keyof TestOptions)[] = [
       'retries',
+      'video',
       'session',
       'platforms',
       'requires',
@@ -347,6 +352,10 @@ function validateDescribeOptions(options: DescribeOptions, parent: GroupNode | u
   validateCommonOptions(options, 'describe options');
   if (options.serial === true && insideSerial(parent)) {
     throw new CollectionError('nested serial groups are collection errors');
+  }
+  // The serial group records as one unit, so a describe inside it cannot choose its own video.
+  if (options.video !== undefined && insideSerial(parent)) {
+    throw new CollectionError('describe option "video" cannot be set inside a serial group; set it on the serial group or a group around it');
   }
 }
 

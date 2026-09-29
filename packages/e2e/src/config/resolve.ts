@@ -7,6 +7,7 @@ import { envFlag } from '../internal/env.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { canonicalDigest, sha256Hex } from '../internal/ids.ts';
 import { didYouMean } from '../internal/suggest.ts';
+import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
 import { compileGlob } from '../internal/globs.ts';
@@ -25,7 +26,7 @@ import type {
   Target,
   TraceCacheStore,
   TraceArtifactConfig,
-  VideoArtifactConfig,
+  VideoMode,
 } from '../types.ts';
 import { isEngineHandle, type EngineHandle } from '../engine/index.ts';
 import {
@@ -50,6 +51,8 @@ export interface ResolvedTarget {
   readonly engine: EngineHandle | undefined;
   /** The app under test, resolved from the engine's declaration. */
   readonly app: ResolvedApp;
+  /** Which attempts on the target record a video: `--video`, else the target's `video`, else the config's, else `off`. A test's own `video` wins over it. */
+  readonly video: VideoMode;
 }
 
 /** A named account; its password is the `ResolvedSecret` of the same name. */
@@ -95,8 +98,6 @@ export interface ResolvedConfig {
   readonly artifacts: ReadonlyMap<ConfiguredArtifactKind, ArtifactPolicy>;
   /** Host store every produced artifact is handed to; undefined keeps files local only. */
   readonly artifactStore: ArtifactStore | undefined;
-  /** Which attempts keep their video: every one, or only those that did not pass. */
-  readonly videoRetain: 'all' | 'on-failure';
   /** Which attempts record a trace: every one, or retries only. */
   readonly traceRecord: 'all' | 'retries';
   /** The built-in renderers in force: `--reporter` when given, else the config's ids. */
@@ -148,8 +149,8 @@ export interface CliOverrides {
   cache?: CacheMode;
   /** `--strict-cache`: turns `cache.strict` on for the run. */
   cacheStrict?: boolean;
-  /** `--video`: adds the `video` artifact kind to whatever the config asks for. */
-  video?: boolean;
+  /** `--video [mode]`: which attempts record a video, over the config's and every target's `video`. */
+  video?: VideoMode;
   /** `--agent`: the configured agents unpinned tests run as, instead of `default` alone. */
   agents?: readonly string[];
 }
@@ -157,7 +158,7 @@ export interface CliOverrides {
 /** A safe artifact path segment: the filename alphabet, and never `.` or `..`, which would name a directory's self or parent. */
 const TARGET_NAME_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]+$/;
 
-const TARGET_KEYS = new Set(['name', 'platform', 'engine']);
+const TARGET_KEYS = new Set(['name', 'platform', 'engine', 'video']);
 
 const TOP_LEVEL_KEYS = new Set([
   'specVersion',
@@ -172,6 +173,7 @@ const TOP_LEVEL_KEYS = new Set([
   'retries',
   'workers',
   'artifacts',
+  'video',
   'reporters',
   'agents',
   'cache',
@@ -265,7 +267,7 @@ export function resolveConfig(
     );
   }
 
-  const targets = resolveTargets(raw, options.projectRoot, options.ports ?? {});
+  const targets = resolveTargets(raw, options.projectRoot, options.ports ?? {}, runVideo(raw, cli));
   const tests = normalizeTests(raw.tests);
 
   const timeout = positiveInt(raw.timeout, 'timeout', 'milliseconds') ?? 120_000;
@@ -285,7 +287,7 @@ export function resolveConfig(
     boundedInt(raw.workers, 'workers', 1, 1024) ??
     (ci ? 1 : Math.max(1, Math.floor(os.availableParallelism() / 2)));
 
-  const { artifacts, artifactStore, videoRetain, traceRecord } = resolveArtifactsConfig(raw, cli);
+  const { artifacts, artifactStore, traceRecord } = resolveArtifactsConfig(raw);
   const { reporters, customReporters } = resolveReporters(raw, cli);
 
   const projectId = resolveProjectId(raw.projectId, options.projectRoot);
@@ -320,7 +322,6 @@ export function resolveConfig(
     workers,
     artifacts,
     artifactStore,
-    videoRetain,
     traceRecord,
     reporters,
     customReporters,
@@ -433,45 +434,41 @@ function resolveCacheConfig(
   };
 }
 
-/** The default artifact set. `video` is opt-in and never part of it. */
+/** The default artifact set, captured best-effort. */
 const DEFAULT_ARTIFACT_KINDS = ['screenshot', 'trace'] as const;
-const ARTIFACT_KINDS: readonly ConfiguredArtifactKind[] = ['screenshot', 'trace', 'video'];
-const ARTIFACTS_KEYS = new Set(['kinds', 'store', 'video', 'trace']);
-const VIDEO_KEYS = new Set(['retain']);
-const VIDEO_RETAIN_VALUES = ['all', 'on-failure'] as const;
+const ARTIFACT_KINDS: readonly ConfiguredArtifactKind[] = ['screenshot', 'trace'];
+const ARTIFACTS_KEYS = new Set(['kinds', 'store', 'trace']);
 const TRACE_KEYS = new Set(['record']);
 const TRACE_RECORD_VALUES = ['all', 'retries'] as const;
 
+/** Where a video fact lives now, for a config that still says it the old way. */
+const VIDEO_MOVED =
+  "video is its own option: video: 'on' in the config or on a target, video: 'retain-on-failure' to keep only failed attempts' recordings, or --video [mode] for one run";
+
 /**
  * Resolves the `artifacts` key: a bare array of kinds, or `{ kinds, store,
- * video, trace }` where `store` is the host seam every produced artifact is
- * handed to and `video` and `trace` hold the recording options. Named kinds are required; the
- * default set (screenshot and trace) is best-effort; `--video` adds video as
- * a required kind on top of either. A store is a live value validated
- * structurally, like `cache.store`.
+ * trace }` where `store` is the host seam every produced artifact is handed
+ * to and `trace` holds the trace's recording options. Named kinds are
+ * required; the default set (screenshot and trace) is best-effort. A store
+ * is a live value validated structurally, like `cache.store`. Video is not
+ * an artifact kind: `artifacts.kinds: ['video']` and `artifacts.video` are
+ * refused with where the fact lives now.
  */
-function resolveArtifactsConfig(
-  raw: E2EConfig,
-  cli: CliOverrides,
-): {
+function resolveArtifactsConfig(raw: E2EConfig): {
   artifacts: ReadonlyMap<ConfiguredArtifactKind, ArtifactPolicy>;
   artifactStore: ArtifactStore | undefined;
-  videoRetain: 'all' | 'on-failure';
   traceRecord: 'all' | 'retries';
 } {
   const value: unknown = raw.artifacts;
   let kinds: unknown = value;
   let store: ArtifactStore | undefined;
-  let video: unknown;
   let trace: unknown;
   if (value !== undefined && !Array.isArray(value)) {
     if (!isArtifactsObject(value)) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        'artifacts must be an array of artifact kinds or { kinds, store, video, trace }',
-      );
+      throw new ConfigurationError('INVALID_CONFIG', 'artifacts must be an array of artifact kinds or { kinds, store, trace }');
     }
     for (const key of Object.keys(value)) {
+      if (key === 'video') throw new ConfigurationError('INVALID_CONFIG', `artifacts.video is gone; ${VIDEO_MOVED}`);
       if (!ARTIFACTS_KEYS.has(key)) {
         throw new ConfigurationError(
           'INVALID_CONFIG',
@@ -481,7 +478,6 @@ function resolveArtifactsConfig(
     }
     kinds = value.kinds;
     store = value.store;
-    video = value.video;
     trace = value.trace;
     if (store !== undefined && !isArtifactStore(store)) {
       throw new ConfigurationError(
@@ -495,42 +491,28 @@ function resolveArtifactsConfig(
     throw new ConfigurationError('INVALID_CONFIG', 'artifacts kinds must be an array of artifact kinds');
   }
   for (const artifact of resolved) {
+    if (artifact === 'video') throw new ConfigurationError('INVALID_CONFIG', `"video" is no longer an artifact kind; ${VIDEO_MOVED}`);
     if (!(ARTIFACT_KINDS as readonly unknown[]).includes(artifact)) {
       throw new ConfigurationError('INVALID_CONFIG', `unknown artifact kind "${String(artifact)}"`);
     }
   }
-  // Video is never in the default set, so its presence is always a request,
-  // whether the config named it or `--video` added it. Copied, never pushed:
-  // `resolved` may be the default constant or the caller's own array.
   const policy: ArtifactPolicy = kinds === undefined ? 'best-effort' : 'required';
   const artifacts = new Map((resolved as readonly ConfiguredArtifactKind[]).map((kind) => [kind, policy] as const));
-  if (cli.video === true) artifacts.set('video', 'required');
-  return { artifacts, artifactStore: store, videoRetain: resolveVideoRetain(video), traceRecord: resolveTraceRecord(trace) };
+  return { artifacts, artifactStore: store, traceRecord: resolveTraceRecord(trace) };
 }
 
-/** Validates the `artifacts.video` block; absent means every attempt keeps its recording. */
-function resolveVideoRetain(value: unknown): 'all' | 'on-failure' {
-  if (value === undefined) return 'all';
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ConfigurationError('INVALID_CONFIG', 'artifacts.video must be an object');
+/** Checks one `video` value: a mode, or undefined when the key is unset. */
+function videoMode(value: unknown, where: string): VideoMode | undefined {
+  if (value === undefined) return undefined;
+  if (!isVideoMode(value)) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} must be one of ${VIDEO_MODES.join(', ')}, got ${describeValue(value)}`);
   }
-  for (const key of Object.keys(value)) {
-    if (!VIDEO_KEYS.has(key)) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `unknown artifacts.video config key "${key}"${didYouMean(key, [...VIDEO_KEYS])}`,
-      );
-    }
-  }
-  const retain = (value as VideoArtifactConfig).retain;
-  if (retain === undefined) return 'all';
-  if (!(VIDEO_RETAIN_VALUES as readonly unknown[]).includes(retain)) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `artifacts.video.retain must be one of ${VIDEO_RETAIN_VALUES.join(', ')}, got ${JSON.stringify(retain)}`,
-    );
-  }
-  return retain;
+  return value;
+}
+
+/** The run's video mode before any target speaks: `--video`, else the config's `video`; undefined when neither says. */
+function runVideo(raw: E2EConfig, cli: CliOverrides): { readonly cli: VideoMode | undefined; readonly config: VideoMode | undefined } {
+  return { cli: videoMode(cli.video, '--video'), config: videoMode(raw.video, 'video') };
 }
 
 /** Validates the `artifacts.trace` block; absent means every attempt records one. */
@@ -637,7 +619,12 @@ function isTraceCacheStore(value: unknown): value is TraceCacheStore {
 }
 
 
-function resolveTargets(raw: E2EConfig, projectRoot: string, ports: PortAssignments): readonly ResolvedTarget[] {
+function resolveTargets(
+  raw: E2EConfig,
+  projectRoot: string,
+  ports: PortAssignments,
+  video: { readonly cli: VideoMode | undefined; readonly config: VideoMode | undefined },
+): readonly ResolvedTarget[] {
   if (raw.targets === undefined) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
@@ -660,7 +647,7 @@ function resolveTargets(raw: E2EConfig, projectRoot: string, ports: PortAssignme
           : didYouMean(key, [...TARGET_KEYS]);
         throw new ConfigurationError(
           'INVALID_CONFIG',
-          `${where} has unknown key "${key}"; a target is { name?, platform?, engine? }${hint}`,
+          `${where} has unknown key "${key}"; a target is { name?, platform?, engine?, video? }${hint}`,
         );
       }
     }
@@ -689,12 +676,15 @@ function resolveTargets(raw: E2EConfig, projectRoot: string, ports: PortAssignme
     }
     seen.add(name);
     if (target.name === undefined) defaulted.add(name);
+    // Checked whether or not `--video` wins over it, so a flag never hides a config mistake.
+    const ownVideo = videoMode(target.video, `${where} video`);
     return {
       name,
       index,
       platform,
       engine: target.engine,
       app: resolveTargetApp(name, target.engine, projectRoot, ports[name]),
+      video: video.cli ?? ownVideo ?? video.config ?? 'off',
     };
   });
 }
@@ -880,10 +870,10 @@ function resolveAgents(
   return { agents, agentNames, agent: agents.get(agentNames[0]!)! };
 }
 
-/** The artifact kinds as the digest sees them: no store, no video. */
+/** The artifact kinds as the digest sees them: no store. */
 function digestedArtifactKinds(artifacts: NonNullable<E2EConfig['artifacts']>): ConfiguredArtifactKind[] {
   const kinds = isArtifactsObject(artifacts) ? artifacts.kinds : artifacts;
-  return (kinds ?? [...DEFAULT_ARTIFACT_KINDS]).filter((kind) => kind !== 'video');
+  return [...(kinds ?? DEFAULT_ARTIFACT_KINDS)];
 }
 
 function computeConfigDigest(raw: E2EConfig, projectId: string): string {
@@ -898,14 +888,14 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
   //
   // An artifact store is a live value: only the kinds are configuration, so
   // the array and object forms digest identically and a host store never
-  // enters the digest. Nor does video: recording a run must never invalidate
-  // the traces it would otherwise replay, so the digest reads the same kinds
-  // with or without it and ignores the `video` options block. A reporter
+  // enters the digest. Nor does video, at the top or on a target: recording a
+  // run must never invalidate the traces it would otherwise replay. A reporter
   // object changes nothing about what a run records, so it never enters the
   // digest either; the built-in ids digest as they always have, so adding a
   // reporter to a config leaves its cache valid.
+  const { video: _video, ...recorded } = raw;
   const forClone: Record<string, unknown> = {
-    ...raw,
+    ...recorded,
     ...(raw.artifacts === undefined ? {} : { artifacts: digestedArtifactKinds(raw.artifacts) }),
     ...(Array.isArray(raw.reporters)
       ? { reporters: raw.reporters.filter((reporter) => typeof reporter === 'string') }
@@ -935,8 +925,9 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
       // drives (a named target inherits it, so two workers whose engines
       // declare different platforms must not agree on the digest), capability
       // set, and what it declares about the app under test.
-      if (isEngineHandle(target.engine)) {
-        const { engine, ...rest } = target;
+      const { video: _targetVideo, ...digested } = target;
+      if (isEngineHandle(digested.engine)) {
+        const { engine, ...rest } = digested;
         return {
           ...rest,
           engine: {
@@ -950,7 +941,7 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
           },
         };
       }
-      return target;
+      return digested;
     });
   }
   return canonicalDigest(sanitized);

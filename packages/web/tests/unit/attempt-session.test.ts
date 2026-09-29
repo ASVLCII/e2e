@@ -57,7 +57,7 @@ function session(options: {
   viewport?: { width: number; height: number } | null;
 } = {}) {
   return new AttemptSession({
-    artifactsDir: options.artifactsDir ?? tmpdir(), viewport: options.viewport === undefined ? { width: 320, height: 200 } : options.viewport, contextOptions: {},
+    artifactsDir: options.artifactsDir ?? tmpdir(), viewport: options.viewport === undefined ? { width: 320, height: 200 } : options.viewport, contextOptions: {}, video: {},
     acquire: async () => { throw new Error('persistent attempts never acquire the shared browser'); },
     configure: options.configure ?? (async () => undefined),
     persistent: { provision: options.provision ?? (() => 'provisioned'), reconnect: options.reconnect ?? (() => 'existing'), usedContexts: options.used ?? new Set() },
@@ -132,7 +132,7 @@ describe('AttemptSession', () => {
     const newPage = vi.fn(async () => opened);
     const context = { pages: () => [existing], newPage, close: async () => undefined };
     const owner = new AttemptSession({
-      artifactsDir: tmpdir(), viewport: { width: 320, height: 200 }, contextOptions: {},
+      artifactsDir: tmpdir(), viewport: { width: 320, height: 200 }, contextOptions: {}, video: {},
       acquire: async () => ({ newContext: async () => context }) as unknown as Browser,
       configure: async () => undefined,
     });
@@ -310,16 +310,16 @@ describe('AttemptSession', () => {
     const next = session({ artifactsDir: path.join(directory, 'next') });
     try {
       await first.start(new AbortController().signal);
-      const oldRecording = first.startVideo();
+      const oldRecording = first.startVideo(new AbortController().signal);
       await started.promise;
       await first.close(cleanup());
       await next.start(new AbortController().signal);
-      await next.startVideo();
+      await next.startVideo(new AbortController().signal);
       resume.resolve();
       await oldRecording;
       await first.collectVideo(operation());
       expect(nextStop).not.toHaveBeenCalled();
-      expect((await next.collectVideo(operation())).map((segment) => segment.path)).toEqual(['video/video.webm']);
+      expect((await next.collectVideo(operation())).map((segment) => ('path' in segment ? segment.path : segment.url))).toEqual(['video/video.webm']);
       expect(nextStop).toHaveBeenCalledTimes(1);
     } finally {
       resume.resolve();

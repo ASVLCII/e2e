@@ -115,7 +115,7 @@ fail with `UNSUPPORTED_CAPABILITY`.
 | `performAt(point, action, context)` + `pointerActions` | `pointer` | Coordinate actions supported by the declared kinds |
 | `keyboard.{type,press,dismiss?}` | `keyboard` | Typing and key presses into the focused control; optional keyboard dismissal |
 | `state.{capture,restore}` | `state` | `test.setup` and the `session` option |
-| `artifacts.{screenshot,startTrace?,stopTrace?,startVideo?,stopVideo?}` | `artifacts` | Screenshots, plus traces and video when their start and stop hooks exist |
+| `artifacts.{screenshot,startTrace?,stopTrace?,startVideo?,stopVideo?}` | `artifacts` | Screenshots, plus traces and video when their start and stop hooks exist. A video is a file or a link to a hosted service's recording; see [provider recordings](/reference/engine#provider-recordings) |
 | `app` | | App address, identity, environment, and process settings. [Reference](/reference/config#the-app-under-test). |
 | `session.{open?,back?,restart?,reset?}` | | `app.open()` and the agent's `navigate` verb, `app.back()` and the agent's `back` verb, `app.restart()`, `app.clearState()` |
 | `fixtures.<name>` | `<name>` | a contributed fixture, typed through `test.extend` |

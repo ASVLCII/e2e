@@ -155,6 +155,20 @@ export function createAttemptArtifacts(options: {
       );
       return id;
     },
+    link: (url, link) => {
+      const id = `${options.attemptId}:artifact:${records.length}`;
+      const stepId = options.currentStepId?.();
+      records.push({
+        id,
+        kind: 'video',
+        mediaType: link.mediaType,
+        url,
+        startedAt: link.startedAt,
+        redaction: REDACTION_BY_KIND.video,
+        producer: stepId === undefined ? { kind: 'attempt' } : { kind: 'step', stepId },
+      });
+      return id;
+    },
   };
 
   const settle = async (): Promise<void> => {

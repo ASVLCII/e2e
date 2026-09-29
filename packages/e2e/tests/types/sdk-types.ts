@@ -123,12 +123,20 @@ unique(7);
 ({ targets: [{ name: 'phone', engine }] }) satisfies E2EConfig;
 // @ts-expect-error cache mode is a closed union
 ({ targets, cache: 'sometimes' }) satisfies E2EConfig;
-({ targets, artifacts: ['screenshot', 'trace', 'video'] }) satisfies E2EConfig;
-({ targets, artifacts: { kinds: ['video'], store: artifactStore, video: { retain: 'on-failure' } } }) satisfies E2EConfig;
+({ targets, artifacts: ['screenshot', 'trace'] }) satisfies E2EConfig;
+({ targets, artifacts: { kinds: ['trace'], store: artifactStore } }) satisfies E2EConfig;
 // @ts-expect-error artifact kinds are a closed union
 ({ targets, artifacts: ['gif'] }) satisfies E2EConfig;
-// @ts-expect-error video retention is a closed union
-({ targets, artifacts: { video: { retain: 'sometimes' } } }) satisfies E2EConfig;
+// @ts-expect-error video is its own option, not an artifact kind
+({ targets, artifacts: ['video'] }) satisfies E2EConfig;
+// @ts-expect-error video retention moved to the video mode
+({ targets, artifacts: { video: { retain: 'on-failure' } } }) satisfies E2EConfig;
+({ targets, video: 'retain-on-failure' }) satisfies E2EConfig;
+({ targets: [{ name: 'phone', engine, video: 'on-first-retry' }], video: 'off' }) satisfies E2EConfig;
+// @ts-expect-error video is a closed set of modes
+({ targets, video: 'sometimes' }) satisfies E2EConfig;
+// @ts-expect-error video is a mode, not a boolean
+({ targets, video: true }) satisfies E2EConfig;
 ({ targets, artifacts: { trace: { record: 'retries' } } }) satisfies E2EConfig;
 // @ts-expect-error trace recording is a closed union
 ({ targets, artifacts: { trace: { record: 'on-failure' } } }) satisfies E2EConfig;

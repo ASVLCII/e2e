@@ -951,9 +951,9 @@ test('fails on purpose', async ({ app }) => {
 });
 `;
 
-  /** The video artifacts of a result's first attempt. */
-  const videosOf = (outcome: Awaited<ReturnType<typeof runProject>>['outcome'], title: string) =>
-    resultByTitle(outcome, title).attempts[0]!.artifacts.filter((artifact) => artifact.kind === 'video');
+  /** The video artifacts of one attempt of a result, the first by default. */
+  const videosOf = (outcome: Awaited<ReturnType<typeof runProject>>['outcome'], title: string, attempt = 0) =>
+    resultByTitle(outcome, title).attempts[attempt]!.artifacts.filter((artifact) => artifact.kind === 'video');
 
   /** A config with the default artifact kinds, so `--video` adds to a best-effort set. */
   const defaultKindsConfig = (fake: FakeEngineHandle): Partial<E2EConfig> => ({
@@ -966,7 +966,7 @@ test('fails on purpose', async ({ app }) => {
       const fake = createFakeEngine({ artifacts: true });
       const { outcome, project } = await runProject(
         { 'tests/video.e2e.ts': PASSING_TEST },
-        { appUrl: APP_URL, config: defaultKindsConfig(fake), runOptions: { video: true } },
+        { appUrl: APP_URL, config: defaultKindsConfig(fake), runOptions: { video: 'on' } },
       );
       expect(outcome.status).toBe('error');
       expect(fake.stats().attemptsStarted).toBe(0);
@@ -983,7 +983,7 @@ test('fails on purpose', async ({ app }) => {
       const { outcome, project } = await runProject(
         { 'tests/video.e2e.ts': PASSING_TEST },
         // Default kinds stay best-effort: the fake has no trace, and the run does not mind.
-        { appUrl: APP_URL, config: defaultKindsConfig(fake), runOptions: { video: true } },
+        { appUrl: APP_URL, config: defaultKindsConfig(fake), runOptions: { video: 'on' } },
       );
       expect(outcome.status).toBe('passed');
       assertValidReport(outcome.report);
@@ -1004,14 +1004,14 @@ test('fails on purpose', async ({ app }) => {
   );
 
   it(
-    'keeps only failed attempts with retain: on-failure',
+    'keeps only failed attempts with retain-on-failure',
     async () => {
       const fake = createFakeEngine({ video: true });
       const { outcome, project } = await runProject(
         { 'tests/pass.e2e.ts': PASSING_TEST, 'tests/fail.e2e.ts': FAILING_TEST },
         {
           appUrl: APP_URL,
-          config: engineConfig(fake.engine, { artifacts: { kinds: ['video'], video: { retain: 'on-failure' } } }),
+          config: engineConfig(fake.engine, { video: 'retain-on-failure' }),
         },
       );
       expect(outcome.status).toBe('failed');
@@ -1027,6 +1027,109 @@ test('fails on purpose', async ({ app }) => {
         .filter((entry) => entry.endsWith('fake.webm') && entry.includes('pass'));
       expect(passedVideos).toEqual([]);
       project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'fails the cleanup on an engine link that is not http(s), and still keeps its other recordings',
+    async () => {
+      const fake = createFakeEngine({ video: true, videoLinks: ['file:///tmp/r.mp4', 'https://recordings.example/r.mp4'] });
+      const { outcome, project } = await runProject(
+        { 'tests/video.e2e.ts': PASSING_TEST },
+        { appUrl: APP_URL, config: engineConfig(fake.engine, { video: 'on' }) },
+      );
+      assertValidReport(outcome.report);
+      const attempt = resultByTitle(outcome, 'taps a node').attempts[0]!;
+      expect(attempt.cleanup).toBe('failed');
+      expect(attempt.secondaryErrors).toEqual([expect.objectContaining({ code: 'ENGINE_FAILURE', message: expect.stringContaining('"file:///tmp/r.mp4"') })]);
+      const videos = attempt.artifacts.filter((artifact) => artifact.kind === 'video');
+      expect(videos.map((video) => video.url ?? video.path)).toEqual([
+        'https://recordings.example/r.mp4',
+        expect.stringMatching(/\/attempt-0\/video\/fake\.webm$/),
+      ]);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'records only the first retry with on-first-retry, and nothing for a test that passes first time',
+    async () => {
+      const fake = createFakeEngine({ video: true });
+      const { outcome, project } = await runProject(
+        { 'tests/pass.e2e.ts': PASSING_TEST, 'tests/fail.e2e.ts': FAILING_TEST },
+        { appUrl: APP_URL, config: engineConfig(fake.engine, { video: 'on-first-retry', retries: 1 }) },
+      );
+      expect(outcome.status).toBe('failed');
+      expect(videosOf(outcome, 'taps a node')).toEqual([]);
+      expect(videosOf(outcome, 'fails on purpose', 0)).toEqual([]);
+      expect(videosOf(outcome, 'fails on purpose', 1)).toHaveLength(1);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    "lets a test's own video win over --video, and a target's win over the config",
+    async () => {
+      const fake = createFakeEngine({ video: true });
+      const tests = `import { test } from 'e2e';
+
+test('keeps quiet', { video: 'off' }, async ({ app }) => {
+  await app.open('/');
+});
+
+test('follows the run', async ({ app }) => {
+  await app.open('/');
+});
+`;
+      const flagged = await runProject({ 'tests/video.e2e.ts': tests }, { appUrl: APP_URL, config: engineConfig(fake.engine), runOptions: { video: 'on' } });
+      expect(videosOf(flagged.outcome, 'keeps quiet')).toEqual([]);
+      expect(videosOf(flagged.outcome, 'follows the run')).toHaveLength(1);
+      flagged.project.cleanup();
+
+      const targeted = createFakeEngine({ video: true });
+      const byTarget = await runProject(
+        { 'tests/video.e2e.ts': PASSING_TEST },
+        { appUrl: APP_URL, config: { targets: [{ name: 'fake', platform: 'fake', engine: targeted.engine, video: 'off' }], video: 'on' } },
+      );
+      expect(videosOf(byTarget.outcome, 'taps a node')).toEqual([]);
+      byTarget.project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'fails pre-flight only when a test that runs would record on an engine that cannot',
+    async () => {
+      const file = `import { test } from 'e2e';
+
+test.describe('checkout', () => {
+  test('records', { video: 'on' }, async ({ app }) => {
+    await app.open('/');
+  });
+});
+`;
+      const fake = createFakeEngine({ artifacts: true });
+      const refused = await runProject({ 'tests/video.e2e.ts': file }, { appUrl: APP_URL, config: engineConfig(fake.engine) });
+      expect(refused.outcome.status).toBe('error');
+      expect(fake.stats().attemptsStarted).toBe(0);
+      expect(refused.outcome.report.run.errors.find((error) => error.code === 'UNSUPPORTED_ARTIFACT')?.message).toBe(
+        'target "fake" (engine fake) cannot record video, and test "checkout > records" in tests/video.e2e.ts records with video: on',
+      );
+      refused.project.cleanup();
+
+      // on-first-retry with no retries never records, and a --video run whose tests all opt out asks nothing.
+      for (const [config, runOptions, body] of [
+        [{ video: 'on-first-retry' as const, retries: 0 }, {}, PASSING_TEST],
+        [{}, { video: 'on' as const }, PASSING_TEST.replace("test('taps a node', async", "test('taps a node', { video: 'off' }, async")],
+      ] as const) {
+        const quiet = createFakeEngine({ artifacts: true });
+        const run = await runProject({ 'tests/video.e2e.ts': body }, { appUrl: APP_URL, config: engineConfig(quiet.engine, config), runOptions });
+        expect(run.outcome.status).toBe('passed');
+        run.project.cleanup();
+      }
     },
     60_000,
   );

@@ -165,9 +165,9 @@ export class SessionHost {
     try {
       attempt = await openStandaloneAttempt({
         // A session records only between start_recording and stop_recording:
-        // the config's video kind is for runs, and would record everything.
-        config: { ...config, artifacts: new Map([...config.artifacts].filter(([kind]) => kind !== 'video')) },
-        target,
+        // the configured video mode is for runs, and would record everything.
+        config,
+        target: { ...target, video: 'off' },
         headed: this.options.headed,
         env: this.options.env,
         signal: abort.signal,

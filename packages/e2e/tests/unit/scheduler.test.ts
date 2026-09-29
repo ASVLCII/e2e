@@ -31,6 +31,7 @@ const defaultOptions: ResolvedTestOptions = {
   agentContext: undefined,
   skipReason: undefined,
   serial: false,
+  video: undefined,
 };
 
 const EMPTY_APP: ResolvedTarget['app'] = {
@@ -50,6 +51,7 @@ function makeTarget(name: string, index: number, engine?: EngineHandle): Resolve
     platform: 'web',
     engine,
     app: EMPTY_APP,
+    video: 'off',
   };
 }
 
