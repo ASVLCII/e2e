@@ -169,6 +169,7 @@ so a slow check in between lets the toast disappear first, and a failing
 one leaves a screen at failure without it:
 
 ```ts
+await screen.getByLabel('Project Name').fill('x'.repeat(300)); // over the limit, so the save fails
 await screen.getByRole('button', { name: 'Save Changes' }).tap();
 await expect(screen.getByText('Failed to update project')).toBeVisible();
 await expect(screen.getByLabel('Project Name')).toHaveAttribute('aria-invalid', 'false');

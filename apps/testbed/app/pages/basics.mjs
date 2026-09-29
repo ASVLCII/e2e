@@ -250,7 +250,7 @@ const pages = {
 
        <script>
          const region = document.querySelector('section[aria-live]');
-         function toast(title) {
+         function toast(title, type) {
            let list = region.querySelector('ol');
            if (list === null) {
              list = document.createElement('ol');
@@ -260,7 +260,7 @@ const pages = {
            }
            const item = document.createElement('li');
            item.tabIndex = 0;
-           Object.assign(item.dataset, { sonnerToast: '', type: 'error', mounted: 'false', removed: 'false' });
+           Object.assign(item.dataset, { sonnerToast: '', type, mounted: 'false', removed: 'false' });
            item.innerHTML =
              '<div data-icon><svg aria-hidden="true" width="16" height="16"><circle cx="8" cy="8" r="7"></circle></svg></div>' +
              '<div data-content><div data-title></div></div>';
@@ -278,7 +278,8 @@ const pages = {
          document.getElementById('settings').addEventListener('submit', (event) => {
            event.preventDefault();
            const name = document.getElementById('project-name').value;
-           setTimeout(() => toast(name.length > 255 ? 'Failed to update project' : 'Project updated successfully'), 150);
+           const failed = name.length > 255;
+           setTimeout(() => toast(failed ? 'Failed to update project' : 'Project updated successfully', failed ? 'error' : 'success'), 150);
          });
        </script>`,
   }),

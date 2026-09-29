@@ -291,6 +291,7 @@ without it. A read (`count()`, `textContent()`, `isVisible()`) right after the t
 runs before the toast mounts.
 
 ```ts
+await screen.getByLabel('Project Name').fill('x'.repeat(300)); // over the limit, so the save fails
 await screen.getByRole('button', { name: 'Save Changes' }).tap();
 await expect(screen.getByText('Failed to update project')).toBeVisible();
 await expect(screen.getByLabel('Project Name')).toHaveAttribute('aria-invalid', 'false');
@@ -300,7 +301,8 @@ A toast library may give the toast itself no role: sonner renders a
 `region` named `Notifications alt+T` with one `listitem` per toast, so
 `getByRole('status')` matches nothing and `getByRole('alert')` can match an
 unrelated live region (Next.js's route announcer). Query the text, or
-`getByRole('region', { name: /^Notifications/ }).getByRole('listitem')`.
+scope to the region and the toast's text, since toasts stack:
+`getByRole('region', { name: /^Notifications/ }).getByRole('listitem').filter({ hasText: 'Failed to update project' })`.
 
 ## Sign-in sessions
 
