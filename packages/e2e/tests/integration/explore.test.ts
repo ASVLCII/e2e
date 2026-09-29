@@ -644,15 +644,18 @@ test('never runs under explore', async () => {
         call.instruction.includes('(none yet')
           ? { decision: 'step', title: 'Home', instruction: 'Look at the home page' }
           : { decision: 'finish', summary: 'One finding without evidence.' },
-      loop: (call) =>
-        call.turn === 1
-          ? [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }]
-          : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Looked' } }],
+      loop: (call) => {
+        // The storage page holds still, so the report records at the first call.
+        if (call.turn === 1) return [{ toolName: 'navigate', input: { url: `${app.url}/storage` } }];
+        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }];
+        return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Looked' } }];
+      },
     });
     const outcome = await exploreWithSession(model, 'signed-in');
 
     expect(outcome.report.run.errors).toEqual([]);
     expect(ran(outcome)).toEqual(['Explore the storage page', 'fills the password']);
+    expect(loopCalls[2]!.lastToolResult).toMatch(/^Finding 1 recorded/);
     expect(outcome.explore.findings).toHaveLength(1);
     expect(outcome.explore.findings[0]!.artifactId).toBeUndefined();
     expect(JSON.stringify(outcome.report)).not.toContain('bookworm');
