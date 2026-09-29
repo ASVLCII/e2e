@@ -163,6 +163,21 @@ than one node. Narrow it with `.filter()`, `.first()`, or `.nth()`.
 Locator assertions retry until they pass or time out. Direct reads such as
 `textContent()` do not retry a mismatched value.
 
+Assert a toast right after the action that shows it. Toasts dismiss
+themselves (sonner after 4 seconds, under the 5-second assertion timeout),
+so a slow or failing check in between lets the toast disappear before its
+assertion runs, and the screen at failure no longer shows it:
+
+```ts
+await screen.getByRole('button', { name: 'Save Changes' }).tap();
+await expect(screen.getByText('Failed to update project')).toBeVisible();
+await expect(screen.getByLabel('Project Name')).toHaveAttribute('aria-invalid', 'false');
+```
+
+A toast often has no role of its own. Sonner renders a `region` named
+`Notifications alt+T` with a `listitem` per toast, so `getByRole('status')`
+finds nothing. Query the toast's text instead.
+
 Use the `web` fixture for browser features such as routes, cookies, dialogs,
 frames, and downloads. Import `test` from `@e2e-dev/web` to use it.
 See the [Web engine reference](/reference/web) and the

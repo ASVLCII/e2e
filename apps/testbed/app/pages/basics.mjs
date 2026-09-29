@@ -1,8 +1,9 @@
 /**
  * The everyday pages: the landing page, a todo list kept in localStorage, a
- * profile form, the cookie-session login and the dashboard behind it, and a
- * three-step wizard. What queries, fills, sessions, and polling assertions
- * are dogfooded against.
+ * profile form, the cookie-session login and the dashboard behind it, a
+ * three-step wizard, and a settings form whose failed save shows only an
+ * auto-dismissing toast. What queries, fills, sessions, and polling
+ * assertions are dogfooded against.
  */
 
 const nav = [
@@ -12,6 +13,7 @@ const nav = [
   { path: '/login', label: 'Login' },
   { path: '/dashboard', label: 'Dashboard' },
   { path: '/wizard', label: 'Wizard' },
+  { path: '/toasts', label: 'Toasts' },
 ];
 
 const pages = {
@@ -221,6 +223,53 @@ const pages = {
            const plan = document.getElementById('plan').value;
            document.querySelector('output').textContent =
              'Created "' + name + '" on the ' + plan + ' plan';
+         });
+       </script>`,
+  }),
+
+  // The markup and timing of a sonner toast: a polite live region that is
+  // always there, a list mounted per toast after the save's round trip, a
+  // 400 ms fade in, and removal 4 s later, before the 5 s assertion timeout.
+  // The field never turns invalid, so the toast is the only evidence.
+  '/toasts': () => ({
+    title: 'Toasts',
+    body: `<h1>Project settings</h1>
+       <style>
+         [data-sonner-toaster] { position: fixed; right: 24px; bottom: 24px; margin: 0; padding: 0; list-style: none; }
+         [data-sonner-toast] { opacity: 0; transform: translateY(100%); transition: opacity 400ms, transform 400ms; }
+         [data-sonner-toast][data-mounted='true'] { opacity: 1; transform: none; }
+         [data-sonner-toast][data-removed='true'] { opacity: 0; }
+       </style>
+       <form id="settings">
+         <label for="project-name">Project Name</label>
+         <input id="project-name" aria-invalid="false" value="E2E project" />
+         <button type="submit">Save Changes</button>
+       </form>
+       <section aria-label="Notifications alt+T" tabindex="-1" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></section>
+
+       <script>
+         const region = document.querySelector('section[aria-live]');
+         function toast(title) {
+           const list = document.createElement('ol');
+           list.dataset.sonnerToaster = 'true';
+           list.tabIndex = -1;
+           list.innerHTML =
+             '<li tabindex="0" data-sonner-toast data-type="error" data-mounted="false" data-removed="false">' +
+             '<div data-icon><svg aria-hidden="true" width="16" height="16"><circle cx="8" cy="8" r="7"></circle></svg></div>' +
+             '<div data-content><div data-title></div></div></li>';
+           const item = list.querySelector('li');
+           item.querySelector('[data-title]').textContent = title;
+           region.append(list);
+           requestAnimationFrame(() => { item.dataset.mounted = 'true'; });
+           setTimeout(() => {
+             item.dataset.removed = 'true';
+             setTimeout(() => list.remove(), 200);
+           }, 4000);
+         }
+         document.getElementById('settings').addEventListener('submit', (event) => {
+           event.preventDefault();
+           const name = document.getElementById('project-name').value;
+           setTimeout(() => toast(name.length > 255 ? 'Failed to update project' : 'Project updated successfully'), 150);
          });
        </script>`,
   }),

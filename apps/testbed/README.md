@@ -11,7 +11,8 @@ here.
 - `app/server.mjs` — dependency-free playground app. The runner starts and
   stops it via the web engine's `command` option. The pages live under
   `app/pages/` by group, each module exporting its routes and its nav
-  entries: `basics` (home, todos, forms, login/session, dashboard, wizard),
+  entries: `basics` (home, todos, forms, login/session, dashboard, wizard,
+  toasts),
   `interaction` (network, dialogs, board, pointer pad, iframes), `canvas`
   (four pixels-only surfaces), `downloads` (a file and a long page), and
   `controls` (control states, scrolling, the browser fixture's page, the
@@ -26,7 +27,9 @@ here.
   credentials and secrets, plus one file per surface added since: control
   states and the failure codes (`controls`), pointer coordinates and path
   swipes (`pointer`), viewport and node scrolling (`scroll`), the `web`
-  fixture's own verbs (`browser`), and the per-action speed floor (`speed`).
+  fixture's own verbs (`browser`), the per-action speed floor (`speed`),
+  and a sonner-shaped toast that dismisses before the assertion timeout
+  (`toasts`).
   `tests/helpers.ts` holds the shared `failure`, `boxOf`, and `centerOf`.
 - `e2e.agent.config.ts` + `tests-agent/` — opt-in agentic suite against the
   playground: `agent.act` flows, assisted polling, judgments,

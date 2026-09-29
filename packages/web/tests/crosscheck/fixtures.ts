@@ -165,6 +165,19 @@ export const FIXTURE_PAGES: readonly FixturePage[] = [
     `,
   },
   {
+    name: 'toasts',
+    html: `
+      <section aria-label="Notifications alt+T" tabindex="-1" aria-live="polite" aria-relevant="additions text" aria-atomic="false">
+        <ol data-sonner-toaster tabindex="-1" style="position:fixed;right:24px;bottom:24px;list-style:none">
+          <li data-sonner-toast tabindex="0" style="opacity:0">
+            <div data-icon><svg aria-hidden="true" width="16" height="16"></svg></div>
+            <div data-content><div data-title>Failed to update project</div></div>
+          </li>
+        </ol>
+      </section>
+    `,
+  },
+  {
     name: 'shadow and custom elements',
     html: `
       <open-card></open-card>

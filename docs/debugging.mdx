@@ -65,6 +65,10 @@ URL: `http://127.0.0.1:3000/todos`
 and observed values; locator failures include the requested locator and
 nearby matches. Repeated failure details help you compare attempts.
 
+The screen at failure is captured when the failure is reported, after
+the assertion's timeout, so a toast that dismissed during the wait is not
+in it. Assert a toast right after the action that shows it.
+
 ## The report
 
 Use `.e2e/report.json` for scripts and integrations. `--reporter json` prints

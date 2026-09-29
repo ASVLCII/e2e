@@ -14,6 +14,8 @@
    flake), every step with its own line, the last model turns of a failed
    agent step, and the screen at failure inline: the accessibility tree as
    the agent reads it, one node per line. Write the fix from what was there.
+   It is the screen when the failure was reported, after the wait: a toast
+   that dismissed during a 5 s poll is not in it.
 3. `.e2e/report.json` is the record behind the pages:
 
 ```bash

@@ -280,6 +280,28 @@ test('GET /api/users returns the seeded users', async ({ app }) => {
 });
 ```
 
+### Toasts and other transient messages
+
+A toast mounts after the request behind it returns and removes itself a few
+seconds later (sonner's default is 4 s, under the 5 s assertion timeout).
+Assert it with a matcher straight after the action that triggers it, before
+any check that could wait out its timeout: a slow or failing `expect` in
+between lets the toast dismiss, and the screen at failure no longer shows
+it. A read (`count()`, `textContent()`, `isVisible()`) right after the tap
+runs before the toast mounts.
+
+```ts
+await screen.getByRole('button', { name: 'Save Changes' }).tap();
+await expect(screen.getByText('Failed to update project')).toBeVisible();
+await expect(screen.getByLabel('Project Name')).toHaveAttribute('aria-invalid', 'false');
+```
+
+A toast library may give the toast itself no role: sonner renders a
+`region` named `Notifications alt+T` with one `listitem` per toast, so
+`getByRole('status')` matches nothing and `getByRole('alert')` can match an
+unrelated live region (Next.js's route announcer). Query the text, or
+`getByRole('region', { name: /^Notifications/ }).getByRole('listitem')`.
+
 ## Sign-in sessions
 
 Sign in once in a setup test, save the state under a name, and let other
@@ -389,6 +411,8 @@ expect(response.status).toBe(201);
 - `web.locator('.btn-primary')` when `getByRole('button', { name })` exists.
 - `expect(await locator.textContent()).toBe(...)` for a value that is still
   changing; use `toHaveText`.
+- Checking a toast after another assertion that can wait out its timeout;
+  the toast dismisses in between. Assert it first.
 - Hardcoded passwords or tokens.
 - Sharing state between tests without `serial`.
 - `test.only` left in a file: CI fails with `ONLY_IN_CI`.
