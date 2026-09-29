@@ -165,8 +165,8 @@ Locator assertions retry until they pass or time out. Direct reads such as
 
 Assert a toast right after the action that shows it. Toasts dismiss
 themselves (sonner after 4 seconds, under the 5-second assertion timeout),
-so a slow or failing check in between lets the toast disappear before its
-assertion runs, and the screen at failure no longer shows it:
+so a slow check in between lets the toast disappear first, and a failing
+one leaves a screen at failure without it:
 
 ```ts
 await screen.getByRole('button', { name: 'Save Changes' }).tap();

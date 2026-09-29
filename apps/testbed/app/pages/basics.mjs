@@ -228,9 +228,10 @@ const pages = {
   }),
 
   // The markup and timing of a sonner toast: a polite live region that is
-  // always there, a list mounted per toast after the save's round trip, a
-  // 400 ms fade in, and removal 4 s later, before the 5 s assertion timeout.
-  // The field never turns invalid, so the toast is the only evidence.
+  // always there, one list while any toast is up, an item per toast mounted
+  // after the save's round trip, a 400 ms fade in, and removal 4 s later,
+  // before the 5 s assertion timeout. The field never turns invalid, so the
+  // toast is the only evidence.
   '/toasts': () => ({
     title: 'Toasts',
     body: `<h1>Project settings</h1>
@@ -250,20 +251,28 @@ const pages = {
        <script>
          const region = document.querySelector('section[aria-live]');
          function toast(title) {
-           const list = document.createElement('ol');
-           list.dataset.sonnerToaster = 'true';
-           list.tabIndex = -1;
-           list.innerHTML =
-             '<li tabindex="0" data-sonner-toast data-type="error" data-mounted="false" data-removed="false">' +
+           let list = region.querySelector('ol');
+           if (list === null) {
+             list = document.createElement('ol');
+             list.dataset.sonnerToaster = 'true';
+             list.tabIndex = -1;
+             region.append(list);
+           }
+           const item = document.createElement('li');
+           item.tabIndex = 0;
+           Object.assign(item.dataset, { sonnerToast: '', type: 'error', mounted: 'false', removed: 'false' });
+           item.innerHTML =
              '<div data-icon><svg aria-hidden="true" width="16" height="16"><circle cx="8" cy="8" r="7"></circle></svg></div>' +
-             '<div data-content><div data-title></div></div></li>';
-           const item = list.querySelector('li');
+             '<div data-content><div data-title></div></div>';
            item.querySelector('[data-title]').textContent = title;
-           region.append(list);
+           list.prepend(item);
            requestAnimationFrame(() => { item.dataset.mounted = 'true'; });
            setTimeout(() => {
              item.dataset.removed = 'true';
-             setTimeout(() => list.remove(), 200);
+             setTimeout(() => {
+               item.remove();
+               if (list.childElementCount === 0) list.remove();
+             }, 200);
            }, 4000);
          }
          document.getElementById('settings').addEventListener('submit', (event) => {

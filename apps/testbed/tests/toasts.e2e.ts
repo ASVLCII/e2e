@@ -6,7 +6,7 @@ test.describe('toasts', { tags: ['toasts'] }, () => {
     await app.open('/toasts');
   });
 
-  test('asserts an auto-dismissing toast before the slower checks', async ({ screen }) => {
+  test('reads a sonner toast by text and region until it dismisses', async ({ screen }) => {
     const projectName = screen.getByLabel('Project Name');
     await projectName.fill('x'.repeat(300));
     await screen.getByRole('button', { name: 'Save Changes' }).tap();

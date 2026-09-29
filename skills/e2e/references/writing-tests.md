@@ -285,9 +285,9 @@ test('GET /api/users returns the seeded users', async ({ app }) => {
 A toast mounts after the request behind it returns and removes itself a few
 seconds later (sonner's default is 4 s, under the 5 s assertion timeout).
 Assert it with a matcher straight after the action that triggers it, before
-any check that could wait out its timeout: a slow or failing `expect` in
-between lets the toast dismiss, and the screen at failure no longer shows
-it. A read (`count()`, `textContent()`, `isVisible()`) right after the tap
+any check that could wait out its timeout: a slow `expect` in between lets
+the toast disappear first, and a failing one leaves a screen at failure
+without it. A read (`count()`, `textContent()`, `isVisible()`) right after the tap
 runs before the toast mounts.
 
 ```ts

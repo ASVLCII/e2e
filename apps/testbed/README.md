@@ -12,11 +12,10 @@ here.
   stops it via the web engine's `command` option. The pages live under
   `app/pages/` by group, each module exporting its routes and its nav
   entries: `basics` (home, todos, forms, login/session, dashboard, wizard,
-  toasts),
-  `interaction` (network, dialogs, board, pointer pad, iframes), `canvas`
-  (four pixels-only surfaces), `downloads` (a file and a long page), and
-  `controls` (control states, scrolling, the browser fixture's page, the
-  speed counter, about). `app/pages/index.mjs` merges them and
+  toasts), `interaction` (network, dialogs, board, pointer pad, iframes),
+  `canvas` (four pixels-only surfaces), `downloads` (a file and a long
+  page), and `controls` (control states, scrolling, the browser fixture's
+  page, the speed counter, about). `app/pages/index.mjs` merges them and
   `app/layout.mjs` renders the nav from that registry.
 - `app/bug-garden.mjs` — a bookshop with planted defects, for `e2e explore`.
 - `dogfood/server.mjs` — an expense-claims app with a test API, for the
