@@ -81,16 +81,16 @@ const RESPONDERS: Record<string, Responder> = {
   // prove the value the engine sent is redacted wherever the page shows it.
   '/basic-auth': (request, response) => {
     const [scheme, encoded] = (request.headers.authorization ?? '').split(' ');
-    if (scheme !== 'Basic' || encoded === undefined) {
+    const decoded = scheme === 'Basic' && encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+    const separator = decoded.indexOf(':');
+    if (separator === -1) {
       response.writeHead(401, { 'www-authenticate': 'Basic realm="fixture"', 'content-type': 'text/plain' });
       response.end('unauthorized');
       return;
     }
-    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-    const separator = decoded.indexOf(':');
     html(
       response,
-      `<!doctype html><title>Basic auth</title><h1>Signed in as ${decoded.slice(0, separator)}</h1><p data-testid="echo">${decoded.slice(separator + 1)}</p>`,
+      `<!doctype html><title>Basic auth</title><h1>Signed in as ${escapeHtml(decoded.slice(0, separator))}</h1><p data-testid="echo">${escapeHtml(decoded.slice(separator + 1))}</p>`,
     );
   },
   '/api/flags': (_request, response) => {
@@ -105,6 +105,11 @@ const RESPONDERS: Record<string, Responder> = {
 function notFound(response: ServerResponse): void {
   response.writeHead(404, { 'content-type': 'text/plain' });
   response.end('not found');
+}
+
+/** `text` as HTML text content, so an echoed value shows as written instead of becoming markup. */
+function escapeHtml(text: string): string {
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 function html(response: ServerResponse, body: string): void {

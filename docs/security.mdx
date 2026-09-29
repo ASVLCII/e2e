@@ -95,8 +95,9 @@ pages. Register `web.onDialog` to handle browser dialogs.
 
 ## Secrets
 
-A `Secret` is an opaque handle with no plaintext accessor. Two sinks accept
-one: a locator's `fill`, and the params of an agent step. The
+A `Secret` is an opaque handle with no plaintext accessor. Three sinks
+accept one: a locator's `fill`, the params of an agent step, and an engine
+option that declares it (`web({ basicAuth: { password } })`). The
 [Signing in](/authentication) guide covers usage; the rules are here.
 
 Before a model-directed fill, the runner checks that the step declared the
@@ -116,10 +117,10 @@ masked rectangle.
 A secret an engine option holds (`web({ basicAuth: { password: secrets.get(name) } })`)
 is resolved on the host when each attempt starts and registered for redaction
 then. It is not a fill and does not disable pixels: the value goes to the
-engine, not into the page. The Playwright trace records the `Authorization`
-header it produces, base64-encoded, which redaction does not match, and a
-trace is rewritten only after a fill; restrict access to traces of a
-protected app.
+engine, not into the page. The Playwright trace records the options the
+browser context opened with, the password included, so the runner rewrites
+the trace of such an attempt as it does after a fill, keeping its
+screencast frames.
 
 The redactor matches each registered value character by character, in every
 spelling a serializer gives a character: as is; JSON-escaped once or twice,
@@ -255,7 +256,7 @@ project-relative path you configure.
 | --- | --- | --- |
 | `report.json` | The run record. Errors, reasoning excerpts, and action summaries pass the redactor. | complete |
 | `artifacts/.../*.png` | Screenshots. Secure fields are masked before screenshots are returned or saved as artifacts. | complete |
-| `artifacts/.../trace.zip` | Playwright trace, rewritten after a secret fill, screencast frames dropped. | not-required, complete, or deleted |
+| `artifacts/.../trace.zip` | Playwright trace, rewritten after a secret fill, screencast frames dropped, or when an engine option holds a secret, frames kept. | not-required, complete, or deleted |
 | `artifacts/.../*.webm`, `*.mp4` | Video, opt-in through `video` or `--video`; `retain-on-failure` keeps only the attempts that did not pass. | incomplete |
 | `artifacts/.../downloads/*` | Files the app served through a download. Text ones are rewritten after a secret fill; the rest are kept as served. | complete or incomplete |
 | `artifacts/.../failure/screen.txt` | The redacted tree at the moment of failure. | complete |

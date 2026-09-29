@@ -115,7 +115,9 @@ admin.username; // a plain string
 admin.password; // Secret: opaque, with no plaintext accessor
 ```
 
-A `Secret` has no `.value`. Exactly two sinks accept one:
+A `Secret` has no `.value`. In a test, exactly two sinks accept one (an
+engine option can hold one too, as
+[`basicAuth`](/starting-your-app#protected-previews) does):
 
 <Tabs>
   <Tab title="Deterministic">

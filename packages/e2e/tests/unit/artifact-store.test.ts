@@ -218,7 +218,7 @@ describe('download redaction', () => {
   const SECRET = 'download-secret-Qx7-2718';
 
   function secrecy(filled: boolean): SessionSecrecy {
-    return { ledger: new SecretLedger([['api-key', SECRET]]), taint: { value: filled } };
+    return { ledger: new SecretLedger([['api-key', SECRET]]), taint: { value: filled }, engineHeld: { value: false } };
   }
 
   function downloads(filled: boolean | undefined, store?: ArtifactStore) {
@@ -264,7 +264,7 @@ describe('download redaction', () => {
       artifactsRoot: root(),
       segments: ['web', 'test-1', 'attempt-0'],
       attemptId: 'att-1',
-      secrecy: () => ({ ledger: new SecretLedger([['api-key', 'pa"ss,word']]), taint: { value: true } }),
+      secrecy: () => ({ ledger: new SecretLedger([['api-key', 'pa"ss,word']]), taint: { value: true }, engineHeld: { value: false } }),
     });
     mkdirSync(path.join(artifacts.dir, 'downloads'));
     writeFileSync(path.join(artifacts.dir, 'downloads', 'export.csv'), 'id,key\n1,"pa""ss,word"\n');

@@ -5,7 +5,8 @@
  * when an attempt starts, to answer a basic-auth challenge. The value comes
  * from a provider, so nothing registered it up front: the attempt's
  * resolution alone is what makes the page's echo of it redacted in the
- * failure message, the report, and every file the reporters write. Over the
+ * failure message, the report, and every file the reporters write, and what
+ * has the trace, which records the credentials, rewritten. Over the
  * fake engine: only a secret the engine declared resolves.
  */
 
@@ -31,6 +32,7 @@ export default {
     },
   ],
   workers: 2,
+  trace: 'on',
   reporters: ['markdown', 'junit'],
   secrets: { stagingPassword: () => ${JSON.stringify(PASSWORD)} },
 } satisfies E2EConfig;
@@ -75,10 +77,16 @@ describe('a secret in an engine option', () => {
     const error = resultByTitle(outcome, 'fails on the echoed password').attempts[0]!.error!;
     expect(error.message).toContain('<secret:stagingPassword>');
     expect(JSON.stringify(outcome.report)).not.toContain(PASSWORD);
-    // A trace archive is rewritten only after a fill, and this attempt filled nothing.
-    for (const [file, text] of contentsUnder(`${project.dir}/.e2e`).filter(([name]) => !name.includes('.zip'))) {
-      expect(text, file).not.toContain(PASSWORD);
-    }
+    // A trace archive is searched entry by entry: its own bytes are compressed.
+    const contents = contentsUnder(`${project.dir}/.e2e`).filter(([name]) => !name.endsWith('.zip'));
+    expect(contents.some(([name]) => name.includes('.zip!'))).toBe(true);
+    for (const [file, text] of contents) expect(text, file).not.toContain(PASSWORD);
+  });
+
+  it('rewrites each trace, which records the credentials the attempt opened with, though nothing was filled', () => {
+    const traces = outcome.results.flatMap((result) => result.attempts.flatMap((attempt) => attempt.artifacts.filter((artifact) => artifact.kind === 'trace')));
+    expect(traces).toHaveLength(2);
+    for (const trace of traces) expect(trace.redaction).toBe('complete');
   });
 });
 

@@ -28,6 +28,7 @@ import type {
 } from '../../src/engine/index.ts';
 import { defineEngine, ENGINE_SPI_VERSION, LOCATOR_ACTION_KINDS } from './engine-runtime.ts';
 import { createScene, type Scene, type ScriptedNode, type Stage } from './scripted-scene.ts';
+import { writeZip, zipEntry } from '../../src/internal/zip.ts';
 
 /** The EBML magic every WebM file starts with, followed by nothing worth decoding. */
 const FAKE_WEBM = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00, 0x00, 0x00, 0x00]);
@@ -464,7 +465,9 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
                     record('artifacts.stopTrace', operation);
                     const dir = attempts[current]!.artifactsDir;
                     mkdirSync(path.join(dir, 'trace'), { recursive: true });
-                    writeFileSync(path.join(dir, 'trace', 'fake.zip'), Buffer.from(operation.attemptId, 'utf8'));
+                    // A real archive, so the runner's trace redaction can read it.
+                    const events = JSON.stringify({ type: 'context-options', attemptId: operation.attemptId });
+                    writeFileSync(path.join(dir, 'trace', 'fake.zip'), writeZip([zipEntry('trace.trace', Buffer.from(events, 'utf8'))]));
                     return 'trace/fake.zip';
                   },
                 }

@@ -634,7 +634,9 @@ export class TargetExecutor implements SerialHost {
    * The plaintext of a secret the target's engine declared, for an option it
    * hands the app (basic-auth credentials). Registered for the session's and
    * the process's redaction by `resolveSecretValue`; the viewport is not
-   * tainted, since the value goes to the engine, not into a field.
+   * tainted, since the value goes to the engine, not into a field, but the
+   * session is marked so its trace, which records the engine's options, is
+   * rewritten.
    */
   private async resolveEngineSecret(session: TargetSession, secret: Secret): Promise<string> {
     const engine = this.target.engine;
@@ -645,7 +647,10 @@ export class TargetExecutor implements SerialHost {
         `engine ${engine?.name ?? 'none'} asked for secret ${name}, which it did not declare in its secrets`,
       );
     }
-    return resolveSecretValue(secret, this.config.secrets, sessionSecrecy(session, this.config.secrets).ledger);
+    const secrecy = sessionSecrecy(session, this.config.secrets);
+    const plaintext = await resolveSecretValue(secret, this.config.secrets, secrecy.ledger);
+    secrecy.engineHeld.value = true;
+    return plaintext;
   }
 
   /**
@@ -713,14 +718,16 @@ export class TargetExecutor implements SerialHost {
         }
         // An engine records what happened, filled secrets included, so the
         // trace is the runner's to redact before anything hashes or stores
-        // it. Only a session a secret was filled on can have recorded one:
-        // the taint is the fill's own mark, so an untainted trace needs no
-        // rewriting, and a tainted one is kept only once rewritten.
+        // it. Only a session a secret was filled on, or whose engine holds
+        // one in its options (a trace records the options the attempt opened
+        // with), can have recorded one: an unmarked trace needs no
+        // rewriting, and a marked one is kept only once rewritten. The
+        // screencast frames go only with the fill's pixel taint.
         const secrecy = sessionSecrecy(session, this.config.secrets);
         let redaction: 'complete' | 'not-required' = 'not-required';
-        if (secrecy.taint.value) {
+        if (secrecy.taint.value || secrecy.engineHeld.value) {
           try {
-            await redactTraceArchives(artifactSink.dir, archives, secrecy.ledger);
+            await redactTraceArchives(artifactSink.dir, archives, secrecy.ledger, { keepFrames: !secrecy.taint.value });
           } catch (cause) {
             // The trace is gone. The report says why whatever the policy, and
             // a required trace that is missing is a cleanup failure.

@@ -16,6 +16,13 @@ export interface SessionSecrecy {
    * then on the viewport, and everything recorded from it, may carry the value.
    */
   readonly taint: { value: boolean };
+  /**
+   * Set once the engine resolved a secret for an option it holds (basic-auth
+   * credentials), and never cleared. The viewport stays clean, but a trace
+   * records the options the engine opened the attempt with, so it is
+   * rewritten as after a fill.
+   */
+  readonly engineHeld: { value: boolean };
 }
 
 /**
@@ -83,6 +90,7 @@ export function sessionSecrecy(
         ),
       ),
       taint: { value: false },
+      engineHeld: { value: false },
     };
     secrecyBySession.set(session, secrecy);
   }

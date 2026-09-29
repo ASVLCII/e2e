@@ -1103,6 +1103,9 @@ target argument's type is exported as `ProviderRecordingTarget`.
 After a secret fill, the runner redacts every text entry in each trace
 archive and drops its screencast frames: every `screencast/` entry, each
 `screencast-frame` record in a `.trace` entry, and any image a record names.
+After `resolveSecret` returns, it redacts the trace the same way and keeps
+the frames: a trace records the options the engine opened the attempt with,
+and the value never reached the screen.
 If redaction fails, it deletes the archives and records
 `TRACE_WITHHELD`. Videos are unmasked and carry `redaction: 'incomplete'`.
 A `download` an engine attaches is the app's bytes: after a secret fill the
