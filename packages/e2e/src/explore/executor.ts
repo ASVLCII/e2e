@@ -11,7 +11,8 @@ import { z } from 'zod';
 import { asSdkLanguageModel } from '../agent/ai-sdk.ts';
 import { createAgent, isDefaultAgent, type DefaultAgent } from '../agent/default-agent.ts';
 import type { StepExecutor } from '../agent/executor.ts';
-import { defineTool, getToolContext, type DefinedTool } from '../agent/tool.ts';
+import { defineTool, getHeldScreen, getToolContext, type DefinedTool } from '../agent/tool.ts';
+import { sleep } from '../internal/time.ts';
 import type { ExploreState } from './state.ts';
 
 export const FINDING_TOOL_NAME = 'report_finding';
@@ -20,6 +21,7 @@ export const FINDING_TOOL_NAME = 'report_finding';
 const EXPLORE_RULES = `Exploration mode: this run has no scripted test. Each step is an exploration charter the planner wrote toward the goal given in the project context.
 - Think like a curious first-time user hunting for bugs: exercise the flow the charter names end to end, with realistic inputs and edge cases. Interact, do not just look: fill forms with obviously made-up test data and submit them, save and come back to check what was kept, sign in with made-up credentials when none are configured, and when a list has several items act on one that is not the first and check that the right one changed.
 - On every screen, sanity-check beyond "it renders": totals equal the sum of their parts and quantities multiply; counts match the items listed; nothing is negative that cannot be; dates are plausible and in order, not an epoch default; copy has no template tokens, placeholders, or misspellings; every control does what its name says; what a screen claims happened (saved, added, removed) is true on the next screen; a password is never shown as you type it.
+- A screen still loading is not a defect: a spinner, a skeleton, "Loading…", a page that is empty right after a navigation, a control that seems dead while the route behind it is still being built. Call observe once before you report a screen as empty, blank, or dead. ${FINDING_TOOL_NAME} looks at the screen again before it records anything; when it answers that the screen changed, report only what the new screen still shows.
 - Report every defect with ${FINDING_TOOL_NAME} the moment the evidence is on screen, one call per distinct defect: what you expected, what the screen shows, and the actions that reach it. Do not save findings for the conclusion: a defect that appears only in a summary is lost, since the report reads the tool, not the prose. Findings listed under "reportedFindings" in the step parameters are already recorded: never report them again and spend no actions re-confirming them.
 - Accounts listed under "credentials" in the step parameters are yours to sign in with: type the username as text and fill the password with type_secret by the account's name. Never type a password as text, and never ask for one. If no type_secret tool is offered, this engine cannot fill a password securely: skip signing in, note it in the step summary, and explore what is reachable without it.
 - Report defects, not wishes. A defect is something the screen breaks or contradicts: a wrong value, a dead control, a navigation that lands wrong, a claim that turns out false, leaked template text, a misspelling. A missing feature, a design choice, a form the browser refuses to submit while a required field is empty, or something you merely expected is not a defect unless the screen or the goal promised it. A failed tool call, a refused action, or a limit of this harness is not a product defect either.
@@ -85,26 +87,55 @@ const FINDING_SCHEMA = z.object({
 type FindingReport = z.output<typeof FINDING_SCHEMA>;
 
 /**
+ * How long a finding waits before the screen is looked at again. A page still
+ * in its loading state or a route a dev server is still compiling reads like
+ * a defect; within this, most show what they were loading.
+ */
+const RECHECK_DELAY_MS = 1_500;
+
+/**
  * The finding tool. Read-only: it observes the screen for the location and
  * the evidence pixels, records the finding against the step in progress,
  * keeps the pixels as a screenshot artifact of the step, and answers the
  * model with the finding's number so it is not reported twice.
+ *
+ * A finding is recorded only against a screen that held still. The first
+ * report on a screen waits a beat and looks again; when the screen changed
+ * from the one the model held when it reported, nothing is recorded, and the
+ * model gets the new screen to confirm the finding on or drop. A report made
+ * on a screen already looked at again (the confirmation, or a second finding
+ * on the same screen) records at once.
  */
 function createFindingTool(state: ExploreState): DefinedTool {
-  // Numbered as the calls arrive, before any await: a model may report two
-  // findings in one turn, and read-only tools run in parallel, so the
-  // finding's own index is not known until its screenshot is saved.
   let reported = 0;
+  /** The revision of the newest held screen already looked at again: reports on it record at once. */
+  let rechecked: string | undefined;
   return defineTool(
     {
       description:
-        'Report one product defect you have evidence of on the current screen: what you expected, what the screen shows, and how to reach it. Call it the moment the evidence is visible, once per distinct defect. Not for tool errors or refused actions.',
+        'Report one product defect you have evidence of on the current screen: what you expected, what the screen shows, and how to reach it. Call it the moment the evidence is visible, once per distinct defect. Not for tool errors or refused actions. The screen is looked at again before the finding is recorded; if it changed (it was still loading), the result shows the new screen and nothing is recorded until you call again.',
       inputSchema: FINDING_SCHEMA,
       execute: async (input: FindingReport, executionOptions: ToolExecutionOptions<unknown>) => {
         const { observe, attachScreenshot } = getToolContext(executionOptions);
+        const screen = getHeldScreen(executionOptions);
+        // Read before any await: two findings in one turn are both based on
+        // the screen the model held when it made them.
+        const basis = screen?.held();
+        const recheck = screen !== undefined && basis !== undefined && basis.revision !== rechecked;
+        if (recheck) await sleep(RECHECK_DELAY_MS, executionOptions.abortSignal);
+        const observation = await observe({ pixels: true }).catch(() => undefined);
+        if (recheck && observation !== undefined) {
+          if (screen.differs(basis, observation)) {
+            rechecked = observation.revision;
+            return withheld(basis.revision, screen.update(observation));
+          }
+          rechecked = basis.revision;
+        }
+        // Numbered once the finding is certain to be recorded and before its
+        // screenshot is saved: read-only tools run in parallel, so the
+        // finding's own index is not known until the screenshot is kept.
         reported += 1;
         const label = `finding-${reported}`;
-        const observation = await observe({ pixels: true }).catch(() => undefined);
         // Evidence is worth keeping, never worth failing the finding for. It
         // is saved first, so the finding is announced complete, evidence included.
         const artifactId =
@@ -117,4 +148,13 @@ function createFindingTool(state: ExploreState): DefinedTool {
     },
     { mutates: false },
   );
+}
+
+/** The answer to a report whose screen moved on: the new screen, and the choice of confirming or dropping. */
+function withheld(basisRevision: string, update: string): string {
+  return [
+    `Not recorded: the screen changed after revision ${basisRevision}, the one this finding is based on, so it was likely still loading.`,
+    update,
+    `If the defect still shows on this screen, call ${FINDING_TOOL_NAME} again, with what the screen shows now, to record it. If the screen now works as expected, it was not a defect: do not report it, and continue the charter.`,
+  ].join('\n\n');
 }

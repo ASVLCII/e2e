@@ -33,7 +33,7 @@ const MAX_DIFF_SHARE = 0.5;
 export const FULL_SCREEN_PATTERN = /Current screen \(revision /;
 
 /** The screen as the model last received it, indexed for comparison. */
-interface ShownScreen {
+export interface ShownScreen {
   readonly revision: string;
   /** Node lines in document order, without indentation or focus; the truncation marker is not a node. */
   readonly order: readonly string[];
@@ -107,6 +107,14 @@ export function toolResultTexts(output: ToolResultPart['output']): string[] {
   return output.value.flatMap((item) => (item.type === 'text' ? [item.text] : []));
 }
 
+/**
+ * What a read-only project tool may read of the screen the model holds: the
+ * held screen, whether a fresh look differs from it, and the text update that
+ * brings the model up to date. No pixels are presented through it, so a tool
+ * never switches the step into pixel mode.
+ */
+export type HeldScreenView = Pick<ScreenPresenter, 'held' | 'differs' | 'update'>;
+
 /** Renders one step's screens for the model and remembers what it has seen. */
 export class ScreenPresenter {
   private shown: ShownScreen | undefined;
@@ -121,6 +129,21 @@ export class ScreenPresenter {
   /** The newest screenshot the model holds; the coordinate space of `tap_at`. */
   get latestScreenshot(): ShownScreenshot | undefined {
     return this.screenshot;
+  }
+
+  /** The screen the model holds now; undefined before the first or when the last one had no tree. */
+  held(): ShownScreen | undefined {
+    return this.shown;
+  }
+
+  /**
+   * Whether a fresh observation lists anything a held screen did not, or no
+   * longer lists something it did; focus alone is no change. A screen with
+   * no tree cannot be shown to match, so it differs.
+   */
+  differs(held: ShownScreen, observation: ExecutorObservation): boolean {
+    if (observation.treeUnavailable === true) return true;
+    return diffScreens(held, indexScreen(observation)).length > 0;
   }
 
   /** The step's first screen, whole. */

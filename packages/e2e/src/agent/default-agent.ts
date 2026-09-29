@@ -15,7 +15,7 @@ import { AgentError } from './error.ts';
 import type { ReplayedPrefix, StepExecutor, StepExecutorContext } from './executor.ts';
 import { interactiveNodeCount } from './observation.ts';
 import { createGrammarTools, GRAMMAR_TOOL_NAMES } from './primitives.ts';
-import { ScreenPresenter } from './screen-update.ts';
+import { ScreenPresenter, type HeldScreenView } from './screen-update.ts';
 import { compactScreenHistory, compactScreenshotHistory } from './transcript-compaction.ts';
 import { createToolLoopExecutor, type ToolLoopHelpers } from './tool-loop.ts';
 import type { DefinedTool } from './tool.ts';
@@ -122,7 +122,7 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
     ...(options.providerOptions === undefined ? {} : { providerOptions: options.providerOptions }),
     prepareMessages: (messages) => compactScreenshotHistory(compactScreenHistory(messages)),
     tools: (context, helpers) => ({
-      ...guardedTools(helpers, projectTools(context, userTools)),
+      ...guardedTools(helpers, projectTools(context, userTools, presenterFor(context))),
       ...createGrammarTools(context, { guard: helpers.guard, screen: presenterFor(context) }),
     }),
     buildPrompt: async (context) => {
@@ -229,11 +229,13 @@ function validateUserTools(
  * reached, consumed whether it succeeds or fails, exactly like a grammar
  * action), and a text result is bounded like everything else the model reads.
  * Failures propagate: the model loop turns them into text through its guard,
- * and a host outside the loop reports them its own way.
+ * and a host outside the loop reports them its own way. `screen` is the
+ * screen the model holds, when there is a model loop to hold one.
  */
 export function projectTools(
   context: StepExecutorContext,
   tools: Readonly<Record<string, DefinedTool>>,
+  screen?: HeldScreenView,
 ): ToolSet {
   const wrapped: Record<string, ToolSet[string]> = {};
   for (const [name, defined] of Object.entries(tools)) {
@@ -255,6 +257,7 @@ export function projectTools(
               return context.observe(options);
             },
             attachScreenshot: (pixels, label) => context.attachScreenshot(pixels, label),
+            ...(mutates || screen === undefined ? {} : { screen }),
           })),
         );
         // A text result is bounded like every other thing the model reads;

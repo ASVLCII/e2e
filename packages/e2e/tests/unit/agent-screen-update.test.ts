@@ -67,6 +67,22 @@ describe('ScreenPresenter', () => {
     ]);
   });
 
+  it('tells a later look from the screen the model held, focus aside, without taking the held screen from it', () => {
+    const presenter = new ScreenPresenter();
+    expect(presenter.held()).toBeUndefined();
+    presenter.initial(screen('b1', HOME));
+    const held = presenter.held()!;
+    expect(held.revision).toBe('b1');
+    const focused = HOME.map((line) => (line.includes('#n6') ? `${line} [focused]` : line));
+    expect(presenter.differs(held, screen('b2', focused))).toBe(false);
+    expect(presenter.differs(held, screen('b3', [...HOME, ' #n7 button "Late arrival"']))).toBe(true);
+    expect(presenter.differs(held, screen('b4', ['[semantic capture unavailable]'], { treeUnavailable: true }))).toBe(true);
+    // Comparing presents nothing: the model still holds b1 until an update goes out.
+    expect(presenter.held()!.revision).toBe('b1');
+    presenter.update(screen('b5', HOME));
+    expect(presenter.held()!.revision).toBe('b5');
+  });
+
   it('lists removed lines after the additions', () => {
     const presenter = new ScreenPresenter();
     presenter.initial(screen('b1', HOME));

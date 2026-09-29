@@ -177,4 +177,35 @@ export const LIVE_PAGES: Record<string, PageRenderer> = {
   </script>
 </body>
 </html>`),
+  // A saved test that opens into a loading state, the way a suspended route
+  // shows its fallback while its data loads. The fallback holds still long
+  // enough for a settled look to read it as the page, then the test renders.
+  '/saved-tests': constant(`<!doctype html>
+<html>
+<head><title>Saved tests</title></head>
+<body>
+  <h1>Saved tests</h1>
+  <main id="view"><button id="open">Checkout smoke</button></main>
+  <script>
+    document.getElementById('open').addEventListener('click', () => {
+      const view = document.getElementById('view');
+      const loading = document.createElement('p');
+      loading.setAttribute('role', 'status');
+      loading.textContent = 'Loading test…';
+      view.replaceChildren(loading);
+      setTimeout(() => {
+        const heading = document.createElement('h2');
+        heading.textContent = 'Checkout smoke';
+        const steps = document.createElement('ol');
+        for (const text of ['Add an item to the cart', 'Check out', 'See the confirmation']) {
+          const item = document.createElement('li');
+          item.textContent = text;
+          steps.append(item);
+        }
+        view.replaceChildren(heading, steps);
+      }, 900);
+    });
+  </script>
+</body>
+</html>`),
 };

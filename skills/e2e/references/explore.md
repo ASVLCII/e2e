@@ -23,7 +23,11 @@ npx e2e explore --session admin 'Explore the admin settings'
 3. Runs the charter as an `agent.act()` step with the project's tools plus
    `report_finding`. The agent reports each defect the moment it has evidence:
    title, `issue` or `warning`, severity 1 to 5, expected, actual, reproduction
-   steps. The runner adds the path and a redacted screenshot.
+   steps. The runner adds the path and a redacted screenshot. It first waits
+   1.5 seconds and looks again: if the screen changed from the one the agent
+   reported on (a loading state that rendered, a route that finished
+   compiling), nothing is recorded and the agent gets the new screen to
+   report on again or drop. Later reports on a checked screen record at once.
 4. Repeats until the planner finishes, the step limit, the clock, or three
    failed or blocked steps in a row that reported nothing; then asks for a closing assessment.
 

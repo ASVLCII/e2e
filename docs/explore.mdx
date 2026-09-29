@@ -22,6 +22,14 @@ The runner opens the target app, plans one step, and carries it out with
 expected, what it saw, and how to reproduce it. A screenshot is attached
 when capture is allowed and succeeds.
 
+A loading screen is not a finding. Before the runner records a finding, it
+waits 1.5 seconds and looks at the screen again. If the screen changed from
+the one the agent reported on, such as a spinner that became the page or a
+route that finished compiling, nothing is recorded. The agent gets the new
+screen and has to report the finding again to record it, or drop it. More
+findings on a screen that was already checked are recorded at once, and the
+screenshot always comes from the checked screen.
+
 The process repeats until the planner considers the goal covered or a
 budget expires, then produces a closing assessment. A failed step does not
 stop exploration. Three consecutive failed or blocked steps with no new

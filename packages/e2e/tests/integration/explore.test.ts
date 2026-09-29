@@ -60,18 +60,28 @@ const COUNTER_FINDING = {
   reproduction: ['Open the home page', 'Look at the counter next to Increment'],
 };
 
+/**
+ * Whether the newest tool result is a report the runner held back because the
+ * screen changed under it. The home page adds a button a beat after it loads,
+ * so a report made at once can land on either side of it; a script that means
+ * to record reports again, as a model confirming on the new screen would.
+ */
+function withheld(call: LoopCall): boolean {
+  return call.lastToolResult.startsWith('Not recorded');
+}
+
 async function runExplore(
   project: FixtureProject,
   app: FixtureApp,
   model: ModelInstance,
-  options: Partial<ExploreOptions> & { projectAgent?: StepExecutor | undefined } = {},
+  options: Partial<ExploreOptions> & { projectAgent?: StepExecutor | undefined; path?: string | undefined } = {},
 ): Promise<ExploreOutcome> {
-  const { projectAgent, ...rest } = options;
+  const { projectAgent, path: start = '', ...rest } = options;
   const notices: string[] = [];
   const outcome = await explore({
     cwd: project.dir,
     rawConfig: {
-      targets: [{ name: 'web', engine: web({ url: app.url }) }] as never,
+      targets: [{ name: 'web', engine: web({ url: `${app.url}${start}` }) }] as never,
       agents: { default: projectAgent ?? { model } },
       // The scripted loop answers instantly; the deterministic engine budget is the one that matters.
       actionTimeout: 10_000,
@@ -108,7 +118,7 @@ describe('e2e explore', () => {
           : { decision: 'finish', summary: 'Two defects on the home page.' },
       loop: (call) => {
         // Read-only tools run in parallel: both findings pick their evidence name before either is recorded.
-        if (call.turn === 1) {
+        if (call.turn === 1 || withheld(call)) {
           return [
             { toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING },
             { toolName: FINDING_TOOL_NAME, input: SECOND_FINDING },
@@ -127,6 +137,77 @@ describe('e2e explore', () => {
     expect(paths.map((entry) => entry!.split('/').at(-1)).toSorted()).toEqual(['finding-1.png', 'finding-2.png']);
   });
 
+  it('records a finding on a screen that holds still at the first report', async () => {
+    const ABOUT_FINDING = {
+      title: 'About page says nothing about the app',
+      kind: 'warning',
+      severity: 2,
+      expected: 'The About page describes the app',
+      actual: 'The page shows only the heading "About" and a Home link',
+      reproduction: ['Open the About page'],
+    };
+    const results: string[] = [];
+    const model = installExploreModel({
+      plan: (call) =>
+        call.instruction.includes('(none yet')
+          ? { decision: 'step', title: 'About', instruction: 'Read the About page' }
+          : { decision: 'finish', summary: 'The About page is thin.' },
+      loop: (call) => {
+        results.push(call.lastToolResult);
+        return call.turn === 1
+          ? [{ toolName: FINDING_TOOL_NAME, input: ABOUT_FINDING }]
+          : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Read it' } }];
+      },
+    });
+    const outcome = await runExplore(project, app, model, { path: '/about' });
+    expect(results[1]).toMatch(/^Finding 1 recorded \(warning, severity 2\)/);
+    expect(loopCalls).toHaveLength(2);
+    expect(outcome.explore.findings.map((finding) => finding.title)).toEqual([ABOUT_FINDING.title]);
+    expect(outcome.explore.findings[0]).toMatchObject({ path: '/about', artifactId: expect.any(String) });
+  }, 120_000);
+
+  it('holds back a finding made on a loading screen until the model confirms it on the settled one', async () => {
+    const EMPTY_FINDING = {
+      title: 'Opening Checkout smoke lands on an empty test page',
+      kind: 'issue',
+      severity: 4,
+      expected: 'The saved test shows its steps',
+      actual: 'The page shows only "Loading test…"',
+      reproduction: ['Open Saved tests', 'Open Checkout smoke'],
+    };
+    const SETTLED_FINDING = { ...EMPTY_FINDING, title: 'Checkout smoke lists no step for paying', actual: 'The steps go from Check out to the confirmation', severity: 3 };
+    const seen: string[] = [];
+    const model = installExploreModel({
+      plan: (call) =>
+        call.instruction.includes('(none yet')
+          ? { decision: 'step', title: 'Saved test', instruction: 'Open Checkout smoke' }
+          : { decision: 'finish', summary: 'The saved test opens.' },
+      loop: (call) => {
+        seen.push(call.lastToolResult);
+        if (call.turn === 1) return [{ toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Checkout smoke"/) } }];
+        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: EMPTY_FINDING }];
+        if (call.turn === 3) return [{ toolName: FINDING_TOOL_NAME, input: SETTLED_FINDING }];
+        return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Opened the test' } }];
+      },
+    });
+    const outcome = await runExplore(project, app, model, { path: '/saved-tests' });
+    // The model reported while the fallback was the screen it held.
+    expect(seen[1]).toContain('Loading test…');
+    // The runner looked again, found the test rendered, and recorded nothing: the model got the new screen instead.
+    expect(seen[2]).toMatch(/^Not recorded: the screen changed after revision \S+, the one this finding is based on/);
+    expect(seen[2]).toContain('heading "Checkout smoke"');
+    expect(seen[2]).toContain(`call ${FINDING_TOOL_NAME} again`);
+    // The report on the screen already looked at records at once, with evidence from that screen.
+    expect(seen[3]).toMatch(/^Finding 1 recorded/);
+    const record = outcome.explore;
+    expect(record.findings.map((finding) => finding.title)).toEqual([SETTLED_FINDING.title]);
+    const basis = /after revision (\S+),/.exec(seen[2]!)![1];
+    expect(record.findings[0]!.observationRevision).not.toBe(basis);
+    const artifacts = outcome.report.run.results[0]!.attempts[0]!.artifacts;
+    expect(artifacts.find((artifact) => artifact.id === record.findings[0]!.artifactId)?.path).toMatch(/\/finding-1\.png$/);
+    assertValidReport(outcome.report);
+  }, 120_000);
+
   it('plans steps, records the finding with its evidence, and fails the run for the issue', async () => {
     const planPrompts: string[] = [];
     const model = installExploreModel({
@@ -137,7 +218,7 @@ describe('e2e explore', () => {
       },
       loop: (call) => {
         if (call.turn === 1) return [{ toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Increment"/) } }];
-        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }];
+        if (call.turn === 2 || withheld(call)) return [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }];
         return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Counter went to 1' } }];
       },
     });
@@ -203,7 +284,7 @@ describe('e2e explore', () => {
       loop: (call) => {
         seen.push([...call.toolNames]);
         if (call.turn === 1) return [{ toolName: 'ping', input: {} }];
-        if (call.turn === 2) return [{ toolName: FINDING_TOOL_NAME, input: { ...COUNTER_FINDING, kind: 'warning', severity: 1 } }];
+        if (call.turn === 2 || withheld(call)) return [{ toolName: FINDING_TOOL_NAME, input: { ...COUNTER_FINDING, kind: 'warning', severity: 1 } }];
         return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Menu toggles' } }];
       },
     });
