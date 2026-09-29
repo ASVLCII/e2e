@@ -99,7 +99,7 @@ describe('invokeTool', () => {
       screen: new ScreenPresenter(),
       locator: { resolveAll } as never,
       session: {} as never,
-      executor: undefined,
+      tools: {},
       redact: (text) => text,
       recorder: undefined,
       warn: () => undefined,

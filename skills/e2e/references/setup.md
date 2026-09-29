@@ -80,7 +80,6 @@ unknown keys are `INVALID_CONFIG`.
 
 ```ts
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
 
@@ -96,10 +95,10 @@ export default {
   ],
   // The model behind every agent.* step: an AI SDK instance; gateway() from 'ai' reads AI_GATEWAY_API_KEY or a Vercel OIDC token.
   agents: {
-    default: createAgent({
+    default: {
       model: gateway('openai/gpt-6-luna-fast'),
       system: 'You are a thorough QA agent. Verify every outcome on screen.',
-    }),
+    },
   },
   credentials: {
     admin: { username: 'admin@example.test', password: process.env.ADMIN_PASSWORD ?? '' },
@@ -118,7 +117,7 @@ export default {
 | `workers` | half the cores, `1` in CI | Test files run in parallel across workers, at most the `workers` the engine declares per target (a device target: one per device). |
 | `reporters` | `['list']` | `list`, `json`, `junit`, `markdown`, and reporter objects (`{ name, onEvent?, onRunFinished? }`) that receive the finished run. `json` excludes `list`; `--reporter` keeps the objects. |
 | `cache` | `'read-write'`, `'read-only'` in CI | The replay cache for `agent.act`; `'off'` disables it. |
-| `agents` | `{ default: built-in }` | Agents by name. `default` is what tests run with; `e2e run --agent <name>` runs with another. Each entry is `createAgent(...)`, an options block `{ model, judge, context, maxSteps, maxModelCalls, providerOptions }`, or a custom `StepExecutor`. The built-in agent requires `model` as an AI SDK instance. Custom executors can implement `act` and `assert` without a model; `waitFor` and `extract` still need one. |
+| `agents` | `{ default: built-in }` | Agents by name. `default` is what tests run with; `e2e run --agent <name>` runs with another. Each entry is one plain object: `{ model, judge, system, context, tools, maxSteps, maxModelCalls, judgmentTimeout, maxObservationBytes, maxInputTokens, providerOptions }` for the built-in agent, or `{ executor, model, ... }` for a custom `StepExecutor` (no `system` or `tools` there). Entries never inherit from `default`. The built-in agent requires `model` as an AI SDK instance. Custom executors can implement `act` and `assert` without a model; `waitFor` and `extract` still need one. |
 | `credentials` | `{}` | Named `{ username, password }` entries; `password` is a string of at least 6 characters (code points) or a function returning the value. |
 | `secrets` | `{}` | Named values the model never sees (API keys, tokens): a string of at least 6 characters (code points) or a function returning the value. A name cannot also be a credential. |
 | `output` | `'.e2e'` | Results directory: `report.json`, reporter files, `ai-trace.json`, `artifacts/` (cleared when a run starts), `sessions/`, MCP `videos/`. Inside the project root, not the root, not holding a tests glob's directory, never the cache dir; `cache.dir` stays `.e2e/cache` independently. `--output <dir>` for one run. |
@@ -262,7 +261,6 @@ with a simulator runtime, or the Android SDK with an emulator; run
 
 ```ts
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { mobile } from '@e2e-dev/mobile';
 import { mobileTools } from '@e2e-dev/mobile/tools';
 import { gateway } from 'ai';
@@ -273,10 +271,10 @@ export default {
   targets: [{ engine: iphone }],
   workers: 1,
   agents: {
-    default: createAgent({
+    default: {
       model: gateway('openai/gpt-6-luna-fast'),
       tools: mobileTools(iphone),
-    }),
+    },
   },
 } satisfies E2EConfig;
 ```

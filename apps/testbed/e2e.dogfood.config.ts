@@ -1,13 +1,13 @@
 /**
  * Dogfood config: the built-in agent extended with project tools (seed/reset
- * over the app's test API), passed as the `agent` value itself. Run manually:
+ * over the app's test API) in its agents entry. Run manually:
  *
  *   AI_GATEWAY_API_KEY=... node node_modules/e2e/dist/cli/bin.js run --config e2e.dogfood.config.ts
  */
 
 import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
-import { createAgent, defineTool } from 'e2e/agent';
+import { defineTool } from 'e2e/agent';
 import { gateway, tool } from 'ai';
 import { z } from 'zod';
 
@@ -56,14 +56,12 @@ export default {
   timeout: 300_000,
   agents: {
     default: {
-      executor: createAgent({
-        model: gateway(process.env.E2E_MODEL ?? 'openai/gpt-6-luna-fast'),
-        tools: { seed_expenses: seedExpenses, reset_expenses: resetExpenses },
-        system:
-          'The app under test is a small expense-claims tool. Saves are asynchronous: ' +
-          'after submitting, a "Saving…" indicator shows until the save lands.',
-      }),
-      timeout: 90_000,
+      model: gateway(process.env.E2E_MODEL ?? 'openai/gpt-6-luna-fast'),
+      tools: { seed_expenses: seedExpenses, reset_expenses: resetExpenses },
+      system:
+        'The app under test is a small expense-claims tool. Saves are asynchronous: ' +
+        'after submitting, a "Saving…" indicator shows until the save lands.',
+      judgmentTimeout: 90_000,
     },
   },
 } satisfies E2EConfig;

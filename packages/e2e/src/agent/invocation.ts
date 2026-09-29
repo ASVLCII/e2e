@@ -307,7 +307,6 @@ export class Invocation {
 
   /** Bytes one observation may contribute to a request; see `observationByteBudget`. */
   private observationByteBudget(): number {
-    const { config } = this.runtime;
     // Nothing of the tree reaches the request, so the per-call token ceiling
     // does not bind it. The configured ceiling still bounds the walk, and a
     // fuller node map means a better hit-test for the point that comes back.
@@ -315,7 +314,7 @@ export class Invocation {
     return observationByteBudget(
       {
         maxObservationBytes: this.agent.config.maxObservationBytes,
-        maxModelTokensPerCall: config.limits.maxModelTokensPerCall,
+        maxInputTokens: this.agent.config.maxInputTokens,
       },
       { fixedBytes: this.systemBytes, pixels: this.pixelTier },
     );
@@ -357,7 +356,7 @@ export class Invocation {
               schema: request.schema,
               validate: request.validate,
               maxOutputTokens: MAX_OUTPUT_TOKENS,
-              maxInputTokens: this.runtime.config.limits.maxModelTokensPerCall,
+              maxInputTokens: this.agent.config.maxInputTokens,
               providerOptions: this.agent.config.providerOptions,
               signal: this.runtime.engine.signal,
               timeoutMs: Math.max(1, this.deadline.remaining()),

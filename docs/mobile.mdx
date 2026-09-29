@@ -396,7 +396,6 @@ Add `mobileTools` for app switching, device gestures, and system alerts:
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { mobile } from '@e2e-dev/mobile';
 import { mobileTools } from '@e2e-dev/mobile/tools';
 import { gateway } from 'ai';
@@ -411,10 +410,10 @@ export default {
   ],
   workers: 1,
   agents: {
-    default: createAgent({
+    default: {
       model: gateway('openai/gpt-6-luna-fast'),
       tools: mobileTools(iphone, pixel),
-    }),
+    },
   },
 } satisfies E2EConfig;
 ```

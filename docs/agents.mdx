@@ -8,7 +8,6 @@ or tools. Tests use `default` unless you select another agent.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
 
@@ -18,23 +17,26 @@ export default {
   targets: [{ engine: web({ url: 'http://localhost:3000' }) }],
   agents: {
     default: { model: gateway('openai/gpt-6-luna-fast'), context: vocabulary },
-    thorough: createAgent({
+    thorough: {
       model: gateway('anthropic/claude-opus-5'),
       system: 'Verify every claim on screen before concluding a step.',
       context: vocabulary,
-    }),
-    buyer: createAgent({ model: gateway('openai/gpt-6-luna-fast'), system: 'You are a first-time buyer.', context: vocabulary }),
-    admin: createAgent({ model: gateway('openai/gpt-6-luna-fast'), system: 'You manage orders and approve refunds.', context: vocabulary }),
+    },
+    buyer: { model: gateway('openai/gpt-6-luna-fast'), system: 'You are a first-time buyer.', context: vocabulary },
+    admin: { model: gateway('openai/gpt-6-luna-fast'), system: 'You manage orders and approve refunds.', context: vocabulary },
   },
 } satisfies E2EConfig;
 ```
 
-An entry takes one of three shapes:
+Each entry is one plain object. For the built-in agent it holds the model,
+the `system` prompt, the app's `context`, [tools](/tools), budgets, and
+`providerOptions`. For a [custom executor](/executors), put the executor under
+`executor`; the model, judge, context, and budgets still apply, while `system`
+and `tools` are rejected because the executor brings its own prompt and tools.
 
-- An options object to configure the built-in agent's model, vocabulary, and budgets.
-- `createAgent(...)` to add a `system` prompt or [tools](/tools). It takes
-  `model`, `system`, and `context` together, so one call is a complete agent.
-- A [custom executor](/executors), directly or in an options object with `executor`.
+Agents do not inherit from each other. Every entry starts from the built-in
+defaults, never from `default`'s values, so give each entry the model and
+context it needs, for example from a shared constant as above.
 
 `model` handles acting and judgments unless you set a separate `judge`.
 Models that receive screenshots must accept images. See [Models](/models) and
@@ -49,7 +51,7 @@ An agent takes two kinds of text, and they go to different readers.
 | Answers | How should the acting agent work? | What does this app call things? |
 | Who reads it | The act loop only | Every model call: act turns and the judges behind `assert`, `waitFor`, and `extract` |
 | Belongs here | Persona, caution, what to verify before finishing, how to treat unexpected dialogs | Names of screens and menus, where a feature lives, which button submits a form, domain terms |
-| Set on | `createAgent({ system })` | `createAgent({ context })` or the agent's options object, at most `limits.maxAgentContextBytes` |
+| Set on | `agents.<name>.system` | `agents.<name>.context`, at most 16 KiB |
 
 The split is deliberate. A judge decides whether the screen shows what the
 test claims, so it must know the app's words: a judge that does not know
@@ -65,24 +67,17 @@ tester on a different app, it is `system`.
 ```ts title="e2e.config.ts"
 agents: {
   default: {
-    executor: createAgent({
-      model: gateway('openai/gpt-6-luna-fast'),
-      // How to work: read by the act loop only.
-      system: 'Verify a visible confirmation before completing a step. Close cookie and feedback notices you did not ask for.',
-      // What things are called: read by every model call, judges included.
-      context: 'Plans are called tiers. Billing lives under Settings. Sales documents are quotes until "Convert to order".',
-    }),
+    model: gateway('openai/gpt-6-luna-fast'),
+    // How to work: read by the act loop only.
+    system: 'Verify a visible confirmation before completing a step. Close cookie and feedback notices you did not ask for.',
+    // What things are called: read by every model call, judges included.
+    context: 'Plans are called tiers. Billing lives under Settings. Sales documents are quotes until "Convert to order".',
     maxSteps: 40,
   },
 },
 ```
 
-Wrapping `createAgent` in an options object, for budgets or `providerOptions`,
-needs no second `model` or `context` key. `createAgent({ maxTurns })` caps the
-model turns of one step; the cap defaults to `maxModelCalls` and can only
-lower it. Set the vocabulary in one place, on
-`createAgent` or on the options object; two different values for one agent is
-`INVALID_CONFIG`, as it is for `model`.
+`maxModelCalls` bounds the model turns of one step.
 
 A test or group can add vocabulary of its own with `agentContext`, which is
 appended after the agent's `context` for that test: the ids of seeded data,
@@ -106,7 +101,7 @@ agent if the problem affects several tests:
 1. Use the labels on screen in the goal.
 2. Put shared vocabulary in `context`, or in `agentContext` for one test.
 3. Put instructions for the actor, such as verifying a visible confirmation
-   before completing a step, in `system` through `createAgent`.
+   before completing a step, in `system`.
 4. Add [tools](/tools) for operations such as seeding a cart through a test API.
 5. Compare models or `providerOptions` by running the same tests with
    `--agent <name>`.

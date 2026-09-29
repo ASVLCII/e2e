@@ -1,5 +1,4 @@
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { mobileTools } from '@e2e-dev/mobile/tools';
 import { gateway } from 'ai';
 import base, { android, ios } from './e2e.config.ts';
@@ -24,12 +23,12 @@ export default {
   timeout: 300_000,
   agents: {
     default: {
-      executor: createAgent({ tools: mobileTools(ios, android) }),
       model: gateway(process.env.E2E_MODEL ?? 'openai/gpt-6-luna-fast'),
       // The 600-row list takes about 45 screens plus corrections, so the
       // default action budget would end it a few rows short.
       maxSteps: 80,
-      timeout: 90_000,
+      judgmentTimeout: 90_000,
+      tools: mobileTools(ios, android),
       context: [
         'This is the e2e mobile benchmark: a list of self-contained scenarios',
         'observed through the accessibility tree of an iOS simulator or an',

@@ -1,7 +1,9 @@
 /**
- * The names an agent step's engine events carry for what the dispatcher did.
+ * The agent's vocabulary by name: the tools the grammar hands a model, and
+ * the names an agent step's engine events carry for what the dispatcher did.
  * Telemetry counts an agent's actions by these names and nothing else, so
- * adding an action means adding it here.
+ * adding an action means adding it here. A leaf module, so config resolution
+ * can check a project tool's name without loading the grammar.
  */
 
 /** The name of each grammar action, as the dispatcher records it. */
@@ -36,3 +38,35 @@ export type GrammarActionName = (typeof GRAMMAR_ACTION_NAMES)[number];
 
 /** The prefix of the engine event a project's own tool records; its name is the project's, and telemetry folds it away. */
 export const PROJECT_TOOL_EVENT_PREFIX = 'tool:';
+
+/**
+ * Every name `createGrammarTools` may hand out. The grammar owns these in the
+ * model's vocabulary whatever the engine declares, so a project tool cannot
+ * take one: it would be silently shadowed on one engine and live on another.
+ */
+export const GRAMMAR_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'observe',
+  'tap',
+  'double_tap',
+  'long_press',
+  'right_click',
+  'hover',
+  'type',
+  'type_secret',
+  'press',
+  'select',
+  'check',
+  'scroll',
+  'scroll_to',
+  'drag',
+  'upload',
+  'navigate',
+  'back',
+  'screenshot',
+  'tap_at',
+  'hover_at',
+  'type_at',
+  'press_at',
+  'select_at',
+  'dismiss_keyboard',
+]);

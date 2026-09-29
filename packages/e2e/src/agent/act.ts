@@ -197,6 +197,7 @@ class ActDispatch {
     const queue = new OperationQueue();
     this.feed = new ObservationFeed(runtime, this.accounting, queue, {
       maxObservationBytes: agent.config.maxObservationBytes,
+      maxInputTokens: agent.config.maxInputTokens,
     });
     this.dispatcher = new ActionDispatcher(runtime, this.accounting, this.feed, queue, {
       instruction: spec.instruction,

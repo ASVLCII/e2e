@@ -120,30 +120,18 @@ export interface E2EConfig {
    */
   reporters?: readonly (BuiltinReporter | Reporter)[];
   /**
-   * Named agent configurations, `createAgent(...)` values, or custom
-   * `StepExecutor` values. Tests use `default` unless selected otherwise.
-   * Each worker constructs its own agents from this config module.
+   * Named agents, each one plain object: the built-in agent's options, or
+   * `{ executor }` for a custom brain. Tests use `default` unless selected
+   * otherwise. No agent inherits another's values. Each worker constructs
+   * its own agents from this config module.
    */
-  agents?: Readonly<Record<string, AgentConfig | StepExecutor>>;
+  agents?: Readonly<Record<string, AgentConfig>>;
   /**
    * Replay cache mode or options. Defaults to `read-write` locally and
    * `read-only` in CI. An explicit mode overrides the default;
    * `--no-cache` disables caching for the run.
    */
   cache?: CacheMode | CacheConfig;
-  /**
-   * Maximum context size, ledger size, events, and tokens.
-   */
-  limits?: {
-    /** Trusted agent context, 1024 through 65536; default 16384. */
-    maxAgentContextBytes?: number;
-    /** Prior-step ledger, 1024 through 65536; default 8192. */
-    maxLedgerBytes?: number;
-    /** Events recorded per step, 1 through 10000; default 1000. */
-    maxEventsPerStep?: number;
-    /** Tokens per model request, 1 through 1000000; default 64000. */
-    maxModelTokensPerCall?: number;
-  };
   /**
    * Named accounts. A credential's password is registered as a secret under
    * the credential's name, so the name may not also appear under `secrets`.
@@ -623,34 +611,33 @@ attempt, but the service still holds the recording.
 ## agents
 
 ```ts
-/** Agent options for the built-in agent; `agent` also accepts a StepExecutor. */
-export interface AgentConfig {
-  /**
-   * Executor for `agent.act()`. Defaults to the built-in agent.
-   */
-  executor?: StepExecutor;
+/** A project tool as `defineTool` from `e2e/agent` returns it. */
+export interface AgentTool {
+  readonly tool: object;
+  readonly annotations: { readonly mutates: boolean; readonly platforms?: readonly string[] };
+}
+
+/** The options every agent takes, whichever brain runs its `act` steps. */
+export interface AgentOptions {
   /** An AI SDK model instance; no implicit default. */
   model?: ModelInstance;
-  /**
-   * Model for `assert`, `waitFor`, and `extract`; defaults to `model`.
-   * Must agree with `createAgent({ judge })` when both are set.
-   */
+  /** Model for `assert`, `waitFor`, and `extract`; defaults to `model`. */
   judge?: ModelInstance;
+  /**
+   * What the app calls things, told to every model call this agent makes,
+   * act turns and judgments alike. At most 16384 bytes.
+   */
+  context?: string;
   /** Committed actions per agent call, 1 through 100; default 25. */
   maxSteps?: number;
   /** Model requests per agent call, 1 through 100; default 25. */
   maxModelCalls?: number;
   /** Deadline of one `assert`, `waitFor`, or `extract` call in milliseconds; default 30000. Raise it for a slow judge; engine operations keep `actionTimeout`. */
-  timeout?: number;
+  judgmentTimeout?: number;
   /** Observation payload ceiling for act turns and judgments, 1024 through 16777216; default 262144. */
   maxObservationBytes?: number;
-  /**
-   * What the app calls things, told to every model call this agent makes,
-   * act turns and judgments alike. At most `limits.maxAgentContextBytes`.
-   * Redundant when the executor was built with `createAgent({ context })`;
-   * two different values is `INVALID_CONFIG`.
-   */
-  context?: string;
+  /** Input tokens per model request, 1 through 1000000; default 64000. A dense screen is cut to fit under it. */
+  maxInputTokens?: number;
   /**
    * Provider options every model call carries, e.g. a reasoning effort.
    * OpenAI and Azure OpenAI calls also carry `store: false` and a prompt
@@ -658,6 +645,21 @@ export interface AgentConfig {
    */
   providerOptions?: ProviderOptions;
 }
+
+/** One entry of `agents`: the built-in agent with its options, or a custom brain under `executor`. */
+export type AgentConfig = AgentOptions &
+  (
+    | {
+        /** How the acting agent should work, appended to the built-in rules; only the act loop reads it. */
+        system?: string;
+        /** Project tools from `defineTool`, offered beside the built-in toolset. */
+        tools?: Readonly<Record<string, AgentTool>>;
+      }
+    | {
+        /** A custom brain `agent.act()` dispatches to instead of the built-in agent. */
+        executor: StepExecutor;
+      }
+  );
 ```
 
 Tests use the `default` agent unless you select another with
@@ -672,38 +674,50 @@ and `INVALID_ARGUMENT` on a call. See [Agents and personas](/agents).
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
+import { houseBrain } from './house-brain.ts';
 
 export default {
   targets: [{ engine: web({ url: 'http://localhost:3000' }) }],
   agents: {
     default: { model: gateway('openai/gpt-6-luna-fast') },
-    ux: createAgent({ model: gateway('openai/gpt-6-luna-fast'), system: 'Check labels, contrast, and keyboard access.' }),
+    ux: { model: gateway('openai/gpt-6-luna-fast'), system: 'Check labels, contrast, and keyboard access.' },
     thorough: { model: gateway('anthropic/claude-opus-5'), context: 'Verify every claim on screen.' },
     buyer: {
-      executor: createAgent({
-        model: gateway('openai/gpt-6-luna-fast'),
-        system: 'You are a first-time buyer.',
-        context: 'Plans are called tiers. Billing lives under Settings.',
-      }),
+      model: gateway('openai/gpt-6-luna-fast'),
+      system: 'You are a first-time buyer.',
+      context: 'Plans are called tiers. Billing lives under Settings.',
       maxSteps: 40,
     },
+    house: { executor: houseBrain, model: gateway('openai/gpt-6-luna-fast'), maxModelCalls: 10 },
   },
 } satisfies E2EConfig;
 ```
 
-A bare `StepExecutor` is shorthand for `{ executor }`. `createAgent` accepts
-`model`, `system`, and `context`, so `{ executor: createAgent({ model, system,
-context }) }` is a complete agent: the options object around it needs no
-second `model` or `context` key. `createAgent` also takes `judge`, `tools`,
-`providerOptions`, and `maxTurns`, a cap on the model turns of one step; it
-defaults to `maxModelCalls` and can only lower it. A string in `model` is
-`INVALID_CONFIG` naming the constructor to write, and so is a `model`,
-`judge`, or `context` that differs from the one passed to `createAgent(...)`. See
-[Custom executors](/executors) and
+Every entry starts from the built-in defaults. Agents do not inherit from
+each other: `ux` above gets no `context` from `default`, and a key left out of
+an entry is the default value, never another entry's.
+
+With `executor`, `model`, `judge`, `context`, and the budgets still apply
+(judgments need a model), while `system` and `tools` are `INVALID_CONFIG`: the
+executor brings its own prompt and tools. `maxModelCalls` bounds the model
+turns of one step. A string in `model` is `INVALID_CONFIG` naming the
+constructor to write, and so is a `model` or `judge` that differs from the one
+the executor brought. See [Custom executors](/executors) and
 [A judge of its own](/models#a-judge-of-its-own).
+
+Loading the config fails with `INVALID_CONFIG` for an unknown key (naming the
+nearest known one), a removed key, and a value in the old shapes:
+
+| Written | Now |
+| --- | --- |
+| `createAgent({ ... })` from `e2e/agent` | the options as the entry itself; `createAgent` throws, naming the plain object |
+| a bare `StepExecutor` as the entry | `{ executor }` |
+| `timeout` | `judgmentTimeout` |
+| `maxTurns` (on the entry or `createToolLoopExecutor`) | `maxModelCalls` |
+| top-level `limits.maxModelTokensPerCall` | `maxInputTokens` on each agent |
+| top-level `limits.maxAgentContextBytes`, `maxLedgerBytes`, `maxEventsPerStep` | removed; the runner fixes them at 16384 bytes, 8192 bytes, and 1000 events |
 
 Judgments (`assert`, `waitFor`, `extract`) allow 8192 output tokens per call
 and see the instruction and the current screen only.
@@ -874,9 +888,22 @@ opt-in. Remove that line to share replays with CI and teammates; CI stays
 `read-only` unless `cache: 'read-write'` is set. See
 [Caching agent steps](/cache#commit-your-traces).
 
-## limits
+## Run limits
 
-Per-call options may only lower these.
+The report's `run.limits` block records the ceilings a run enforced. There is
+no `limits` key: `maxObservationBytes` and `maxModelTokensPerCall` are the
+largest `maxObservationBytes` and `maxInputTokens` any configured agent
+sets, and the rest are fixed by the runner.
+
+| Report field | Value |
+| --- | --- |
+| `maxAgentContextBytes` | 16384: an agent's `context` and a test's `agentContext` |
+| `maxLedgerBytes` | 8192: the prior-step ledger an act step reads |
+| `maxEventsPerStep` | 1000: events recorded per step |
+| `maxObservationBytes` | the largest `agents.<name>.maxObservationBytes` |
+| `maxModelTokensPerCall` | the largest `agents.<name>.maxInputTokens` |
+
+Per-call options may only lower an agent's budgets.
 
 ## Environment variables
 
@@ -890,8 +917,8 @@ secret, and `CI` switches the defaults below.
 | Setting | Order |
 | --- | --- |
 | Base URL | the engine's declared `url`, else `APP_URL_REQUIRED` at the first navigation. The runner reads no `APP_URL`; the scaffolded config reads it itself |
-| Built-in agent model | the model passed to `createAgent({ model })`, then `agents.<name>.model`, then `MODEL_UNAVAILABLE` at `agent` acquisition |
-| App vocabulary (`context`) | the value the agent's executor was built with (`createAgent({ context })`), else the agent entry's own `context`; two different values is `INVALID_CONFIG` |
+| Built-in agent model | `agents.<name>.model`, then `MODEL_UNAVAILABLE` at `agent` acquisition; an agent never falls back to `default`'s model |
+| Custom executor model | `agents.<name>.model`, else the model the executor brought; two different values is `INVALID_CONFIG` |
 | Model credential | the provider package's own variable or the key passed at construction, read by the provider on the first model call |
 | Credential username and password | the `E2E_USER_*` variable, then the config value |
 

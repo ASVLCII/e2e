@@ -61,7 +61,7 @@ export function defineTool(tool: Tool, annotations: ToolAnnotations): DefinedToo
 }
 
 /** True when a defined tool is offered on the given platform. */
-export function toolAppliesTo(defined: DefinedTool, platform: string): boolean {
+export function toolAppliesTo(defined: Pick<DefinedTool, 'annotations'>, platform: string): boolean {
   return defined.annotations.platforms === undefined || defined.annotations.platforms.includes(platform);
 }
 
@@ -77,11 +77,11 @@ export function isDefinedTool(value: unknown): value is DefinedTool {
  */
 export type ToolContext = Pick<StepExecutorContext, 'observe' | 'attachScreenshot'>;
 
-/** The capabilities createAgent supplied to the running tool. */
+/** The capabilities the built-in agent supplied to the running tool. */
 export function getToolContext(options: object): ToolContext {
   const context = (options as { [TOOL_CONTEXT]?: ToolContext })[TOOL_CONTEXT];
   if (context === undefined || typeof context.observe !== 'function') {
-    throw new TestError('INVALID_ARGUMENT', 'this tool needs the observation context supplied by createAgent');
+    throw new TestError('INVALID_ARGUMENT', 'this tool needs the observation context the built-in agent supplies');
   }
   return { observe: context.observe, attachScreenshot: context.attachScreenshot };
 }

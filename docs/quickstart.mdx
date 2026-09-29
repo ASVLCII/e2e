@@ -47,12 +47,11 @@ need Xcode with an iOS simulator runtime, or the Android SDK with an emulator.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
 
 export default {
-  agents: { default: createAgent({ model: gateway('openai/gpt-6-luna-fast') }) },
+  agents: { default: { model: gateway('openai/gpt-6-luna-fast') } },
   targets: [{ engine: web({ url: 'http://localhost:3000' }) }],
 } satisfies E2EConfig;
 ```
@@ -79,12 +78,11 @@ test('app opens', async ({ app, web }) => {
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { mobile } from '@e2e-dev/mobile';
 import { gateway } from 'ai';
 
 export default {
-  agents: { default: createAgent({ model: gateway('openai/gpt-6-luna-fast') }) },
+  agents: { default: { model: gateway('openai/gpt-6-luna-fast') } },
   targets: [{ name: 'ios', engine: mobile({ platform: 'ios', app: 'Settings' }) }],
   workers: 1,
 } satisfies E2EConfig;

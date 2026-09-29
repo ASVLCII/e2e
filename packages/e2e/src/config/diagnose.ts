@@ -42,9 +42,9 @@ const REMOVED_EXPORTS: Readonly<Record<string, Readonly<Record<string, string>>>
   },
   'e2e/agent': {
     isDefinedTool:
-      'isDefinedTool was removed from e2e/agent: pass what defineTool returns in tools, createAgent checks each entry itself',
+      'isDefinedTool was removed from e2e/agent: pass what defineTool returns in the tools of an agents entry, config loading checks each one itself',
     toolAppliesTo:
-      'toolAppliesTo was removed from e2e/agent: createAgent offers a defined tool only on the platforms its annotations name',
+      'toolAppliesTo was removed from e2e/agent: the built-in agent offers a defined tool only on the platforms its annotations name',
   },
 };
 

@@ -110,7 +110,7 @@ const IMAGE_TILE_PX = 28;
  * Conservative token bound for one image. Vision providers bill images by
  * fixed-size patches rather than bytes, so the count of patches covering the
  * image bounds every such encoder from above closely enough to keep a vision
- * call inside `limits.maxModelTokensPerCall`. Compressed byte length would be
+ * call inside the agent's `maxInputTokens`. Compressed byte length would be
  * meaningless here: a blank screenshot is small and a photograph is not, while
  * both cost the same number of patches.
  */

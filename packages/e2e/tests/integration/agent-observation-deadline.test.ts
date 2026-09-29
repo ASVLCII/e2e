@@ -43,7 +43,7 @@ describe('the action change deadline', () => {
       appUrl: FAKE_APP_URL,
       config: {
         targets: [{ name: 'device', platform: 'ios', engine: fake.engine }],
-        agents: { default: executor }, cache: 'off',
+        agents: { default: { executor } }, cache: 'off',
       },
     });
     try {

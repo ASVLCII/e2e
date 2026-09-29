@@ -12,16 +12,17 @@
 
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
-import { isDefaultAgent, projectTools } from '../agent/default-agent.ts';
-import type { ExecutorNode, StepExecutor, StepExecutorContext } from '../agent/executor.ts';
+import { projectTools } from '../agent/default-agent.ts';
+import type { ExecutorNode, StepExecutorContext } from '../agent/executor.ts';
 import { projectTree } from '../agent/observation.ts';
-import { createGrammarTools, GRAMMAR_TOOL_NAMES } from '../agent/primitives.ts';
+import { GRAMMAR_TOOL_NAMES } from '../agent/action-names.ts';
+import { createGrammarTools } from '../agent/primitives.ts';
 import type { ScreenPresenter } from '../agent/screen-update.ts';
 import type { LocatorExpression, SemanticNode, TargetSession } from '../engine/surface.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { describeExpression, roleQuery, testIdQuery, textQuery } from '../locator/expression.ts';
 import type { LocatorEngine } from '../locator/engine.ts';
-import type { Role } from '../types.ts';
+import type { AgentTool, Role } from '../types.ts';
 import { recordingTools, type SessionRecorder } from './recording.ts';
 
 /** How many matching nodes `locate` describes. */
@@ -43,8 +44,8 @@ export interface CatalogOptions {
   readonly screen: ScreenPresenter;
   readonly locator: LocatorEngine;
   readonly session: TargetSession;
-  /** The configured executor, whose project tools are served when it came from `createAgent`. */
-  readonly executor: StepExecutor | undefined;
+  /** The agent's project tools (`agents.<name>.tools`), served beside the built-in ones. */
+  readonly tools: Readonly<Record<string, AgentTool>>;
   /** The attempt's secret ledger: what `locate` shows of a node passes through it, as `observe` does. */
   readonly redact: (text: string) => string;
   /** The session's recorder, when the engine records video. */
@@ -65,7 +66,7 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
     locate: locateTool(options.locator, options.session, options.redact),
     ...recording,
   };
-  const defined = isDefaultAgent(options.executor) ? options.executor.tools : {};
+  const defined = options.tools;
   const readOnly = new Set(['observe', 'locate', 'screenshot']);
   const project: ToolSet = {};
   for (const [name, tool] of Object.entries(projectTools(context, defined))) {

@@ -12,7 +12,6 @@ import type { FakeCall } from '../helpers/fake-model.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 import { resultByTitle, runProject, type FixtureProject } from '../helpers/run-project.ts';
 import type { RunOutcome } from '../helpers/run-project.ts';
-import { createAgent } from '../../src/agent/default-agent.ts';
 import type { SdkLanguageModel } from '../../src/agent/ai-sdk.ts';
 
 const SUITE = `import { test, credentials } from 'e2e';
@@ -69,7 +68,7 @@ test('would need it as well', async ({ app, agent }) => {
 
 const CANONICAL_SUITE = `import { test } from 'e2e';
 
-test('judges with the model createAgent brought', async ({ app, agent }) => {
+test('judges with the model a custom executor brought', async ({ app, agent }) => {
   await app.open();
   const data = await agent.extract('the counter value', {
     schema: { '~standard': { version: 1, vendor: 'test', validate: (value) => ({ value }) } },
@@ -154,9 +153,13 @@ describe('agent policy and error classification', () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           agents: {
-            default: createAgent({
-              model: installFakeModel(() => ({ counter: '0' })) as unknown as SdkLanguageModel,
-            }),
+            default: {
+              executor: {
+                name: 'house-brain',
+                runStep: async () => ({ status: 'passed', summary: 'unused' }),
+                model: installFakeModel(() => ({ counter: '0' })) as unknown as SdkLanguageModel,
+              },
+            },
           },
         },
       },
@@ -173,9 +176,9 @@ describe('agent policy and error classification', () => {
     await app?.close();
   });
 
-  it('judges with the model createAgent brought, with no agent.model', () => {
+  it('judges with the model a custom executor brought, with no entry model', () => {
     expect(canonical.exitCode).toBe(0);
-    const result = resultByTitle(canonical, 'judges with the model createAgent brought');
+    const result = resultByTitle(canonical, 'judges with the model a custom executor brought');
     expect(result.status).toBe('passed');
     const step = result.attempts.at(-1)!.steps.find((candidate) => candidate.api === 'agent.extract')!;
     expect(step.model).toMatchObject({ provider: 'fake', model: 'scripted' });

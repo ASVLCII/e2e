@@ -67,6 +67,8 @@ export interface Lookup {
 export interface ObservationFeedOptions {
   /** The agent's observation byte ceiling, clamped per capture by the token limit. */
   readonly maxObservationBytes: number;
+  /** The agent's per-request input token ceiling. */
+  readonly maxInputTokens: number;
 }
 
 export class ObservationFeed {
@@ -403,7 +405,7 @@ export class ObservationFeed {
     return observationByteBudget(
       {
         maxObservationBytes: this.options.maxObservationBytes,
-        maxModelTokensPerCall: this.runtime.config.limits.maxModelTokensPerCall,
+        maxInputTokens: this.options.maxInputTokens,
       },
       { fixedBytes: metrics.contextBytes + metrics.ledgerBytes, pixels },
     );

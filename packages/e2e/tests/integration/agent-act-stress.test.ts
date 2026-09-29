@@ -50,7 +50,7 @@ describe('secret fill policy under a hostile executor', () => {
       { 'tests/secret.e2e.ts': SECRET_SUITE },
       {
         appUrl: app.url,
-        config: { tests: 'tests/**/*.e2e.ts', agents: { default: executor }, credentials: CREDS },
+        config: { tests: 'tests/**/*.e2e.ts', agents: { default: { executor } }, credentials: CREDS },
       },
     );
 
@@ -193,7 +193,7 @@ test('too-deep params', async ({ app, agent }) => {
     };
     const { outcome, project } = await runProject(
       { 'tests/bounds.e2e.ts': suite },
-      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: executor } } },
+      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: { executor } } } },
     );
     try {
       expect(resultByTitle(outcome, 'oversized params').attempts.at(-1)!.error?.message).toContain(
@@ -262,7 +262,7 @@ ${calls}
 `;
     const { outcome, project } = await runProject(
       { 'tests/ten.e2e.ts': suite },
-      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: executor } } },
+      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: { executor } } } },
     );
     try {
       const result = resultByTitle(outcome, 'ten steps');
@@ -325,7 +325,7 @@ test('genuinely broken', async ({ app, agent }) => {
     };
     const { outcome, project } = await runProject(
       { 'tests/mixed.e2e.ts': suite },
-      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: executor } } },
+      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: { executor } } } },
     );
     try {
       const blocked = resultByTitle(outcome, 'blocked by seed data');
@@ -372,7 +372,7 @@ const executor: StepExecutor = {
 export default {
   targets: [{ name: 'web', platform: 'web', engine: web({ url: process.env.APP_URL! }) }],
   workers: 2,
-  agents: { default: executor },
+  agents: { default: { executor } },
 } satisfies E2EConfig;
 `;
     const testFile = (name: string) => `import { test } from 'e2e';

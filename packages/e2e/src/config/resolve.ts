@@ -27,14 +27,7 @@ import type {
   CacheStore,
 } from '../types.ts';
 import { isEngineHandle, type EngineHandle } from '../engine/index.ts';
-import {
-  isModelInstance,
-  resolveAgentConfig,
-  resolveLimits,
-  type ResolvedAgentConfig,
-  type ResolvedLimits,
-  type ResolvedBaseLimits,
-} from './agent.ts';
+import { isModelInstance, resolveAgentConfig, runLimits, type ResolvedAgentConfig, type ResolvedLimits } from './agent.ts';
 import { digestAppDeclaration, resolveTargetApp, type ResolvedApp } from './app.ts';
 import { envName, isSecretValue, secretValueProblem } from './secrets.ts';
 
@@ -169,7 +162,6 @@ const TOP_LEVEL_KEYS = new Set([
   'reporters',
   'agents',
   'cache',
-  'limits',
   'credentials',
   'secrets',
 ]);
@@ -183,6 +175,10 @@ const APP_BELONGS_TO_ENGINE =
 /** Keys this runner used to accept, each mapped to what replaces it. */
 const REMOVED_TOP_LEVEL_KEYS: ReadonlyMap<string, string> = new Map([
   ['specVersion', 'remove it; the runner version is the format version'],
+  [
+    'limits',
+    'set maxInputTokens on each agent (was limits.maxModelTokensPerCall); maxAgentContextBytes, maxLedgerBytes, and maxEventsPerStep are fixed by the runner',
+  ],
 ]);
 
 /** Keys from other runners' configs, each mapped to where that fact lives here. */
@@ -288,17 +284,8 @@ export function resolveConfig(
   const projectId = resolveProjectId(raw.projectId, options.projectRoot);
   const { credentials, secrets } = resolveSecrets(raw, env);
   checkEngineSecrets(targets, secrets);
-  // Limits first: the agent context budget is a limits key, and the resolved
-  // observation budget is agent-owned, so the dependency runs one way.
-  const baseLimits = resolveLimits(raw);
-  const { agents, agentNames, agent } = resolveAgents(raw.agents, env, ci, baseLimits, cli.agents);
-  // The report's ceiling is the largest any configured agent may use: a
-  // pinned agent's calls are bounded by its own value, and the run-level
-  // number must not read lower than what a step could actually send.
-  const limits: ResolvedLimits = {
-    ...baseLimits,
-    maxObservationBytes: Math.max(...[...agents.values()].map((entry) => entry.maxObservationBytes)),
-  };
+  const { agents, agentNames, agent } = resolveAgents(raw.agents, cli.agents);
+  const limits = runLimits(agents.values());
   const cache = resolveCacheConfig(raw, ci, options.projectRoot, cli.cache, cli.cacheStrict === true);
   const output = resolveOutput(raw.output, cli.output, options.projectRoot, cache.dir, tests);
 
@@ -901,21 +888,19 @@ const AGENT_NAME_PATTERN = TARGET_NAME_PATTERN;
 
 /**
  * Resolves `agents`: every named entry, and `default` even when the config
- * names none (the built-in agent, which then needs `createAgent({ model })`). The run's agents are
- * `default` alone unless `--agent` named others; an unknown name is a config
- * error before anything starts.
+ * names none (the built-in agent with no model, which fails at its first
+ * model call). Each entry resolves on its own, from the built-in defaults.
+ * The run's agents are `default` alone unless `--agent` named others; an
+ * unknown name is a config error before anything starts.
  */
 function resolveAgents(
   raw: E2EConfig['agents'],
-  env: NodeJS.ProcessEnv,
-  ci: boolean,
-  limits: ResolvedBaseLimits,
   selected: readonly string[] | undefined,
 ): { agents: ReadonlyMap<string, ResolvedAgentConfig>; agentNames: readonly string[]; agent: ResolvedAgentConfig } {
   if (raw !== undefined && (typeof raw !== 'object' || raw === null || Array.isArray(raw) || isStepExecutor(raw))) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      'agents must be an object of agents by name: agents: { default: createAgent(...) }',
+      'agents must be an object of agents by name: agents: { default: { model } }',
     );
   }
   const agents = new Map<string, ResolvedAgentConfig>();
@@ -926,10 +911,10 @@ function resolveAgents(
         `invalid agent name ${JSON.stringify(name)}: names are ASCII letters, numbers, "_", "-", or ".", and cannot be only dots`,
       );
     }
-    agents.set(name, resolveAgentConfig(value, env, ci, limits, `agents.${name}`));
+    agents.set(name, resolveAgentConfig(value, `agents.${name}`));
   }
   if (!agents.has(DEFAULT_AGENT_NAME)) {
-    agents.set(DEFAULT_AGENT_NAME, resolveAgentConfig(undefined, env, ci, limits));
+    agents.set(DEFAULT_AGENT_NAME, resolveAgentConfig(undefined));
   }
   // `--agent a --agent a` is one agent, not two results per test.
   const agentNames = selected === undefined || selected.length === 0 ? [DEFAULT_AGENT_NAME] : [...new Set(selected)];
@@ -944,11 +929,10 @@ function resolveAgents(
 }
 
 function computeConfigDigest(raw: E2EConfig, projectId: string): string {
-  // An agent may be the executor itself; its digest identity is name/version,
-  // which is exactly what survives the function-stripping JSON clone below.
-  // Every model instance, wherever an agent entry carries it (`model`,
-  // `judge`, or inside a `createAgent` executor's options), is reduced to its
-  // identity by the clone: a live instance carries provider settings (and
+  // An agent's custom executor digests as its name/version, which is exactly
+  // what survives the function-stripping JSON clone below. Every model
+  // instance, wherever an agent entry carries it (`model`, `judge`, or inside
+  // an executor), is reduced to its identity by the clone: a live instance carries provider settings (and
   // possibly credentials) that must never be digested, and its object graph
   // may not serialize at all. Other live values are reduced before the clone:
   // a store or a reporter may hold a client whose graph JSON cannot handle.
@@ -1016,7 +1000,7 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
  * A JSON round trip that drops functions and reduces every AI SDK model
  * instance, at any depth, to its provider/id identity. The digest reads the
  * same whether a model sits in `agents.<name>.model`, in `judge`, or inside
- * the options a `createAgent` executor carries.
+ * a custom executor.
  */
 function structuredCloneJsonSafe(value: unknown): unknown {
   return JSON.parse(

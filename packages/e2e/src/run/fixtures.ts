@@ -1,9 +1,9 @@
 /** Attempt-scoped fixture graph. */
 
+import { BUILT_IN_AGENT } from '../agent/agent-brand.ts';
 import { createAgentFixture } from '../agent/index.ts';
 import type { AgentContext, AgentSelection } from '../agent/invocation.ts';
 import type { ExecutorAttempt, StepExecutor } from '../agent/executor.ts';
-import { isDefaultAgent } from '../agent/default-agent.ts';
 import type { AgentCacheContext } from '../cache/context.ts';
 import type { WorkerModels } from './worker-models.ts';
 import type { EngineCapability, EngineFixtureContext } from '../engine/index.ts';
@@ -26,7 +26,7 @@ import {
   type ScreenContext,
   type SecretResolver,
 } from '../locator/screen.ts';
-import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
+import type { ResolvedAgentConfig, ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
 import type { Agent, App, Expectable, SetupSession, TestFixtures } from '../types.ts';
 import type { ArtifactRecord } from './records.ts';
 import type { StepRecord, StepRecorder } from './steps.ts';
@@ -150,12 +150,11 @@ export function createFixtures(environment: AttemptEnvironment): AttemptFixtures
     const selection: AgentSelection = {
       name,
       config: resolved,
-      executor: resolved.executor ?? lazyDefaultExecutor(),
-      // `createAgent(...)` is the built-in agent with options, not a custom
-      // brain: its assertions go to the judgment tier like everyone else's,
-      // so a configured `judge` judges them. Only a hand-rolled executor
-      // judges its own assertions through `runStep`.
-      customExecutor: resolved.executor !== undefined && !isDefaultAgent(resolved.executor),
+      executor: resolved.executor ?? lazyBuiltInAgent(resolved),
+      // The built-in agent's assertions go to the judgment tier, so a
+      // configured `judge` judges them. Only a custom executor judges its
+      // own assertions through `runStep`.
+      customExecutor: resolved.executor !== undefined,
       // Built on first use: a run whose `agent.act()` steps go to a custom
       // executor may have no model at all and must not fail on a
       // MODEL_UNAVAILABLE it would never hit; a judgment still fails with it
@@ -339,21 +338,21 @@ function fixtureContext(
 }
 
 /**
- * The built-in executor behind a dynamic import, so the optional `ai` peer
- * dependency loads only if an `agent.act()` step actually runs. Deterministic
- * suites and custom-executor projects never pay for - or fail on - it.
+ * The built-in agent, built from the entry's `system` and `tools`, behind a
+ * dynamic import, so the agent's loop loads only if an `agent.act()` step
+ * actually runs. Deterministic suites and custom-executor projects never pay
+ * for it.
  */
-function lazyDefaultExecutor(): StepExecutor {
+function lazyBuiltInAgent(config: ResolvedAgentConfig): StepExecutor {
   let executor: StepExecutor | undefined;
   return {
-    name: 'e2e-default-agent',
-    // Keep in lockstep with createAgent's version: cache provenance and model
-    // policyVersion record this wrapper, not the delegate it constructs.
-    version: '2',
+    // Cache provenance and model policyVersion record this wrapper, not the
+    // delegate it constructs, so both carry the one identity.
+    ...BUILT_IN_AGENT,
     async runStep(context) {
       if (executor === undefined) {
-        const { createAgent } = await import('../agent/default-agent.ts');
-        executor = createAgent();
+        const { createBuiltInAgent } = await import('../agent/default-agent.ts');
+        executor = createBuiltInAgent({ system: config.system, tools: config.tools });
       }
       return executor.runStep(context);
     },

@@ -1,7 +1,7 @@
 /**
  * The tool-loop chassis: everything an AI SDK step
- * executor needs except its tool vocabulary. `createAgent` is this chassis
- * plus the grammar toolset; a device or API executor brings different
+ * executor needs except its tool vocabulary. The built-in agent is this
+ * chassis plus the grammar toolset; a device or API executor brings different
  * tools and inherits the whole discipline unchanged:
  *
  * - the `complete_step` verdict tool and the closed blocked-code policy;
@@ -14,7 +14,7 @@
 import type { StepTurn } from '../run/steps.ts';
 import type { LanguageModel, ModelMessage, StepResult, ToolSet } from 'ai';
 import { asSdkLanguageModel, loadAiSdk, type AiSdk, type SdkLanguageModel } from './ai-sdk.ts';
-import { withHint } from '../internal/errors.ts';
+import { ConfigurationError, withHint } from '../internal/errors.ts';
 import type { ProviderOptions } from '../types.ts';
 import { failureHint, isAbort, TRANSPORT_RETRIES } from './model/sdk.ts';
 import { isContextOverflow } from './model/overflow.ts';
@@ -118,8 +118,6 @@ export interface ToolLoopExecutorOptions {
    * history ending in the step's request.
    */
   readonly buildPrompt: (context: StepExecutorContext) => string | ModelMessage[] | Promise<string | ModelMessage[]>;
-  /** Upper bound on model turns; capped at the harness model-call budget. */
-  readonly maxTurns?: number;
   /**
    * AI SDK provider options sent with every model call (thinking level,
    * effort). Defaults to the config-resolved `agent.providerOptions`.
@@ -152,8 +150,17 @@ export interface PreparedTurn {
   readonly previousToolCalls: readonly string[];
 }
 
-/** Builds a step executor from a tool vocabulary and the shared loop chassis. */
+/**
+ * Builds a step executor from a tool vocabulary and the shared loop chassis.
+ * Its model turns per step are the agent's `maxModelCalls`.
+ */
 export function createToolLoopExecutor(options: ToolLoopExecutorOptions): StepExecutor {
+  if ('maxTurns' in options) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      'createToolLoopExecutor({ maxTurns }) was removed; set maxModelCalls on the agents entry that runs the executor',
+    );
+  }
   return {
     name: options.name,
     ...(options.version === undefined ? {} : { version: options.version }),
@@ -170,7 +177,7 @@ export function createToolLoopExecutor(options: ToolLoopExecutorOptions): StepEx
       if (model === undefined) {
         throw new AgentError(
           'MODEL_UNAVAILABLE',
-          `the "${options.name}" executor requires a model: pass an AI SDK model instance to createAgent({ model }) or set agent.model`,
+          `the "${options.name}" executor requires a model: set model on its agents entry, or pass one to createToolLoopExecutor({ model })`,
         );
       }
       const loop = new LoopRun(ai, options, context, model);
@@ -220,12 +227,7 @@ class LoopRun {
   ) {
     this.toolChoice = typeof model === 'object' && FREE_TOOL_CHOICE_MODELS.has(model) ? 'auto' : 'required';
     this.hints = providerHints(model as ProviderModelRef);
-    // Capped, never raised: the harness budget is the ceiling for any turns
-    // setting, so the loop cannot spend past what the step was given.
-    this.maxTurns = Math.min(
-      options.maxTurns ?? context.budgets.maxModelCalls,
-      context.budgets.maxModelCalls,
-    );
+    this.maxTurns = context.budgets.maxModelCalls;
     this.clockWindDownMs = Math.min(
       CLOCK_WIND_DOWN_MS,
       Math.floor(context.budgets.remainingMs() / CLOCK_WIND_DOWN_FRACTION),

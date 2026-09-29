@@ -54,7 +54,7 @@ describe('run events', () => {
       config: {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
-        agents: { default: oneTapExecutor },
+        agents: { default: { executor: oneTapExecutor } },
         cache: 'off' as const,
       },
       runOptions: { onEvent: (event) => {
@@ -176,14 +176,14 @@ test.describe('group', { serial: true, retries: 1 }, () => {
           appUrl: app.url,
           configSource: workerConfigSource(2, `
   cache: 'off',
-  agents: { default: {
+  agents: { default: { executor: {
     name: 'retry-once',
     async runStep(context) {
       return context.step.instruction === 'retry me' && context.attempt.index === 0
         ? { status: 'failed', summary: 'first attempt fails' }
         : { status: 'passed', summary: 'recovered' };
     },
-  } },`),
+  } } },`),
           runOptions,
         });
         project = result.project;
@@ -192,7 +192,7 @@ test.describe('group', { serial: true, retries: 1 }, () => {
         project = createProject(files);
         outcome = await runExisting(project, {
           appUrl: app.url,
-          config: { cache: 'off', agents: { default: executor } },
+          config: { cache: 'off', agents: { default: { executor } } },
           runOptions,
         });
       }
@@ -345,7 +345,7 @@ test.describe('shared', { serial: true }, () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['junit'] as const,
-          agents: { default: oneTapExecutor },
+          agents: { default: { executor: oneTapExecutor } },
           cache: 'off' as const,
         },
         runOptions: { onEvent: (event) => {
@@ -384,7 +384,7 @@ test.describe('shared', { serial: true }, () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['json'] as const,
-          agents: { default: oneTapExecutor },
+          agents: { default: { executor: oneTapExecutor } },
           cache: 'off' as const,
         },
         runOptions: { onEvent: (event) => {
@@ -420,7 +420,7 @@ test.describe('shared', { serial: true }, () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['json'] as const,
-          agents: { default: oneTapExecutor },
+          agents: { default: { executor: oneTapExecutor } },
           cache: 'off' as const,
         },
         runOptions: {
@@ -452,7 +452,7 @@ test.describe('shared', { serial: true }, () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['json'] as const,
-          agents: { default: oneTapExecutor },
+          agents: { default: { executor: oneTapExecutor } },
           cache: 'off' as const,
           credentials: { member: { username: 'member', password: 'hunter2' } },
         },
@@ -476,7 +476,7 @@ describe('run events: quarantined sink', () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['json'] as const,
-          agents: { default: oneTapExecutor },
+          agents: { default: { executor: oneTapExecutor } },
           cache: 'off' as const,
         },
         runOptions: {

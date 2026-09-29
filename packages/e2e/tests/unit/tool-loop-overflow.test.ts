@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createAgent } from '../../src/agent/default-agent.ts';
 import { defineTool } from '../../src/agent/tool.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine, type EngineHandle } from '../../src/engine/index.ts';
@@ -83,8 +82,7 @@ describe('tool loop context overflow', () => {
       if (turn === 2) throw new Error(OVERFLOW);
       return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'read the rows' } }];
     });
-    const executor = createAgent({ tools: { peek } });
-    const { fixtures, steps } = runtime(bigScreen(), { agents: { default: { executor, model } } });
+    const { fixtures, steps } = runtime(bigScreen(), { agents: { default: { tools: { peek }, model } } });
 
     await fixtures.agent.act('read the big output');
 
@@ -109,7 +107,7 @@ describe('tool loop context overflow', () => {
       if (turn === 3) throw new Error(OVERFLOW);
       return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'read the rows' } }];
     });
-    const { fixtures, steps } = runtime(changingBigScreen(() => variant), { agents: { default: { executor: createAgent(), model } } });
+    const { fixtures, steps } = runtime(changingBigScreen(() => variant), { agents: { default: { model } } });
 
     await fixtures.agent.act('read the big output');
 
@@ -133,8 +131,7 @@ describe('tool loop context overflow', () => {
       if (turn === 1) return [{ toolName: 'peek', input: {} }];
       throw new Error(OVERFLOW);
     });
-    const executor = createAgent({ tools: { peek } });
-    const { fixtures } = runtime(bigScreen(), { agents: { default: { executor, model } } });
+    const { fixtures } = runtime(bigScreen(), { agents: { default: { tools: { peek }, model } } });
 
     await expect(fixtures.agent.act('read the big output')).rejects.toMatchObject({
       code: 'CONTEXT_OVERFLOW',
@@ -147,7 +144,7 @@ describe('tool loop context overflow', () => {
     const model = installFakeLoopModel(() => {
       throw new Error(OVERFLOW);
     });
-    const { fixtures } = runtime(engine(), { agents: { default: { executor: createAgent(), model } } });
+    const { fixtures } = runtime(engine(), { agents: { default: { model } } });
 
     await expect(fixtures.agent.act('do the thing')).rejects.toMatchObject({
       code: 'CONTEXT_OVERFLOW',
@@ -163,8 +160,7 @@ describe('tool loop context overflow', () => {
       if (turn === 1) return [{ toolName: 'peek', input: {} }];
       throw new Error('Rate limit reached for requests');
     });
-    const executor = createAgent({ tools: { peek } });
-    const { fixtures } = runtime(engine(), { agents: { default: { executor, model } } });
+    const { fixtures } = runtime(engine(), { agents: { default: { tools: { peek }, model } } });
 
     await expect(fixtures.agent.act('read the big output')).rejects.toMatchObject({ code: 'MODEL_PROVIDER_FAILED' });
     expect(loopCalls).toHaveLength(2);

@@ -1,15 +1,14 @@
 /**
  * `e2e explore`: a run whose one test is a goal. The project config is loaded
  * as `run` loads it, the exploration body is registered in memory as the
- * run's only test, and within that test alone the explorer replaces the
- * executor of the agent the run uses, so the reporters, `report.json`,
+ * run's only test, and within that test alone the explorer takes the place
+ * of the agent the run uses, so the reporters, `report.json`,
  * artifacts, video, the AI trace, and the exit codes are the runner's own. The exploration's progress travels
  * as `explore` run events, which the list reporter renders, and its record
  * rides along as `run.explore`.
  */
 
 import { MAX_PARAMS_BYTES } from '../agent/act-validation.ts';
-import { isStepExecutor, type StepExecutor } from '../agent/executor.ts';
 import type { ModuleRegistration, RegisteredTest } from '../collect/registry.ts';
 import { selectTargets } from '../collect/select.ts';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
@@ -20,7 +19,7 @@ import { labelSegment } from '../run/artifacts.ts';
 import { run, type RunOutcome } from '../run/runner.ts';
 import type { AgentConfig, BuiltinReporter, E2EConfig, RecordingMode } from '../types.ts';
 import { createExploreBody } from './body.ts';
-import { createExplorer } from './executor.ts';
+import { explorerAgent } from './executor.ts';
 import { signedInContext, type PlanAccount } from './plan.ts';
 import { ExploreState } from './state.ts';
 
@@ -118,12 +117,12 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
   if (agentName !== 'default') notice(`exploring with agent "${agentName}"`);
 
   const state = new ExploreState(goal, budgets);
-  const explorer = createExplorer({ state, from: resolved.agent.executor, notice });
+  const explorer = explorerAgent({ state, entry: raw.agents?.[agentName], resolved: resolved.agent, notice });
   // The explorer replaces the agent for the exploration alone: a setup test
   // `--session` pulls in runs as the project's own agents, with its cache and
   // retries. The exploration pins no retries and runs with the cache off.
   const explorerAgents = resolveConfig(
-    { ...raw, agents: { ...raw.agents, [agentName]: exploreAgentConfig(raw.agents?.[agentName], explorer) } },
+    { ...raw, agents: { ...raw.agents, [agentName]: exploreAgentConfig(explorer) } },
     resolveOptions,
   ).agents;
   const outcome = await run({
@@ -197,18 +196,14 @@ function pickTarget(targets: readonly ResolvedTarget[], requested: string | unde
 }
 
 /**
- * The agent block the exploration runs as: the project's own options with the
- * explorer as the executor, and per-step budgets that default higher than a
- * scripted step's, a charter being longer. A bare executor has no options to
- * keep; the explorer already lent from it what it could.
+ * The explorer's agents entry with per-step budgets that default higher than
+ * a scripted step's, a charter being longer.
  */
-function exploreAgentConfig(entry: AgentConfig | StepExecutor | undefined, explorer: StepExecutor): AgentConfig {
-  const block: AgentConfig = entry === undefined || isStepExecutor(entry) ? {} : entry;
+function exploreAgentConfig(explorer: AgentConfig): AgentConfig {
   return {
-    ...block,
-    executor: explorer,
-    maxSteps: block.maxSteps ?? DEFAULT_STEP_BUDGET,
-    maxModelCalls: block.maxModelCalls ?? DEFAULT_STEP_BUDGET,
+    ...explorer,
+    maxSteps: explorer.maxSteps ?? DEFAULT_STEP_BUDGET,
+    maxModelCalls: explorer.maxModelCalls ?? DEFAULT_STEP_BUDGET,
   };
 }
 

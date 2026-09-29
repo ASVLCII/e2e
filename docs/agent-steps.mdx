@@ -11,7 +11,8 @@ records the result.
 
 The runner handles redaction, action authorization, budgets, secrets, and
 reporting. The executor decides which actions to request and returns a
-verdict. `createAgent()` provides the built-in executor.
+verdict. The built-in agent is the executor unless an agents entry sets
+`executor`.
 
 [Custom executors](/executors) get the same redacted observations and checked
 action methods. Their own code runs with the test process's OS permissions.
@@ -95,9 +96,9 @@ Defaults for the built-in agent:
 | Call | Model calls | Default timeout |
 | --- | --- | --- |
 | `act` | up to `maxModelCalls`, default 25 | test `timeout`, 120 s |
-| `assert` | 2 | the agent's `timeout`, 30 s |
-| `extract` | 2 | the agent's `timeout`, 30 s |
-| `waitFor` | up to `maxModelCalls`, default 25 | the agent's `timeout`, 30 s |
+| `assert` | 2 | the agent's `judgmentTimeout`, 30 s |
+| `extract` | 2 | the agent's `judgmentTimeout`, 30 s |
+| `waitFor` | up to `maxModelCalls`, default 25 | the agent's `judgmentTimeout`, 30 s |
 
 `assert` and `extract` make one judgment, with one repair call if needed.
 `waitFor` skips model calls while the observation is unchanged, including

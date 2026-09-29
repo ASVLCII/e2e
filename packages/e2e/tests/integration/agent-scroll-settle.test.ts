@@ -53,7 +53,7 @@ describe('the look after scrolling to text', () => {
     const project = createProject({ 'tests/scroll.e2e.ts': SUITE });
     const options = {
       appUrl: FAKE_APP_URL,
-      config: { tests: 'tests/**/*.e2e.ts', targets: [{ name: 'device', platform: 'ios' as const, engine: fake.engine }], agents: { default: executor }, cache: 'read-write' as const },
+      config: { tests: 'tests/**/*.e2e.ts', targets: [{ name: 'device', platform: 'ios' as const, engine: fake.engine }], agents: { default: { executor } }, cache: 'read-write' as const },
     };
     try {
       const recorded = await runExisting(project, options);
@@ -102,7 +102,7 @@ describe('the look after scrolling to text', () => {
     try {
       const outcome = await runExisting(project, {
         appUrl: FAKE_APP_URL,
-        config: { tests: 'tests/**/*.e2e.ts', targets: [{ name: 'surface', platform: 'web', engine: fake.engine }], agents: { default: executor } },
+        config: { tests: 'tests/**/*.e2e.ts', targets: [{ name: 'surface', platform: 'web', engine: fake.engine }], agents: { default: { executor } } },
       });
       expect(outcome.exitCode, JSON.stringify(outcome.report.run.errors)).toBe(0);
       expect(afterScroll).toContain('in view');
