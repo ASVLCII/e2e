@@ -770,17 +770,34 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   });
 
   /**
-   * Reduces a URL to origin and path, dropping userinfo, query, and fragment.
-   * Bounded: hrefs are shown to the model as link hints, not resolved, so a
-   * long path only buys tokens.
+   * Reduces a link target to origin and path, dropping userinfo, query, and
+   * fragment, which routinely carry tokens. A dropped query or fragment
+   * leaves `?…` or `#…` behind, so the value never reads as the whole
+   * target when it is not; a URL path never holds a literal `…`, since the
+   * URL parser percent-encodes it. `mailto:` and `tel:` keep their scheme in
+   * place of an origin; `blob:` keeps its inner URL, reduced the same way, or
+   * becomes `blob:…` when that has no origin. Any other scheme with no
+   * origin (`data:`, `javascript:`) carries its payload as its path, a whole
+   * file or script, so it is reduced to `scheme:…`. The path is whole
+   * otherwise: the harness bounds what it renders after redaction, and marks
+   * what it cuts.
    */
-  const HREF_LIMIT = 80;
   const originAndPath = (value: string, base: string): string => {
+    const elided = (query: boolean, fragment: boolean): string => `${query ? '?…' : ''}${fragment ? '#…' : ''}`;
     try {
       const url = new URL(value, base);
-      return `${url.origin}${url.pathname}`.slice(0, HREF_LIMIT);
+      const rest = `${url.pathname}${elided(url.search !== '', url.hash !== '')}`;
+      if (url.protocol === 'blob:') {
+        const inner = URL.canParse(url.pathname) ? new URL(url.pathname) : null;
+        return inner === null || inner.origin === 'null' ? 'blob:…' : `blob:${inner.origin}${inner.pathname}${elided(url.search !== '', url.hash !== '')}`;
+      }
+      if (url.origin !== 'null') return `${url.origin}${rest}`;
+      if (url.protocol === 'mailto:' || url.protocol === 'tel:') return `${url.protocol}${rest}`;
+      return `${url.protocol}…`;
     } catch {
-      return (value.split('?')[0]?.split('#')[0] ?? '').slice(0, HREF_LIMIT);
+      const [beforeFragment = '', ...fragment] = value.split('#');
+      const [path = '', ...query] = beforeFragment.split('?');
+      return `${path}${elided(query.join('?') !== '', fragment.join('#') !== '')}`;
     }
   };
 

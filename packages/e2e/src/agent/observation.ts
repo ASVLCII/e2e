@@ -71,6 +71,8 @@ export function prepareObservation(
     maxBytes: number;
     /** Grants pixel-only evidence; omit when this consumer cannot use it. */
     pixelsAllowed?: boolean;
+    /** The app base URL's origin: link targets on it render as paths, which navigation resolves against it. */
+    appOrigin?: string | undefined;
   },
 ): AgentObservation {
   const location = observation.location === undefined ? undefined : options.redact(observation.location);
@@ -115,7 +117,7 @@ export function prepareObservation(
 
   const emit = (node: SemanticNode, depth: number): void => {
     if (cutByBudget) return;
-    const line = formatNode(node, depth, redact);
+    const line = formatNode(node, depth, redact, options.appOrigin);
     const size = encoder.encode(`${line}\n`).byteLength;
     if (lines.length > 0 && bytes + size > budget) {
       cutByBudget = true;
@@ -296,15 +298,19 @@ export function interactiveNodeCount(observation: Pick<ExecutorObservation, 'tex
 /**
  * Projects the raw tree onto the executor-facing node shape: the same
  * redaction the text serialization applies, field by field, and no value or
- * selection at all for a secure node. Selectors stay behind — they are relocation
+ * selection at all for a secure node, and a link target bounded as a line
+ * bounds it: a target on `appOrigin` keeps that origin and loses no more of
+ * its path than the line does. Selectors stay behind — they are relocation
  * material for the trace cache, not something a brain reasons about.
  */
-export function projectTree(node: SemanticNode, redact: (text: string) => string): ExecutorNode {
+export function projectTree(node: SemanticNode, redact: (text: string) => string, appOrigin?: string): ExecutorNode {
   const secure = node.states?.secure === true;
   const attributes =
     node.attributes === undefined
       ? undefined
-      : Object.fromEntries(Object.entries(node.attributes).map(([key, value]) => [key, redact(value)]));
+      : Object.fromEntries(
+          Object.entries(node.attributes).map(([key, value]) => [key, key === 'href' ? treeHref(redact(value), appOrigin) : redact(value)]),
+        );
   return {
     id: node.ref.id,
     ...(node.role === undefined ? {} : { role: node.role }),
@@ -319,22 +325,27 @@ export function projectTree(node: SemanticNode, redact: (text: string) => string
     ...(node.framePath === undefined ? {} : { framePath: node.framePath }),
     ...(node.children === undefined
       ? {}
-      : { children: node.children.map((child) => projectTree(child, redact)) }),
+      : { children: node.children.map((child) => projectTree(child, redact, appOrigin)) }),
   };
 }
 
 /** Depth beyond this renders flat; deep chrome must not buy tokens with spaces. */
 const MAX_INDENT_DEPTH = 10;
 
+/** Link target UTF-16 units a line shows; a longer target is cut there and ends with `…`. */
+const MAX_HREF_LENGTH = 256;
+
 /**
  * Renders one node as `#id role "name" text="..." value="..." selection="..." [states]`. Role-less text
  * holders omit the role token entirely: on a large screen they are half the
- * lines, and the model needs their text, not a filler word.
+ * lines, and the model needs their text, not a filler word. A link target on
+ * `appOrigin`, the app base URL's, renders as its path.
  */
 export function formatNode(
   node: SemanticNode,
   depth: number,
   redact: (text: string) => string,
+  appOrigin?: string,
 ): string {
   const parts: string[] = [`#${node.ref.id}`];
   if (node.role !== undefined && node.role !== '') parts.push(node.role);
@@ -345,7 +356,7 @@ export function formatNode(
   // already reduced href to origin and path.
   if (node.testId !== undefined && node.testId !== '') parts.push(`testid=${JSON.stringify(node.testId)}`);
   const href = node.attributes?.['href'];
-  if (href !== undefined && href !== '') parts.push(`href=${JSON.stringify(redact(href))}`);
+  if (href !== undefined && href !== '') parts.push(`href=${JSON.stringify(renderHref(redact(href), appOrigin))}`);
   const placeholder = node.attributes?.['placeholder'];
   if (placeholder !== undefined && placeholder !== '' && (node.name ?? '') === '') {
     parts.push(`placeholder=${JSON.stringify(redact(placeholder))}`);
@@ -369,6 +380,37 @@ export function formatNode(
     .map(([key]) => key);
   if (states.length > 0) parts.push(`[${states.join(' ')}]`);
   return `${' '.repeat(Math.min(depth, MAX_INDENT_DEPTH))}${parts.join(' ')}`;
+}
+
+/**
+ * A link target as a line shows it: a path when it is on the app's origin,
+ * the one a navigation to a path resolves against, else the whole URL, since
+ * a path on another site would send the model back to the app. Bounded by
+ * `boundHref`, after redaction.
+ */
+function renderHref(href: string, appOrigin: string | undefined): string {
+  return boundHref(onOrigin(href, appOrigin) ? href.slice(appOrigin.length) : href);
+}
+
+/** A link target as an executor tree carries it: absolute, and bounded exactly as `renderHref` bounds the line. */
+function treeHref(href: string, appOrigin: string | undefined): string {
+  return onOrigin(href, appOrigin) ? `${appOrigin}${renderHref(href, appOrigin)}` : boundHref(href);
+}
+
+/** Whether a link target is on `origin`. */
+function onOrigin(href: string, origin: string | undefined): origin is string {
+  return origin !== undefined && href.startsWith(`${origin}/`);
+}
+
+/**
+ * A redacted link target cut at `MAX_HREF_LENGTH` with a trailing `…`, so a
+ * cut target never reads as whole; the cut never splits a surrogate pair.
+ * Redaction runs first, so the cut never leaves part of a secret.
+ */
+function boundHref(href: string): string {
+  if (href.length <= MAX_HREF_LENGTH) return href;
+  const end = /[\uD800-\uDBFF]/.test(href.charAt(MAX_HREF_LENGTH - 1)) ? MAX_HREF_LENGTH - 1 : MAX_HREF_LENGTH;
+  return `${href.slice(0, end)}…`;
 }
 
 /**

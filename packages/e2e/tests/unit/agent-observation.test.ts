@@ -265,6 +265,84 @@ describe('disambiguating attributes', () => {
     expect(lines[4]).toBe(' #n5 textbox "Email"');
   });
 
+  it('renders a link target on the screen origin as its whole path, and cuts only past the bound with a trailing ellipsis', () => {
+    const project = 'http://127.0.0.1:3100/dashboard/e2e-dc3cf837/projects/404b2532-9fab-44dc-b3d0-f0a1b2c3d4e5';
+    const long = `https://cdn.example.test/${'a'.repeat(300)}`;
+    const tree = node('n1', {
+      children: [
+        node('n2', { role: 'link', name: 'Project', attributes: { href: project } }),
+        node('n3', { role: 'link', name: 'Docs', attributes: { href: 'https://docs.example.test/guides/setup' } }),
+        node('n4', { role: 'link', name: 'Search', attributes: { href: 'http://127.0.0.1:3100/search?…#…' } }),
+        node('n5', { role: 'link', name: 'Asset', attributes: { href: long } }),
+        node('n6', { role: 'link', name: 'Lookalike', attributes: { href: 'http://127.0.0.1:31000/x' } }),
+      ],
+    });
+    const lines = prepareObservation(observation(tree), {
+      redact: NO_REDACT,
+      redactCut: NO_REDACT,
+      maxBytes: 4_096,
+      appOrigin: 'http://127.0.0.1:3100',
+    }).text.split('\n');
+
+    expect(lines[1]).toBe(' #n2 link "Project" href="/dashboard/e2e-dc3cf837/projects/404b2532-9fab-44dc-b3d0-f0a1b2c3d4e5"');
+    expect(lines[2]).toBe(' #n3 link "Docs" href="https://docs.example.test/guides/setup"');
+    expect(lines[3]).toBe(' #n4 link "Search" href="/search?…#…"');
+    expect(lines[4]).toBe(` #n5 link "Asset" href="${long.slice(0, 256)}…"`);
+    expect(lines[5]).toBe(' #n6 link "Lookalike" href="http://127.0.0.1:31000/x"');
+  });
+
+  it('keeps whole URLs on a page off the app origin, since navigation resolves a path against the app', () => {
+    const tree = node('n1', {
+      children: [
+        node('n2', { role: 'link', name: 'Authorize', attributes: { href: 'https://github.com/login/oauth/authorize?…' } }),
+        node('n3', { role: 'link', name: 'Back to app', attributes: { href: 'https://app.test/settings' } }),
+      ],
+    });
+    const lines = prepareObservation({ ...observation(tree), location: 'https://github.com/login' }, {
+      redact: NO_REDACT,
+      redactCut: NO_REDACT,
+      maxBytes: 4_096,
+      appOrigin: 'https://app.test',
+    }).text.split('\n');
+    expect(lines[1]).toBe(' #n2 link "Authorize" href="https://github.com/login/oauth/authorize?…"');
+    expect(lines[2]).toBe(' #n3 link "Back to app" href="/settings"');
+    const unconfigured = prepareObservation({ ...observation(tree), location: 'https://app.test/' }, { redact: NO_REDACT, redactCut: NO_REDACT, maxBytes: 4_096 });
+    expect(unconfigured.text).toContain('href="https://app.test/settings"');
+  });
+
+  it('never splits a surrogate pair at the cut, and bounds the target an executor tree carries the same way', () => {
+    const href = `https://cdn.example.test/${'a'.repeat(230)}😀tail`;
+    expect(href.charCodeAt(255)).toBeGreaterThanOrEqual(0xd800);
+    const tree = node('n1', { role: 'link', name: 'Emoji', attributes: { href } });
+    const text = prepareObservation(observation(tree), { redact: NO_REDACT, redactCut: NO_REDACT, maxBytes: 4_096 }).text;
+    expect(text).toBe(`#n1 link "Emoji" href="${href.slice(0, 255)}…"`);
+    expect(projectTree(tree, NO_REDACT).attributes).toEqual({ href: `${href.slice(0, 255)}…` });
+  });
+
+  it('gives an executor tree an app link absolute, cut no shorter than the line cuts its path', () => {
+    const path = `/${'p'.repeat(240)}`;
+    const long = `/${'q'.repeat(300)}`;
+    const tree = node('n1', {
+      children: [
+        node('n2', { role: 'link', name: 'Fits', attributes: { href: `https://app.test${path}` } }),
+        node('n3', { role: 'link', name: 'Long', attributes: { href: `https://app.test${long}` } }),
+      ],
+    });
+    const hrefs = projectTree(tree, NO_REDACT, 'https://app.test').children?.map((child) => child.attributes?.['href']);
+    expect(hrefs).toEqual([`https://app.test${path}`, `https://app.test${long.slice(0, 256)}…`]);
+  });
+
+  it('redacts a secret in a link target before cutting it, so no part of it survives the cut', () => {
+    const ledger = new SecretLedger([['token', 'tok-0123456789']]);
+    const path = `/${'p'.repeat(250)}/tok-0123456789`;
+    const text = prepareObservation(
+      observation(node('n1', { role: 'link', name: 'Magic', attributes: { href: `https://app.test${path}` } })),
+      { redact: ledger.redact, redactCut: ledger.redactCut, maxBytes: 4_096, appOrigin: 'https://app.test' },
+    ).text;
+    expect(text).toBe(`#n1 link "Magic" href="${ledger.redact(path).slice(0, 256)}…"`);
+    expect(text).not.toContain('tok-');
+  });
+
   it('renders the selected text of a focused field verbatim after its value, a lone space included, never for a secure one', () => {
     const tree = node('n1', {
       children: [

@@ -175,7 +175,7 @@ export class ObservationFeed {
       ...metadata,
       text: observation.text,
       truncated: observation.truncated,
-      ...(options.tree === true ? { tree: projectTree(observation.tree, this.runtime.redact) } : {}),
+      ...(options.tree === true ? { tree: projectTree(observation.tree, this.runtime.redact, this.runtime.app.base?.origin) } : {}),
       ...pixels,
     };
   }
@@ -387,6 +387,7 @@ export class ObservationFeed {
       redactCut: this.runtime.redactCut,
       maxBytes: this.byteBudget(pixels || raw.kind === 'pixels'),
       pixelsAllowed: !this.runtime.taint.value,
+      appOrigin: this.runtime.app.base?.origin,
     });
     return prepared;
   }
