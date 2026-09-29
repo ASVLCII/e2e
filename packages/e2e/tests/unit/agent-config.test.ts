@@ -2,7 +2,6 @@ import { APICallError, createGateway } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import { resolveConfig, type CliOverrides } from '../../src/config/resolve.ts';
 import { z } from 'zod';
-import { createAgent } from '../../src/agent/default-agent.ts';
 import { defineTool } from '../../src/agent/tool.ts';
 import { createToolLoopExecutor } from '../../src/agent/tool-loop.ts';
 import type { SdkLanguageModel } from '../../src/agent/ai-sdk.ts';
@@ -139,25 +138,6 @@ describe('the agents entry shape', () => {
   it('rejects a bare StepExecutor, pointing at { executor }', () => {
     expect(() => resolve({ agents: { default: brain() } } as never)).toThrow(
       'agents.default is a StepExecutor ("custom-brain"); an agents entry is an options object now, so pass it as agents.default: { executor, model, ... }',
-    );
-  });
-
-  it('rejects what the removed createAgent() built, as the entry or as its executor, pointing at the plain object', () => {
-    const legacy = { ...brain(), [Symbol.for('e2e.default-agent.v1')]: true };
-    expect(() => resolve({ agents: { ux: legacy } } as never)).toThrow(
-      /^agents\.ux was built by createAgent\(\), which was removed: write its options as the entry itself, agents\.ux: \{ model, judge, system, context, tools/,
-    );
-    expect(() => resolve({ agents: { default: { executor: legacy } } } as never)).toThrow(
-      /^agents\.default\.executor was built by createAgent\(\), which was removed: the built-in agent needs no executor/,
-    );
-  });
-
-  it('keeps createAgent as a stub that fails with the new shape', () => {
-    expect(() => createAgent({ model: fakeModel('openai', 'gpt-5.4-mini') })).toThrow(
-      expect.objectContaining({
-        code: 'INVALID_CONFIG',
-        message: expect.stringMatching(/^createAgent\(\) was removed: write its options as the agents entry itself, agents: \{ default: \{ model/),
-      }),
     );
   });
 

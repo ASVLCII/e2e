@@ -44,7 +44,7 @@ import {
   type ValueExpectation,
 } from '../../src/index.ts';
 import type { Engine, EngineAttemptContext, EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
-import { createAgent, createToolLoopExecutor, defineTool } from '../../src/agent/public.ts';
+import { createToolLoopExecutor, defineTool } from '../../src/agent/public.ts';
 import type { Report } from '../../src/index.ts';
 import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/provider';
 import { chatgpt } from '../../src/oauth/chatgpt.ts';
@@ -444,8 +444,6 @@ declare const brain: StepExecutor;
 ({ targets, agents: { default: { executor: brain, tools: { seedCart } } } }) satisfies E2EConfig;
 // @ts-expect-error a bare executor is not an agents entry: pass it as { executor }
 ({ targets, agents: { default: brain } }) satisfies E2EConfig;
-// createAgent is a stub that throws, kept so an old import fails with a message instead of an ESM SyntaxError.
-createAgent satisfies (options?: unknown) => never;
 // @ts-expect-error maxTurns left createToolLoopExecutor: the agent's maxModelCalls bounds its turns
 createToolLoopExecutor({ name: 'brain', tools: () => ({}), buildPrompt: () => 'go', maxTurns: 3 });
 // @ts-expect-error limits left the config: maxInputTokens is per agent, the rest are fixed by the runner

@@ -9,7 +9,6 @@
 
 import type { Tool, ToolExecutionOptions, ToolSet } from 'ai';
 
-import { ConfigurationError } from '../internal/errors.ts';
 import { BUILT_IN_AGENT } from './agent-brand.ts';
 import { AgentError } from './error.ts';
 import type { ReplayedPrefix, StepExecutor, StepExecutorContext } from './executor.ts';
@@ -109,21 +108,6 @@ export function createBuiltInAgent(options: BuiltInAgentOptions = {}): StepExecu
       ];
     },
   });
-}
-
-/**
- * Removed: an agents entry is one plain object now. Kept as an export so an
- * `import { createAgent }` fails with this message instead of an ESM
- * SyntaxError.
- *
- * @deprecated Write the options as the agents entry itself:
- * `agents: { default: { model, system, tools } }`.
- */
-export function createAgent(_options?: unknown): never {
-  throw new ConfigurationError(
-    'INVALID_CONFIG',
-    'createAgent() was removed: write its options as the agents entry itself, agents: { default: { model, judge, system, context, tools, providerOptions } }; a custom brain goes under { executor }',
-  );
 }
 
 /**

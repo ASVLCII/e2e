@@ -1,6 +1,5 @@
 /** Agent, model, and resource-limit resolution. */
 
-import { isLegacyBuiltInAgent } from '../agent/agent-brand.ts';
 import { isStepExecutor, type StepExecutor } from '../agent/executor.ts';
 import { GRAMMAR_TOOL_NAMES } from '../agent/action-names.ts';
 import { isDefinedTool } from '../agent/tool.ts';
@@ -221,18 +220,11 @@ export function resolveAgentConfig(
 
 /**
  * The entry as a plain options object, or a diagnostic naming the shape it
- * should have: a bare executor goes under `executor`, a value the removed
- * `createAgent()` built becomes the options it was given, and a removed key
+ * should have: a bare executor goes under `executor`, and a removed key
  * names its replacement.
  */
 function checkAgentShape(value: unknown, label: string): AgentConfig | undefined {
   if (value === undefined) return undefined;
-  if (isLegacyBuiltInAgent(value)) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `${label} was built by createAgent(), which was removed: write its options as the entry itself, ${label}: ${AGENT_SHAPE}`,
-    );
-  }
   if (isStepExecutor(value)) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
@@ -257,14 +249,8 @@ function checkAgentShape(value: unknown, label: string): AgentConfig | undefined
   return value as AgentConfig;
 }
 
-/** A custom brain: any `StepExecutor`, but not a value the removed `createAgent()` built. */
+/** A custom brain: any `StepExecutor`. */
 function checkExecutor(value: unknown, label: string): StepExecutor {
-  if (isLegacyBuiltInAgent(value)) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `${label} was built by createAgent(), which was removed: the built-in agent needs no executor, move its options onto the entry itself: ${AGENT_SHAPE}`,
-    );
-  }
   if (!isStepExecutor(value)) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
