@@ -65,14 +65,13 @@ suites that consume the built packages the way a user would.
   `e2e/engine` only: the semantics every engine must reproduce
   (error taxonomy, text and URL matching, assertion polling, JSON-value rules)
   are exported there, and there is no `e2e/internal` subpath.
-- `packages/integrations` - the published `@e2e-dev/integrations` package:
-  official integrations with hosted services, one subpath each
-  (`@e2e-dev/integrations/kernel`) and no root entry. A subpath is the only
-  place its vendor SDK is imported, and every SDK and engine is an optional
-  peer, so a project installs the SDK of the service it uses and nothing
-  else. An integration implements an engine's provider seam
-  (`BrowserProvider`, `DeviceProvider`) and imports that engine's types only;
-  the engines never know it exists.
+- `packages/kernel` - the published `@e2e-dev/kernel` package: Kernel hosted
+  browsers for the web engine. An official integration with a hosted service
+  is one package per service, named after it (`@e2e-dev/<service>`), with the
+  vendor SDK and the engine it plugs into as peers. It implements that
+  engine's provider seam (`BrowserProvider` for web, `DeviceProvider` for
+  mobile) and imports the engine's types only; the engines never know it
+  exists.
 - `apps/testbed` (`@e2e-dev/testbed`, private) — dogfood project that
   consumes the **built** packages like a real user would: the playground app
   where every runner feature (sessions, routes, downloads, frames, uploads,
@@ -486,10 +485,12 @@ trees, on both platforms, without a device.
   needs `node scripts/restore-peer-ranges.ts` after it, or `pnpm check` fails
   on the pin.
 - The runner publishes as the unscoped `e2e` (entry points `e2e`, `e2e/agent`,
-  `e2e/engine`, `e2e/oauth/chatgpt`, `e2e/oauth/copilot`, `e2e/oauth/grok`; the bin is `e2e` too); engines and reporters publish public
+  `e2e/engine`, `e2e/oauth/chatgpt`, `e2e/oauth/copilot`, `e2e/oauth/grok`; the bin is `e2e` too); engines, reporters, and integrations publish public
   under the `@e2e-dev` scope. The `@e2edev` scope (moved to `@e2e-dev` on
-  2026-09-28), `@e2edev/e2e`, and `@e2edev/oauth` (folded into `e2e/oauth` on
-  2026-09-21) are the retired names: deprecated on npm, never referenced here. Provenance stays off until the repository is
+  2026-09-28), `@e2edev/e2e`, `@e2edev/oauth` (folded into `e2e/oauth` on
+  2026-09-21), and `@e2e-dev/integrations` (moved to `@e2e-dev/kernel` on
+  2026-09-29, deprecated by hand after the first `@e2e-dev/kernel` publish)
+  are the retired names: deprecated on npm, never referenced here. Provenance stays off until the repository is
   public, and the release job authenticates with the `NPM_TOKEN` secret.
   Document the CLI as `npx e2e`; npx runs the locally installed bin first, and
   the flag `--no-install` adds nothing once the package is a dependency.
