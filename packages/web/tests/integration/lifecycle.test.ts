@@ -1048,12 +1048,12 @@ describe('web engine lifecycle', () => {
         await engine.session!.open!(`${app.url}/`, operation('v3'));
         const viewer = surfaceOf(engine)!.page();
         const viewport = viewer.viewportSize()!;
-        const segments = [];
+        const segments: VideoFile[] = [];
         for (const url of [`${app.url}/form`, `${app.url}/`]) {
           await engine.artifacts!.startVideo!(operation('v3'));
           await engine.session!.open!(url, operation('v3'));
           await viewer.screenshot();
-          segments.push(...(await engine.artifacts!.stopVideo!(operation('v3'))));
+          segments.push(...videoFiles(await engine.artifacts!.stopVideo!(operation('v3'))));
         }
         expect(segments.map((segment) => segment.path)).toEqual(['video/video.webm', 'video/video-part2.webm']);
         for (const segment of segments) {
