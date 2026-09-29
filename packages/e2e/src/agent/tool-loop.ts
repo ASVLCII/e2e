@@ -96,6 +96,14 @@ export interface ToolLoopHelpers {
   guard<Value>(body: () => Promise<Value>, label?: string): Promise<Value | string>;
   /** True once a verdict or hard stop landed; late tool calls should no-op. */
   concluding(): boolean;
+  /**
+   * Whether the turn after this one still offers the whole vocabulary rather
+   * than the conclusion tool alone, as far as the turn budget, a loop guard
+   * already tripped, and the clock tell: what a tool that asks the model to
+   * call it again reads first. A guard the next turn's transcript trips
+   * cannot be foreseen.
+   */
+  nextTurnWorks(): boolean;
   /** Records a runtime hard stop (budget/timeout/cancel) that ends the loop. */
   reportHardStop(error: AgentError): void;
 }
@@ -408,6 +416,8 @@ class LoopRun {
   private helpers(): ToolLoopHelpers {
     return {
       concluding: () => this.conclusion.concluded() || this.hardStop !== undefined,
+      // Tools run inside the turn `turnsUsed` numbers (zero-based); it is recorded after them.
+      nextTurnWorks: () => !this.forcesConclusion(this.turnsUsed + 1),
       reportHardStop: (error) => {
         this.hardStop ??= error;
       },
@@ -525,7 +535,7 @@ class LoopRun {
       );
     }
 
-    const forced = turnsLeft <= FORCED_CONCLUSION_TURNS || this.guardStop !== undefined || lowClock;
+    const forced = this.forcesConclusion(stepNumber);
     // The cache breakpoint rides on the newest message, whatever the turn
     // added; the history the SDK carries forward keeps it there until the
     // next turn moves it again.
@@ -543,6 +553,12 @@ class LoopRun {
           }
         : { toolChoice: this.toolChoice }),
     };
+  }
+
+  /** Whether the turn `stepNumber` numbers (zero-based) offers the conclusion tool alone. */
+  private forcesConclusion(stepNumber: number): boolean {
+    const lowClock = stepNumber > 0 && this.context.budgets.remainingMs() < this.clockWindDownMs;
+    return this.maxTurns - stepNumber <= FORCED_CONCLUSION_TURNS || this.guardStop !== undefined || lowClock;
   }
 
   private instructions(): string {

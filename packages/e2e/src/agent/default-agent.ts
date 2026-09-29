@@ -113,12 +113,12 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
 
 /**
  * Tools a host adds beside the project's, built per step with the step's
- * context and the screen its model holds. Unlike a project tool, a host tool
+ * context, the screen its model holds, and the loop's view of its own turns. Unlike a project tool, a host tool
  * owns its accounting (`budgets.runTool`) and its result goes to the model
  * unbounded, so a screen it presents arrives whole. Internal: `e2e explore`
  * adds its finding tool this way.
  */
-export type HostTools = (context: StepExecutorContext, screen: ScreenPresenter) => ToolSet;
+export type HostTools = (context: StepExecutorContext, screen: ScreenPresenter, loop: ToolLoopHelpers) => ToolSet;
 
 /** `createAgent` with host tools; a host tool of a project tool's name replaces it. */
 export function createHostedAgent(options: CreateAgentOptions, hostTools: HostTools): DefaultAgent {
@@ -142,7 +142,7 @@ function buildAgent(options: CreateAgentOptions, hostTools: HostTools | undefine
     prepareMessages: (messages) => compactScreenshotHistory(compactScreenHistory(messages)),
     tools: (context, helpers) => ({
       ...guardedTools(helpers, projectTools(context, userTools)),
-      ...(hostTools === undefined ? {} : guardedTools(helpers, hostTools(context, presenterFor(context)))),
+      ...(hostTools === undefined ? {} : guardedTools(helpers, hostTools(context, presenterFor(context), helpers))),
       ...createGrammarTools(context, { guard: helpers.guard, screen: presenterFor(context) }),
     }),
     buildPrompt: async (context) => {

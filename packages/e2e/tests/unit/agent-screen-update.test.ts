@@ -76,6 +76,8 @@ describe('ScreenPresenter', () => {
     const focused = HOME.map((line) => (line.includes('#n6') ? `${line} [focused]` : line));
     expect(presenter.differs(held, screen('b2', focused))).toBe(false);
     expect(presenter.differs(held, screen('b3', [...HOME, ' #n7 button "Late arrival"']))).toBe(true);
+    // A route change that kept every node is still another screen.
+    expect(presenter.differs(held, screen('b3', HOME, { path: '/next' }))).toBe(true);
     expect(presenter.differs(held, screen('b4', ['[semantic capture unavailable]'], { treeUnavailable: true }))).toBe(true);
     // Comparing presents nothing: the model still holds b1 until an update goes out.
     expect(presenter.held()!.revision).toBe('b1');

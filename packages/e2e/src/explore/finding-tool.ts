@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { HostTools } from '../agent/default-agent.ts';
 import type { ExecutorObservation, StepExecutorContext } from '../agent/executor.ts';
 import type { ScreenPresenter } from '../agent/screen-update.ts';
+import type { ToolLoopHelpers } from '../agent/tool-loop.ts';
 import { sleep } from '../internal/time.ts';
 import type { ExploreState } from './state.ts';
 
@@ -72,17 +73,18 @@ const DESCRIPTION =
  * recorded, and the model gets the new screen to report on again or drop. A
  * report on a screen already looked at again (the confirmation, or a second
  * finding on the same screen) records at once. The look again never costs a
- * finding: a step close to its deadline, a wait cut short, or an action the
- * model made in the same turn records the finding on its evidence as is.
+ * finding: a step close to its deadline or its last working turn, a wait
+ * cut short, or an action the model made in the same turn records the
+ * finding on its evidence as is.
  */
 export function createFindingTools(state: ExploreState): HostTools {
   const recorder: Recorder = { state, reported: 0, rechecked: undefined };
-  return (context, screen): ToolSet => ({
+  return (context, screen, loop): ToolSet => ({
     [FINDING_TOOL_NAME]: {
       description: DESCRIPTION,
       inputSchema: FINDING_SCHEMA,
       execute: (input: FindingReport) =>
-        context.budgets.runTool({ name: FINDING_TOOL_NAME, mutates: false }, () => report(recorder, context, screen, input)),
+        context.budgets.runTool({ name: FINDING_TOOL_NAME, mutates: false }, () => report(recorder, { context, screen, loop }, input)),
     } as Tool,
   });
 }
@@ -96,20 +98,36 @@ interface Recorder {
   rechecked: string | undefined;
 }
 
+/** What one report runs against: the step, the screen its model holds, and the loop it runs in. */
+interface Step {
+  readonly context: StepExecutorContext;
+  readonly screen: ScreenPresenter;
+  readonly loop: Pick<ToolLoopHelpers, 'nextTurnWorks'>;
+}
+
+/**
+ * Whether a held-back report could still be confirmed: the step has time
+ * for the wait and the recording, and the next turn still offers this tool.
+ */
+function canConfirm({ context, loop }: Step): boolean {
+  return context.budgets.remainingMs() >= RECHECK_DELAY_MS + RECHECK_RESERVE_MS && loop.nextTurnWorks();
+}
+
 /** One report: recorded, or held back with the screen it became. */
-async function report(recorder: Recorder, context: StepExecutorContext, screen: ScreenPresenter, input: FindingReport): Promise<string> {
+async function report(recorder: Recorder, step: Step, input: FindingReport): Promise<string> {
+  const { context, screen } = step;
   // Read before any await: two findings in one turn are both based on the
   // screen the model held when it made them, and an action the model made
   // beside the report is told apart from the app moving on its own.
   const basis = screen.held();
   const actions = context.budgets.actionsUsed();
   const evidence = await context.observe({ pixels: true }).catch(() => undefined);
-  if (basis !== undefined && basis.revision !== recorder.rechecked && context.budgets.remainingMs() >= RECHECK_DELAY_MS + RECHECK_RESERVE_MS) {
+  if (basis !== undefined && basis.revision !== recorder.rechecked && canConfirm(step)) {
     const waited = await sleep(RECHECK_DELAY_MS, context.signal).then(() => true, () => false);
     const again = waited ? await context.observe().catch(() => undefined) : undefined;
     // The model's own action moved the screen, not the app: the report stands on its evidence.
     const acted = context.budgets.actionsUsed() !== actions;
-    if (again !== undefined && !acted) {
+    if (again !== undefined && !acted && canConfirm(step)) {
       if (screen.differs(basis, again)) {
         const update = screen.update(again);
         recorder.rechecked = again.revision;

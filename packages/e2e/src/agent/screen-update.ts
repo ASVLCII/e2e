@@ -35,6 +35,8 @@ export const FULL_SCREEN_PATTERN = /Current screen \(revision /;
 /** The screen as the model last received it, indexed for comparison. */
 interface ShownScreen {
   readonly revision: string;
+  /** The location the screen was at, when the engine reports one. */
+  readonly path: string | undefined;
   /** Node lines in document order, without indentation or focus; the truncation marker is not a node. */
   readonly order: readonly string[];
   readonly byId: ReadonlyMap<string, string>;
@@ -129,12 +131,13 @@ export class ScreenPresenter {
   }
 
   /**
-   * Whether a fresh observation lists anything a held screen did not, or no
-   * longer lists something it did; focus alone is no change. A screen with
-   * no tree cannot be shown to match, so it differs.
+   * Whether a fresh observation is at another location than a held screen,
+   * or lists anything it did not, or no longer lists something it did;
+   * focus alone is no change. A screen with no tree cannot be shown to
+   * match, so it differs.
    */
   differs(held: ShownScreen, observation: ExecutorObservation): boolean {
-    if (observation.treeUnavailable === true) return true;
+    if (observation.treeUnavailable === true || observation.path !== held.path) return true;
     return diffScreens(held, indexScreen(observation)).length > 0;
   }
 
@@ -335,6 +338,7 @@ function indexScreen(observation: ExecutorObservation): ShownScreen {
   }
   return {
     revision: observation.revision,
+    path: observation.path,
     order,
     byId,
     nodes: byId.size,

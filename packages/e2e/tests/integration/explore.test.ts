@@ -212,6 +212,29 @@ describe('e2e explore', () => {
     assertValidReport(outcome.report);
   }, 120_000);
 
+  it('records a report on a loading screen at once when the next turn could only conclude', async () => {
+    const results: string[] = [];
+    const model = installExploreModel({
+      plan: (call) =>
+        call.instruction.includes('(none yet')
+          ? { decision: 'step', title: 'Saved test', instruction: 'Open Checkout smoke' }
+          : { decision: 'finish', summary: 'The saved test opens.' },
+      loop: async (call) => {
+        results.push(call.lastToolResult);
+        if (call.turn === 1) return [{ toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Checkout smoke"/) } }];
+        if (call.turn === 2) {
+          await fetch(`${app.url}/api/saved-test/release`);
+          return [{ toolName: FINDING_TOOL_NAME, input: EMPTY_FINDING }];
+        }
+        return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Opened the test' } }];
+      },
+    });
+    // Four turns: the two after the report offer complete_step alone, so a held-back report could never be confirmed.
+    const outcome = await runExplore(project, app, model, { path: '/saved-tests', projectAgent: { model, maxModelCalls: 4 } as never });
+    expect(results[2]).toMatch(/^Finding 1 recorded/);
+    expect(outcome.explore.findings.map((finding) => finding.title)).toEqual([EMPTY_FINDING.title]);
+  }, 120_000);
+
   it('records a report batched with an action on its evidence, since the model moved the screen, not the app', async () => {
     const model = installExploreModel({
       plan: (call) =>

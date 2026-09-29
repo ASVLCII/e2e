@@ -29,7 +29,7 @@ npx e2e explore --session admin 'Explore the admin settings'
    rendered, a route that finished compiling), nothing is recorded and the
    agent gets the whole new screen to report on again or drop. Reports on a
    checked screen record at once; so does a report made beside an action,
-   or with too little step time left for the wait.
+   or with too little step time or no working turn left to confirm it.
 4. Repeats until the planner finishes, the step limit, the clock, or three
    failed or blocked steps in a row that reported nothing; then asks for a closing assessment.
 

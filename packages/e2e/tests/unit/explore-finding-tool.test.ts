@@ -25,7 +25,7 @@ function screen(revision: string, lines: readonly string[]): ExecutorObservation
  * A step whose model holds the loading screen while the app has already
  * rendered the test: every observe after the report reads the loaded screen.
  */
-function reportOnLoading(options: { remainingMs: number; signal?: AbortSignal }) {
+function reportOnLoading(options: { remainingMs: number; signal?: AbortSignal; nextTurnWorks?: boolean }) {
   const state = new ExploreState('Find bugs', { maxSteps: 1, timeoutMs: 180_000 });
   const presenter = new ScreenPresenter();
   presenter.initial(screen('b1', LOADING));
@@ -42,7 +42,8 @@ function reportOnLoading(options: { remainingMs: number; signal?: AbortSignal })
       return screen(`b${String(revision)}`, LOADED);
     },
   };
-  const tool = createFindingTools(state)(context, presenter)[FINDING_TOOL_NAME]!;
+  const loop = { guard: async <Value>(body: () => Promise<Value>) => body(), concluding: () => false, reportHardStop: () => undefined, nextTurnWorks: () => options.nextTurnWorks ?? true };
+  const tool = createFindingTools(state)(context, presenter, loop)[FINDING_TOOL_NAME]!;
   const run = async (): Promise<unknown> => (tool.execute as (input: unknown, options: object) => Promise<unknown>)(FINDING, { toolCallId: 'call', messages: [] });
   return { state, observed, run };
 }
@@ -55,6 +56,15 @@ describe('report_finding', () => {
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(observed).toEqual(['b2']);
     expect(state.findings.map((finding) => finding.observationRevision)).toEqual(['b2']);
+  });
+
+  it('records at once when the next turn offers only complete_step, since nothing could confirm a held-back report', async () => {
+    const { state, observed, run } = reportOnLoading({ remainingMs: 60_000, nextTurnWorks: false });
+    const started = Date.now();
+    expect(await run()).toMatch(/^Finding 1 recorded/);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(observed).toEqual(['b2']);
+    expect(state.findings).toHaveLength(1);
   });
 
   it('records the finding when the wait is cut short, rather than losing it to the hard stop', async () => {
