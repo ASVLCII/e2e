@@ -27,6 +27,7 @@ function fakeBrowser(contextId: string) {
   const page = {
     isClosed: () => false,
     close: async () => undefined,
+    viewportSize: () => ({ width: 1280, height: 720 }),
     screencast: { start: vi.fn(async ({ path: file }: { path: string }) => { writeFileSync(file, 'webm'); }), stop: async () => undefined },
   } as unknown as Page;
   const context = {
