@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { projectSnapshot, screenTitle, viewportOf, type RawNode } from '../../src/nodes.ts';
+import { coveringChrome, projectSnapshot, screenTitle, viewportOf, type RawNode } from '../../src/nodes.ts';
 import { SETTINGS_NODES } from '../helpers/fake-client.ts';
 
 function project(nodes: readonly RawNode[]) {
@@ -524,5 +526,57 @@ describe('snapshot projection', () => {
     ]);
     expect(screenTitle(innerText)).toBe('About');
     expect(screenTitle(project([{ ref: '@e1', type: 'button', label: 'Go' }]))).toBeUndefined();
+  });
+});
+
+describe('chrome over a scroll container', () => {
+  // The iOS Sticky Chrome capture, with the accept button scrolled up until it
+  // peeks out above the footer and the footer's warning shown, as in a run
+  // whose tap on Accept landed on the footer.
+  const captured = (
+    JSON.parse(readFileSync(path.join(import.meta.dirname, '../fixtures/snapshots/ios/sticky-chrome-target.json'), 'utf8')) as {
+      nodes: RawNode[];
+    }
+  ).nodes;
+  const withAccept = (y: number): RawNode[] => [
+    ...captured,
+    { index: 900, parentIndex: 9, depth: 9, type: 'Other', label: 'Accept terms', identifier: 'accept-terms', rect: { x: 16, y, width: 370, height: 44 } },
+    { index: 901, parentIndex: 7, depth: 6, type: 'StaticText', label: 'Accept the terms at the bottom first', rect: { x: 16, y: 776, width: 370, height: 16 } },
+  ];
+  const find = (nodes: readonly RawNode[], name: string) => {
+    const snapshot = project(nodes);
+    const entry = snapshot.index.find((candidate) => candidate.node.name === name);
+    if (entry === undefined) throw new Error(`${name} not projected`);
+    return coveringChrome(entry, snapshot.index);
+  };
+
+  it('finds the footer over a control peeking out above it, its band reaching down to the list bottom', () => {
+    const covering = find(withAccept(750), 'Accept terms');
+    expect(covering?.container.kind).toBe('scroll-view');
+    expect(covering?.band).toEqual({ x: 16, y: 760, width: 370, height: 114 });
+  });
+
+  it('leaves a control whose centre is clear, even when the footer overlaps its edge', () => {
+    expect(find(withAccept(560), 'Accept terms')).toBeUndefined();
+    expect(find(withAccept(720), 'Accept terms')).toBeUndefined();
+  });
+
+  it('leaves a floating button beside a row, a header, a horizontal list, and a node in no list alone', () => {
+    const screen = (list: string): RawNode[] => [
+      { index: 0, depth: 0, type: 'Application', label: 'App', rect: { x: 0, y: 0, width: 400, height: 800 } },
+      { index: 1, parentIndex: 0, depth: 1, type: list, rect: { x: 0, y: 0, width: 400, height: 800 } },
+      { index: 2, parentIndex: 1, depth: 2, type: 'Button', label: 'Row', rect: { x: 0, y: 720, width: 400, height: 60 } },
+      { index: 3, parentIndex: 1, depth: 2, type: 'Button', label: 'Top row', rect: { x: 0, y: 20, width: 400, height: 44 } },
+      { index: 4, parentIndex: 0, depth: 1, type: 'Other', label: 'Wrapper', rect: { x: 0, y: 0, width: 400, height: 800 } },
+      { index: 5, parentIndex: 0, depth: 1, type: 'StaticText', label: 'Header', rect: { x: 0, y: 0, width: 400, height: 60 } },
+      { index: 6, parentIndex: 0, depth: 1, type: 'Button', label: 'Compose', rect: { x: 330, y: 700, width: 56, height: 56 } },
+      { index: 7, parentIndex: 0, depth: 1, type: 'Button', label: 'Loose', rect: { x: 0, y: 300, width: 400, height: 20 } },
+    ];
+    expect(find(screen('ScrollView'), 'Row')).toBeUndefined();
+    expect(find(screen('ScrollView'), 'Top row')).toBeUndefined();
+    expect(find(screen('ScrollView'), 'Loose')).toBeUndefined();
+    const footer: RawNode = { index: 8, parentIndex: 0, depth: 1, type: 'Button', label: 'Footer', rect: { x: 0, y: 740, width: 400, height: 60 } };
+    expect(find([...screen('ScrollView'), footer], 'Row')?.band.y).toBe(724);
+    expect(find([...screen('android.widget.HorizontalScrollView'), footer], 'Row')).toBeUndefined();
   });
 });

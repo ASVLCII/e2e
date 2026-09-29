@@ -602,3 +602,75 @@ export function isWithin(entry: ProjectedNode, ancestor: ProjectedNode): boolean
   }
   return false;
 }
+
+/** Vertical scroll container kinds: a node inside one moves with the scroll, one drawn after it stays put. */
+const SCROLL_CONTAINER_KINDS: ReadonlySet<string> = new Set([
+  'scroll-view',
+  'recycler-view',
+  'list-view',
+  'abs-list-view',
+  'grid-view',
+  'collection-view',
+  'table',
+]);
+
+/**
+ * How far above chrome's first named node its band starts: a sticky footer's
+ * own padding sits above its content and takes a touch the same way.
+ */
+const CHROME_PADDING = 16;
+
+/** Chrome pinned to the bottom of a node's scroll container, covering the point a touch on the node lands on. */
+export interface CoveringChrome {
+  readonly container: ProjectedNode;
+  readonly containerRect: Rect;
+  /** Where the chrome takes a touch: its width, from above its first named node down to the container's bottom. */
+  readonly band: Rect;
+}
+
+/**
+ * The chrome over the centre of a node inside a vertical scroll container: a
+ * sticky footer the list scrolls under, which takes a touch aimed at the
+ * node. Chrome is a named node drawn after the container, so on top of it,
+ * sitting in its lower half; its band reaches down to the container's bottom,
+ * where a footer is pinned, and up by its padding. Layout wrappers are not
+ * chrome, so a candidate as large as half the container is skipped. Chrome at
+ * the top is left alone: scrolling a control out from under a header can pull
+ * a list at its top into a refresh.
+ */
+export function coveringChrome(target: ProjectedNode, index: readonly ProjectedNode[]): CoveringChrome | undefined {
+  const rect = target.node.rect;
+  const container = scrollContainerOf(target);
+  const containerRect = container?.node.rect;
+  if (rect === undefined || container === undefined || containerRect === undefined) return undefined;
+  const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  const containerBottom = containerRect.y + containerRect.height;
+  const containerArea = containerRect.width * containerRect.height;
+  for (const entry of index.slice(index.indexOf(container) + 1)) {
+    const over = entry.node.rect;
+    if (over === undefined || isWithin(entry, container) || !isNamed(entry.node)) continue;
+    if (over.width * over.height >= containerArea / 2 || over.y + over.height / 2 < containerRect.y + containerRect.height / 2) continue;
+    const top = over.y - CHROME_PADDING;
+    const band = { x: over.x, y: top, width: over.width, height: containerBottom - top };
+    if (band.height > 0 && containsPoint(band, centre)) return { container, containerRect, band };
+  }
+  return undefined;
+}
+
+/** The nearest vertical scroll container a node sits in. */
+function scrollContainerOf(entry: ProjectedNode): ProjectedNode | undefined {
+  for (let current = entry.parent; current !== undefined; current = current.parent) {
+    if (SCROLL_CONTAINER_KINDS.has(current.kind)) return current;
+  }
+  return undefined;
+}
+
+/** Whether a node shows something a user sees: a name, text, or test id, unlike a bare layout view. */
+function isNamed(node: SemanticNode): boolean {
+  return node.name !== undefined || node.text !== undefined || node.testId !== undefined;
+}
+
+/** Whether a point lies inside a rect. */
+function containsPoint(rect: Rect, point: { readonly x: number; readonly y: number }): boolean {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+}

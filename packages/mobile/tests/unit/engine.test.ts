@@ -1891,6 +1891,56 @@ describe('deterministic actions', () => {
     await tapsAtOnce(h, await observed(h, 'About'), { ref: '@e4' });
   });
 
+  it('lifts a control out from under a sticky footer before tapping it, once, and taps an uncovered one at once', async () => {
+    const h = harness({ transition: 0 });
+    await openAttempt(h);
+    let lifted = false;
+    // agent-device mints new refs for the scrolled snapshot, so the press proves the control was found again.
+    const sticky = () => ({
+      nodes: [
+        { ref: '@e1', index: 0, depth: 0, type: 'application', label: 'Sticky', rect: { x: 0, y: 0, width: 402, height: 874 } },
+        { ref: '@e2', index: 1, parentIndex: 0, depth: 1, type: 'scroll-view', rect: { x: 0, y: 116, width: 402, height: 758 } },
+        lifted
+          ? { ref: '@e13', index: 2, parentIndex: 1, depth: 2, type: 'other', label: 'Accept terms', identifier: 'accept-terms', rect: { x: 16, y: 714, width: 370, height: 44 } }
+          : { ref: '@e3', index: 2, parentIndex: 1, depth: 2, type: 'other', label: 'Accept terms', identifier: 'accept-terms', rect: { x: 16, y: 750, width: 370, height: 44 } },
+        { ref: lifted ? '@e14' : '@e4', index: 3, parentIndex: 0, depth: 1, type: 'other', label: 'Continue', identifier: 'continue-button', rect: { x: 16, y: 776, width: 370, height: 70 } },
+      ],
+    });
+    h.fake.respond('capture.snapshot', sticky);
+    h.fake.respond('interactions.pan', () => {
+      lifted = true;
+      return {};
+    });
+    await h.engine.perform!((await observed(h, 'Accept terms')).ref, { kind: 'tap' }, test());
+    expect(h.fake.methods().filter((method) => method === 'interactions.pan')).toHaveLength(1);
+    expect(h.fake.lastArgs('interactions.pan')).toEqual({ x: 201, y: 513, dx: 0, dy: -36, durationMs: 400 });
+    expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e13' });
+
+    await h.engine.perform!((await observed(h, 'Accept terms')).ref, { kind: 'tap' }, test());
+    expect(h.fake.methods().filter((method) => method === 'interactions.pan')).toHaveLength(1);
+  });
+
+  it('leaves one of several alike controls under a footer where it is, since a scroll could swap it for another', async () => {
+    const h = harness({ transition: 0 });
+    await openAttempt(h);
+    h.fake.respond('capture.snapshot', () => ({
+      nodes: [
+        { ref: '@e1', index: 0, depth: 0, type: 'application', label: 'Shop', rect: { x: 0, y: 0, width: 402, height: 874 } },
+        { ref: '@e2', index: 1, parentIndex: 0, depth: 1, type: 'scroll-view', rect: { x: 0, y: 116, width: 402, height: 758 } },
+        { ref: '@e3', index: 2, parentIndex: 1, depth: 2, type: 'button', label: 'Add', rect: { x: 16, y: 680, width: 370, height: 44 } },
+        { ref: '@e4', index: 3, parentIndex: 1, depth: 2, type: 'button', label: 'Add', rect: { x: 16, y: 760, width: 370, height: 44 } },
+        { ref: '@e5', index: 4, parentIndex: 0, depth: 1, type: 'other', label: 'Checkout', rect: { x: 16, y: 776, width: 370, height: 70 } },
+      ],
+    }));
+    const adds = await h.engine.locate!(
+      { kind: 'query', query: { kind: 'role', value: { kind: 'string', value: 'button', exact: true }, name: { kind: 'string', value: 'Add', exact: true } } },
+      test(),
+    );
+    await h.engine.perform!(adds[1]!.ref, { kind: 'tap' }, test());
+    expect(h.fake.methods().filter((method) => method === 'interactions.pan')).toHaveLength(0);
+    expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e4' });
+  });
+
   it('fills, goes back, and taps at a point without settling; the agent keeps the settle path', async () => {
     const h = harness();
     await openAttempt(h);

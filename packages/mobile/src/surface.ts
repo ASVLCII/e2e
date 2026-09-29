@@ -45,11 +45,13 @@ import { isNoSessionApp, isSnapshotPresentationFailure, runCommand, staleOr } fr
 import { pointerInteraction, DEFAULT_LONG_PRESS_MS } from './actions.ts';
 import { resolveExpression } from './locate.ts';
 import {
+  coveringChrome,
   isWithin,
   projectSnapshot,
   ROOT_ID,
   screenRoot,
   screenTitle,
+  type CoveringChrome,
   type ProjectedNode,
   type ProjectedSnapshot,
   type RawNode,
@@ -197,6 +199,43 @@ function centreOf(rect: Rect): { x: number; y: number } {
 function sameRect(a: Rect | undefined, b: Rect | undefined): boolean {
   if (a === undefined || b === undefined) return false;
   return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1 && Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1;
+}
+
+/**
+ * How many times a control under a sticky footer is lifted clear before it is
+ * acted on where it is; one lift clears it unless the list is at its end.
+ */
+const CHROME_CLEARING_LIFTS = 3;
+
+/** How far above the chrome a lifted control's centre lands, and how far from any edge a lift's drag stays. */
+const CHROME_CLEARANCE = 24;
+
+/** How long a lift's drag takes: slow enough that the list moves by the drag and does not fling on. */
+const CHROME_LIFT_MS = 400;
+
+/** Node actions that touch the control's centre, which chrome drawn over it would take instead. */
+const TOUCH_ACTIONS: ReadonlySet<LocatorAction['kind']> = new Set([
+  'tap',
+  'focus',
+  'doubleTap',
+  'longPress',
+  'fill',
+  'clear',
+  'check',
+  'uncheck',
+]);
+
+/**
+ * The drag that lifts a control clear of the chrome over it: up by as much as
+ * puts its centre above the chrome, at most a quarter of the list, starting
+ * above the chrome so the drag moves the list and not the footer.
+ */
+function liftClearOf(rect: Rect, covering: CoveringChrome): { x: number; y: number; dx: number; dy: number; durationMs: number } {
+  const { containerRect, band } = covering;
+  const distance = Math.min(containerRect.height / 4, rect.y + rect.height / 2 - band.y + CHROME_CLEARANCE);
+  const y = Math.min(band.y - CHROME_CLEARANCE, containerRect.y + containerRect.height / 2 + distance / 2);
+  const dy = Math.max(containerRect.y + CHROME_CLEARANCE, y - distance) - y;
+  return { x: containerRect.x + containerRect.width / 2, y, dx: 0, dy, durationMs: CHROME_LIFT_MS };
 }
 
 const MAX_LOCATED_REFS = 2048;
@@ -1025,6 +1064,42 @@ export class AgentDeviceSurface {
     return this.relocated(entry, operation);
   }
 
+  /**
+   * The control once it is out from under a sticky footer its list scrolls
+   * under, which takes a touch aimed at the control's centre. The list is
+   * dragged up just far enough, and the control found again once the drag
+   * settled. Only a control the snapshot lists once is lifted: finding one of
+   * several alike after a scroll would pick whichever moved into its old
+   * place. The check reads the snapshot the control was just resolved from,
+   * so an uncovered control costs nothing.
+   */
+  private async clearOfChrome(entry: NodeBinding, operation: OperationContext): Promise<NodeBinding> {
+    let current = entry;
+    for (let lift = 0; lift < CHROME_CLEARING_LIFTS; lift += 1) {
+      const index = this.latestIndex ?? [];
+      const found = this.refind(current, index);
+      const covering = found === undefined || !this.isUnique(found, index) ? undefined : coveringChrome(found, index);
+      if (found?.node.rect === undefined || covering === undefined) return current;
+      const pan = liftClearOf(found.node.rect, covering);
+      await this.command('pan', (client) => client.interactions.pan(pan), operation.signal);
+      await sleep(this.transitionMs, operation.signal);
+      current = await this.relocated(current, operation);
+    }
+    return current;
+  }
+
+  /** Whether a node is the only one in the snapshot that reads as it does, so a scroll cannot swap it for another. */
+  private isUnique(entry: ProjectedNode, index: readonly ProjectedNode[]): boolean {
+    const alike = index.filter(
+      (candidate) =>
+        candidate.node.role === entry.node.role &&
+        candidate.node.testId === entry.node.testId &&
+        candidate.node.name === entry.node.name &&
+        candidate.node.text === entry.node.text,
+    );
+    return alike.length === 1;
+  }
+
   /** The same control in a fresh snapshot; the binding as it was when the snapshot no longer lists it. */
   private async relocated(entry: NodeBinding, operation: OperationContext): Promise<NodeBinding> {
     const projected = this.project(await this.snapshotOrEmpty(operation, false));
@@ -1074,7 +1149,8 @@ export class AgentDeviceSurface {
     }
     const before = this.latestIndex;
     const run = async (): Promise<unknown> => {
-      const target = deterministic ? await this.settled(entry, operation) : entry;
+      const arrived = deterministic ? await this.settled(entry, operation) : entry;
+      const target = TOUCH_ACTIONS.has(action.kind) ? await this.clearOfChrome(arrived, operation) : arrived;
       switch (action.kind) {
         case 'tap':
           return client.interactions.press({ ...this.actionTarget(target, true), ...settle });
