@@ -114,9 +114,15 @@ const SCENARIOS: readonly Scenario[] = [
     // The card is a plain View the tree does not list, so the swipe goes
     // through the device tool pack, a gap in the recording: replay performs
     // the long press and hands the swipe and the double tap to the model.
+    // Android only, like controls.e2e.ts's double-tap test: an iOS runner
+    // cannot land two presses inside the scenario's 300 ms window. Two taps
+    // arrive 285 to 317 ms apart (each XCTest event synthesis takes about
+    // 300 ms, with or without its idle waits), and two touches in one
+    // synthesized record reach a Pressable as one press.
     name: 'Gestures',
     goal: 'long-press the first target, swipe the card left, then double-tap the last target',
     success: 'All gestures completed',
+    platforms: ['android'],
   },
   // "Scroll up" names the grammar verb the recording replays; a free-form
   // swipe from the device tool pack is a gap in the trace, and the model
