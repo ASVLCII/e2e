@@ -105,14 +105,16 @@ describe('secrets.get', () => {
 describe('holdSecretRegistry', () => {
   const withKey = registry([], [apiKey]);
   const withAdmin = registry([admin], [adminPassword]);
-  const resolves = (name: string): boolean => {
+  const throws = (name: string): boolean => {
     try {
       secrets.get(name);
-      return true;
-    } catch {
       return false;
+    } catch {
+      return true;
     }
   };
+  /** Whether an installed registry holds `name`: with none installed, `secrets.get()` defers instead of throwing, so an unknown name throws only under a registry. */
+  const resolves = (name: string): boolean => throws('never-configured') && !throws(name);
 
   it('installs the newest registry still held when a hold is released', () => {
     const releaseKey = holdSecretRegistry(withKey);
