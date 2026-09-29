@@ -359,11 +359,9 @@ trees, on both platforms, without a device.
   The web benchmark's entries are in. The mobile benchmark's iOS entries are
   recorded on a Mac; nobody has recorded on an Android emulator yet, so the
   Android side spends model calls until an emulator recording is committed.
-- No implicit default model. One canonical model per slot: the one
-  `createAgent({ model })` brought, else `agent.model`, serves `act`; the
-  judgment calls (`assert`, `waitFor`, `extract`) use `judge` when one is
-  configured the same way, else `model`. Two that differ within a slot are
-  `INVALID_CONFIG`. A judgment never sees the prior-step ledger or the acting
+- No implicit default model. The agent entry's `model` serves `act`; the
+  judgment calls (`assert`, `waitFor`, `extract`) use its `judge` when one is
+  configured, else `model`. A judgment never sees the prior-step ledger or the acting
   agent's summaries, only the instruction and the current screen. Without a
   model, the first
   `agent` acquisition in a run reports one run-level `MODEL_UNAVAILABLE` and
