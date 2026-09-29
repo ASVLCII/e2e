@@ -82,10 +82,11 @@ export function resolveOutput(
       );
     }
   }
-  if (out !== key(path.join(projectRoot, DEFAULT_OUTPUT))) {
-    const problem = ownershipProblem(output, cacheDir, fold);
-    if (problem !== undefined) refuse(problem);
-  }
+  // The default, however it was spelled (`.E2E` where case is ignored, a symlink to it), is e2e's by name.
+  const defaultOutput = path.join(projectRoot, DEFAULT_OUTPUT);
+  if (out === key(defaultOutput)) return defaultOutput;
+  const problem = ownershipProblem(realpathOfExisting(output), realpathOfExisting(cacheDir), fold);
+  if (problem !== undefined) refuse(problem);
   return output;
 }
 
@@ -95,7 +96,8 @@ export function resolveOutput(
  * session leaves (`claimOutput`), holds a report e2e wrote (an output from
  * before the marker, with a reporter's own files beside it), or holds
  * nothing but names e2e writes there and the cache directory. The default
- * `.e2e` is e2e's by name and never comes here.
+ * `.e2e` is e2e's by name and never comes here. Both paths come resolved
+ * through the filesystem, so a cache spelled in another case still matches.
  */
 function ownershipProblem(output: string, cacheDir: string, fold: boolean): string | undefined {
   let entries: string[];

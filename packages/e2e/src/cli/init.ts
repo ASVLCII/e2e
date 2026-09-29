@@ -58,7 +58,6 @@ const GITIGNORE_ENTRIES = [
   '.e2e/failures/',
   '.e2e/logs/',
   '.e2e/videos/',
-  '.e2e/mcp/',
 ];
 
 const RUN_SCRIPT = 'test:e2e';

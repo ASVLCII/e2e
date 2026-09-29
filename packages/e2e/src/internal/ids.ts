@@ -132,6 +132,12 @@ export function uuidv7(now: number = Date.now()): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** The millisecond timestamp a UUIDv7 carries, or undefined when `id` is not one. */
+export function uuidv7Time(id: string): number | undefined {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) return undefined;
+  return Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16);
+}
+
 /** RFC 3339 UTC timestamp with exactly millisecond precision. */
 export function timestamp(date: Date = new Date()): string {
   return date.toISOString();

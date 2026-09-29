@@ -1,7 +1,7 @@
 /**
  * `output` and `--output`: every result a run writes lands under one
  * directory, the artifact tree is cleared when a run with something to run
- * starts, never under a live `e2e mcp` session, `--last-failed` reads the
+ * starts, but not of a live `e2e mcp` session's files, `--last-failed` reads the
  * report there, and a store's `putLink` receives the recordings a hosted
  * service keeps.
  */
@@ -75,6 +75,7 @@ describe('output', () => {
         for (const file of ['report.json', 'junit.xml', 'summary.md']) expect(existsSync(path.join(output, file)), file).toBe(true);
         const screenshot = resultByTitle(outcome, 'fails on purpose').attempts[0]!.artifacts.find((artifact) => artifact.kind === 'screenshot')!;
         expect(existsSync(path.join(output, 'artifacts', screenshot.path!))).toBe(true);
+        expect(existsSync(path.join(output, '.e2e-output'))).toBe(true);
         expect(existsSync(path.join(project.dir, '.e2e', 'report.json'))).toBe(false);
         expect(existsSync(path.join(project.dir, '.e2e', 'artifacts'))).toBe(false);
       } finally {
@@ -156,7 +157,7 @@ describe('output', () => {
       try {
         await host.open({});
         const sessionDir = fake.attempts[0]!.artifactsDir;
-        expect(path.relative(path.join(project.dir, '.e2e', 'artifacts'), sessionDir).startsWith('..')).toBe(true);
+        expect(path.dirname(sessionDir)).toBe(path.join(project.dir, '.e2e', 'artifacts', 'fake', 'sessions'));
         const part = path.join(sessionDir, 'trace', 'trace-part1.zip');
         mkdirSync(path.dirname(part), { recursive: true });
         writeFileSync(part, 'a trace part the session wrote');

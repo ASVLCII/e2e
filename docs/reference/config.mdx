@@ -393,9 +393,9 @@ run, and on `e2e list` names the report `--last-failed` reads.
 | `report.json` | The canonical report; `--last-failed` reads the one here. Written by every run whose config loaded, one that selected nothing included |
 | `junit.xml`, `summary.md`, `failures/` | The `junit` and `markdown` reporters' files; `failures/` is emptied on every run |
 | `ai-trace.json` | `--ai-trace` |
-| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared when a run with something to run starts, so it holds the latest such run's evidence and nothing its report no longer names; a run that selects nothing (`NO_TESTS`) leaves it as it was |
+| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared when a run with something to run starts, so it holds the evidence of the latest run that ran tests. A run that selects nothing (`NO_TESTS`) leaves it as it was, though that run's `report.json` names none of it |
 | `sessions/` | The run's encrypted `test.setup` sessions, deleted when it ends |
-| `mcp/<target>/<attempt>/` | Each [`e2e mcp`](/reference/mcp) session's artifacts, such as its trace. Nothing clears it, so a run beside a live session never deletes what the session is writing |
+| `artifacts/<target>/sessions/<attempt>/` | Each [`e2e mcp`](/reference/mcp) session's artifacts, such as its trace. A run's clear keeps the ones minted within the longest a session can live (4 hours), so a run beside a live session never deletes what it is writing, and removes the rest |
 | `videos/<session>/` | [`e2e mcp`](/reference/mcp#recording) session recordings |
 | `.e2e-output` | The marker a run or a session leaves in an output other than the default `.e2e`, saying the directory is e2e's |
 
@@ -415,7 +415,7 @@ directory, `src` or `node_modules` say, fails the config load with
 
 - is the project root, or outside it;
 - is `cache.dir` or inside it, or would hold `cache.dir` under `artifacts/`,
-  `failures/`, `mcp/`, `sessions/`, or `videos/`;
+  `failures/`, `sessions/`, or `videos/`;
 - holds a directory a `tests` glob scans (`output: 'tests'` with the default
   `tests/**/*.e2e.ts`), or is inside one (`output: 'tests/results'`, or
   `output: 'results'` with `tests: '**/*.e2e.ts'`), where a file a run

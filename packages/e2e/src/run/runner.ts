@@ -1,6 +1,5 @@
 /** Run orchestration: config, collection, selection, execution, reporting. */
 
-import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import {
@@ -40,7 +39,7 @@ import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
 import { runUnits } from './scheduler.ts';
 import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
-import { claimOutput, outputLayout } from './output.ts';
+import { claimOutput, clearArtifacts, outputLayout } from './output.ts';
 import { lastFailedIds, lastRunOutcome, readLastRun } from './last-run.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setSecretRegistry } from '../secrets.ts';
@@ -634,7 +633,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // longer names. A run that selected nothing leaves the last one's alone.
     if (!interrupted.aborted && selection.pairs.some((pair) => pair.disposition === 'run')) {
       try {
-        await rm(outputLayout(config.output).artifacts, { recursive: true, force: true });
+        await clearArtifacts(outputLayout(config.output).artifacts);
       } catch (cause) {
         recordFailure(cause, 'collection');
         return;

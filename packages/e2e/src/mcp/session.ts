@@ -22,7 +22,7 @@ import { ConfigurationError, errorMessage, type SerializedError } from '../inter
 import { LocatorEngine } from '../locator/engine.ts';
 import { allocateAppPorts } from '../run/app-ports.ts';
 import { SharedAppProcesses } from '../run/process-pool.ts';
-import { outputLayout } from '../run/output.ts';
+import { outputLayout, SESSION_CLOSE_GRACE_MS, SESSION_TTL_MS } from '../run/output.ts';
 import { sessionSecrecy } from '../run/secrecy.ts';
 import { openStandaloneAttempt, type StandaloneAttempt } from '../run/standalone.ts';
 import type { AgentParams } from '../types.ts';
@@ -32,12 +32,8 @@ import { describeRecording, SessionRecorder } from './recording.ts';
 import { SessionRegistry } from './sessions.ts';
 import { actionResult, catalogLine, defineMcpTool, describeToolDetail, errorResult, invokeTool, redactResult, textResult, type McpToolCallExtra, type McpToolResult, type McpToolSpec } from './tools.ts';
 
-/** How long one session may live, whatever happens. */
-const SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 /** A session nobody has touched for this long is closed, so no browser is left behind. */
 const SESSION_IDLE_MS = 30 * 60 * 1000;
-/** How long the attempt outlives its step, so a step that hit the TTL is still closed in order. */
-const CLOSE_GRACE_MS = 60 * 1000;
 /** How many sessions `e2e mcp --max-sessions` allows at once, each a browser or a device. */
 export const SESSION_BOUNDS = { min: 1, max: 16, default: 4 } as const;
 const SESSION_INSTRUCTION = 'Interactive session: a coding agent drives the app over MCP.';
@@ -209,7 +205,7 @@ export class SessionHost {
         headed: this.options.headed,
         env: this.options.env,
         signal: abort.signal,
-        timeoutMs: ttlMs + CLOSE_GRACE_MS,
+        timeoutMs: ttlMs + SESSION_CLOSE_GRACE_MS,
         processes: this.apps,
         notice: (scope, message) => this.options.log('info', `${scope}: ${message}`),
       });

@@ -8,6 +8,7 @@ import {
   testId,
   timestamp,
   uuidv7,
+  uuidv7Time,
   validateTitle,
 } from '../../src/internal/ids.ts';
 
@@ -109,6 +110,12 @@ describe('uuidv7', () => {
     const earlier = uuidv7(1_000_000);
     const later = uuidv7(2_000_000);
     expect(earlier < later).toBe(true);
+  });
+
+  it('reads back the timestamp it was minted with, and nothing from a name that is not one', () => {
+    expect(uuidv7Time(uuidv7(1_759_000_000_123))).toBe(1_759_000_000_123);
+    expect(uuidv7Time('attempt-0')).toBeUndefined();
+    expect(uuidv7Time('01a0eebd-66f0-457c-8d78-5635e67ddfc3')).toBeUndefined();
   });
 });
 

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCiMode, resolveConfig } from '../../src/config/resolve.ts';
+import { ignoresCase } from '../../src/internal/paths.ts';
 import { defineEngine, type EngineAppDeclaration } from '../../src/engine/index.ts';
 import { secrets } from '../../src/secrets.ts';
 import type { E2EConfig, Target } from '../../src/types.ts';
@@ -1016,7 +1017,7 @@ describe('resolveConfig', () => {
     });
 
     it('refuses a cache.dir under any directory the run or a reporter clears or owns', () => {
-      for (const owned of ['artifacts', 'failures', 'mcp', 'sessions', 'videos']) {
+      for (const owned of ['artifacts', 'failures', 'sessions', 'videos']) {
         expect(refusal({ output: 'out', cache: { dir: `out/${owned}` } })).toContain(`would hold cache.dir out/${owned} under ${owned}/`);
       }
     });
@@ -1056,8 +1057,6 @@ describe('resolveConfig', () => {
         fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
         fs.writeFileSync(path.join(root, relative), content);
       };
-      /** Whether the filesystem under the project root ignores case, as macOS and Windows do by default. */
-      const caseInsensitive = (): boolean => fs.existsSync(root.toUpperCase()) && fs.existsSync(root.toLowerCase());
 
       beforeEach(() => {
         base = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-output-'));
@@ -1083,16 +1082,24 @@ describe('resolveConfig', () => {
         const alias = path.join(base, 'alias');
         fs.symlinkSync(root, alias);
         expect(resolveConfig({ targets: TARGETS }, { projectRoot: alias, env: BASE_ENV }).output).toBe(path.join(alias, '.e2e'));
+        // A link to the default is the default, so no marker lands in it.
+        write('.e2e/logs/app.log');
+        fs.symlinkSync('.e2e', path.join(root, 'e2e-link'));
+        expect(outputIn({ output: 'e2e-link' })).toBe(path.join(root, '.e2e'));
       });
 
-      it('compares names without case where the filesystem ignores it', () => {
-        if (!caseInsensitive()) return;
+      // CI runs on Linux, where this is skipped: run it on macOS or Windows after touching the folding.
+      it.skipIf(!ignoresCase(os.tmpdir()))('compares names without case where the filesystem ignores it', () => {
         fs.mkdirSync(path.join(root, 'tests'));
         expect(refusalIn({ output: 'TESTS' })).toContain('holds tests, where the tests glob');
         expect(refusalIn({ output: 'TESTS/results' })).toContain('is scanned by the tests glob');
         fs.mkdirSync(path.join(root, '.e2e', 'cache'), { recursive: true });
         expect(refusalIn({ output: '.E2E/CACHE' })).toContain('is the cache directory .e2e/cache or inside it');
         expect(refusalIn({ output: 'Results', cache: { dir: 'results/artifacts' } })).toContain('would hold cache.dir');
+        write('results/cache/entry.json', '{}');
+        expect(outputIn({ output: 'Results', cache: { dir: 'results/cache' } })).toBe(path.join(root, 'Results'));
+        write('.e2e/bugbash/notes.txt');
+        expect(outputIn({ output: '.E2E' })).toBe(path.join(root, '.e2e'));
       });
 
       it('refuses an existing directory it did not write, naming what is in it', () => {
