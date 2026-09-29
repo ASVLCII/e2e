@@ -9,10 +9,10 @@
  *
  * Candidates are compared through the same `describeTarget` projection the
  * recorder used, so redaction, whitespace collapsing, and bounding cannot
- * make a node unequal to its own recording. The matching vocabulary — which
- * tiers a descriptor is tried in, and what "equal on the recorded fields"
- * means — is exported so end anchors (`anchors.ts`) are checked by the same
- * rules and can never drift from relocation.
+ * make a node unequal to its own recording. The matching vocabulary — the
+ * fields a test id or a label identifies a node by, and how labels are
+ * compared — is exported so end anchors (`anchors.ts`) are checked by the
+ * same rules and can never drift from relocation.
  */
 
 import type { SemanticNode } from '../engine/surface.ts';
@@ -25,7 +25,7 @@ import type { TracePosition, TraceTargetDescriptor } from './trace.ts';
  * change, because an entry recorded under different rules could relocate to a
  * different node.
  */
-export const REPLAY_POLICY_VERSION = 'conservative/5';
+export const REPLAY_POLICY_VERSION = 'conservative/6';
 
 /**
  * The share of the viewport a scrolled node must have covered when it was
@@ -55,17 +55,65 @@ export interface DescribedNode {
   readonly descriptor: TraceTargetDescriptor;
 }
 
-/** Identity fields that must match whenever the recording captured them. */
-const IDENTITY_FIELDS: readonly DescriptorField[] = ['role', 'name', 'testId', 'placeholder', 'inputPurpose'];
+/**
+ * The fields a recorded test id identifies a control by: the id and what the
+ * control is, never what it says. A label in many apps carries state
+ * (`Like (0 likes)`, a row named after its contents and age); the test id is
+ * the app's own stable handle. Twins sharing an id resolve by the recorded
+ * position, never by whichever label happens to match now.
+ */
+const TEST_ID_FIELDS: readonly DescriptorField[] = ['role', 'testId', 'placeholder', 'inputPurpose'];
 
-/** Text is identity too when neither a test id nor a name was recorded. */
-const IDENTITY_FIELDS_WITH_TEXT: readonly DescriptorField[] = [...IDENTITY_FIELDS, 'text'];
+/** What a control is apart from any id: the fields a label-matched tier compares verbatim. */
+export const SEMANTIC_ID_FIELDS: readonly DescriptorField[] = ['role', 'placeholder', 'inputPurpose'];
+
+/** Every field a descriptor can carry as identity; an anonymous descriptor must equal a candidate on all of them. */
+const ALL_IDENTITY_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text', 'testId', 'placeholder', 'inputPurpose'];
+
+/** The fields a control is labelled by. Text counts only when no name was recorded: a relabeled button is still the button. */
+export type LabelField = 'name' | 'text';
+
+/** A relative time word: the part of a label a calendar moves. */
+export const RELATIVE_TIME = /\b(?:just\s+now|now|today|yesterday|tomorrow)\b/i;
+/** A count with a unit of time, `2m`, `3 days`: the part of a label a clock moves. */
+export const AGE = /\b\d+\s*(?:ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|w|weeks?|mo|months?|y|years?)\b/i;
+const RELATIVE_TIME_ALL = new RegExp(RELATIVE_TIME.source, 'gi');
+const AGE_ALL = new RegExp(AGE.source, 'gi');
 
 /**
- * Whether a descriptor can identify a node at all. Role or selector alone
- * cannot: a wrong match acts on the wrong control, so such a descriptor is
- * not relocatable and, as an anchor, would prove nothing.
+ * A label with the state it carries taken out: every run of digits reads `#`,
+ * a relative time reads `<age>`, and the plural a count governs is dropped, so
+ * `Reply (0 replies)` and `Reply (1 reply)`, or `Bob · now` and `Bob · 2m`,
+ * are the same shape. Case and whitespace are folded too. A label that
+ * carries no state is its own shape.
  */
+export function labelShape(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(RELATIVE_TIME_ALL, '<age>')
+    .replace(AGE_ALL, '<age>')
+    .replace(/\d+/g, '#')
+    .replace(/#(\s+[a-z]+?)ies\b/g, '#$1y')
+    .replace(/#(\s+[a-z]+?)s\b/g, '#$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Whether two optional labels share a shape; both absent counts, one absent does not. */
+function sameShape(recorded: string | undefined, candidate: string | undefined): boolean {
+  if (recorded === undefined || candidate === undefined) return recorded === candidate;
+  return labelShape(recorded) === labelShape(candidate);
+}
+
+/** Whether the candidate's labels read as the recording's on every listed field, by shape; an exact label is its own shape. */
+export function sameLabels(
+  recorded: TraceTargetDescriptor,
+  candidate: TraceTargetDescriptor,
+  fields: readonly LabelField[],
+): boolean {
+  return fields.every((field) => sameShape(recorded[field], candidate[field]));
+}
+
 /**
  * A descriptor with nothing to identify the control by: no test id, name,
  * text, or placeholder, only a role. A form built without labels is made of
@@ -74,7 +122,7 @@ const IDENTITY_FIELDS_WITH_TEXT: readonly DescriptorField[] = [...IDENTITY_FIELD
  * recorded for it, and it is matched strictly (`fieldsIdentical`): an
  * unnamed textbox must never stand in for a named one.
  */
-function isAnonymous(descriptor: TraceTargetDescriptor): boolean {
+export function isAnonymous(descriptor: TraceTargetDescriptor): boolean {
   return (
     descriptor.testId === undefined &&
     descriptor.name === undefined &&
@@ -83,38 +131,30 @@ function isAnonymous(descriptor: TraceTargetDescriptor): boolean {
   );
 }
 
+/**
+ * Whether a descriptor can identify a node at all. Role or selector alone
+ * cannot: a wrong match acts on the wrong control, so such a descriptor is
+ * not relocatable and, as an anchor, would prove nothing.
+ */
 export function isRelocatableDescriptor(descriptor: TraceTargetDescriptor): boolean {
   return isAnonymous(descriptor) ? descriptor.role !== undefined && descriptor.position !== undefined : true;
 }
 
-/** The semantic tier of a descriptor: every identity field but the test id. */
-function withoutTestId(descriptor: TraceTargetDescriptor): TraceTargetDescriptor {
+/** The descriptor without its test id: what is left to match by when the id churned. */
+export function withoutTestId(descriptor: TraceTargetDescriptor): TraceTargetDescriptor {
   const { testId: _testId, ...semantic } = descriptor;
   return semantic;
 }
 
 /**
- * The tiers a recorded descriptor is matched in, strictest first:
- *
- * 1. **Strict** — every identity field the recording captured must match.
- * 2. **Semantic** — only when a `testId` was recorded and the remaining
- *    fields still identify the node: the same descriptor without it. Test
- *    ids are the strongest discriminator when stable, but some apps mint
- *    them per render; a node the semantic fields still identify has not
- *    moved, its label has not changed, and refusing it would fail on
- *    cosmetics.
- *
- * Empty for a descriptor that identifies nothing.
+ * The descriptor a node is keyed on across re-renders: without its test id
+ * when the rest still identifies the node, so an app that mints ids per
+ * render cannot make an unchanged control look new; a node only its id
+ * identifies keeps it.
  */
-export function descriptorTiers(descriptor: TraceTargetDescriptor): readonly TraceTargetDescriptor[] {
-  if (!isRelocatableDescriptor(descriptor)) return [];
-  if (descriptor.testId === undefined) return [descriptor];
+export function identifyingProjection(descriptor: TraceTargetDescriptor): TraceTargetDescriptor {
   const semantic = withoutTestId(descriptor);
-  // A test id that churned is forgiven only when the semantic fields still
-  // identify the node. Dropping it must not leave an anonymous descriptor: a
-  // position counted among test-id twins says nothing about the unnamed
-  // controls of that role, so it would relocate to an unrelated one.
-  return isRelocatableDescriptor(semantic) && !isAnonymous(semantic) ? [descriptor, semantic] : [descriptor];
+  return isAnonymous(semantic) ? descriptor : semantic;
 }
 
 /** Every listed field the recording captured must be present and equal on the candidate. */
@@ -141,7 +181,7 @@ interface Projection extends DescriptorMatchOptions {
 
 /**
  * Descriptor projections per observation. A replay relocates every recorded
- * action, in two tiers, against the same node map (and again per settling
+ * action, tier by tier, against the same node map (and again per settling
  * retry), and the anchor check projects it once more, while the projection of
  * a node is a pure function of the node: it is computed once per observation
  * and shared by every lookup into it.
@@ -165,10 +205,10 @@ export function describeNodes(
 }
 
 /**
- * Relocates one descriptor against the nodes of a fresh observation, tier by
- * tier (`descriptorTiers`), each exactly-one-or-diverge. Ambiguity at any
- * tier diverges immediately: two candidates sharing the matched identity
- * cannot be told apart by waiting, and acting on either would be a guess.
+ * Relocates one descriptor against the nodes of a fresh observation
+ * (`matchingIds`), exactly-one-or-diverge. Ambiguity diverges immediately:
+ * two candidates sharing the matched identity cannot be told apart by
+ * waiting, and acting on either would be a guess.
  * The one exception is a recorded `position`: the recording itself found the
  * same twins and noted which one it acted on, so the same count of twins
  * resolves to the same one; any other count diverges as before.
@@ -192,17 +232,28 @@ export function relocateDescriptor(
 }
 
 /**
- * The ids a descriptor matches in a fresh observation, in document order: the
- * strictest tier (`descriptorTiers`) that matches anything decides, so a
- * churned test id still falls back to the semantic fields. Empty when nothing
- * matches. The recorder uses the same projection to notice, before it writes a
- * target, that the description alone would not tell the target from its twins.
+ * The ids a descriptor matches in a fresh observation, in document order:
+ * the first tier that matches anything decides.
+ *
+ * 1. With a recorded test id: every node with that id (`TEST_ID_FIELDS`).
+ *    One is the control; several are twins the recorded position tells
+ *    apart; none means the id churned, and the tiers below take over as if
+ *    no id had been recorded.
+ * 2. The nodes whose labels equal the recording's exactly.
+ * 3. The nodes whose labels share the recording's shape (`labelShape`), so a
+ *    control whose label counts or times something is found once the count
+ *    moved.
+ *
+ * Empty when nothing matches. The recorder uses the same projection to
+ * notice, before it writes a target, that the description alone would not
+ * tell the target from its twins.
  */
 function matchingIds(
   descriptor: TraceTargetDescriptor,
   nodes: ReadonlyMap<string, SemanticNode>,
   options: DescriptorMatchOptions,
 ): readonly string[] {
+  if (!isRelocatableDescriptor(descriptor)) return [];
   const candidates = describeNodes(nodes, options);
   // A recorded container key must hold: the same "Delete" in another row is
   // a different control. Checked against the tree the candidates came from,
@@ -216,23 +267,31 @@ function matchingIds(
             (candidate) => containerKey(candidate.id, nodes, parents, options.redact) === descriptor.within,
           );
         })();
-  for (const tier of descriptorTiers(descriptor)) {
-    const matches = tierMatches(tier, keyed);
-    if (matches.length > 0) return matches;
+  const tiers = matchingTiers(descriptor);
+  for (const tier of tiers) {
+    const matched = keyed.filter((candidate) => tier(candidate.descriptor));
+    if (matched.length > 0) return matched.map((candidate) => candidate.id);
   }
   return [];
 }
 
-function tierMatches(tier: TraceTargetDescriptor, candidates: readonly DescribedNode[]): string[] {
-  if (isAnonymous(tier)) {
-    return candidates
-      .filter((candidate) => fieldsIdentical(tier, candidate.descriptor, IDENTITY_FIELDS_WITH_TEXT))
-      .map((candidate) => candidate.id);
-  }
-  const fields = tier.testId === undefined && tier.name === undefined ? IDENTITY_FIELDS_WITH_TEXT : IDENTITY_FIELDS;
-  return candidates
-    .filter((candidate) => fieldsEqual(tier, candidate.descriptor, fields))
-    .map((candidate) => candidate.id);
+/** One tier of the ladder: whether a candidate's projection matches the recording at that tier. */
+type MatchTier = (candidate: TraceTargetDescriptor) => boolean;
+
+function matchingTiers(descriptor: TraceTargetDescriptor): readonly MatchTier[] {
+  if (isAnonymous(descriptor)) return [(candidate) => fieldsIdentical(descriptor, candidate, ALL_IDENTITY_FIELDS)];
+  const semantic = withoutTestId(descriptor);
+  const labels: readonly LabelField[] = semantic.name === undefined ? ['name', 'text'] : ['name'];
+  return [
+    ...(descriptor.testId === undefined ? [] : [(candidate: TraceTargetDescriptor) => fieldsEqual(descriptor, candidate, TEST_ID_FIELDS)]),
+    ...(isAnonymous(semantic)
+      ? []
+      : [
+          (candidate: TraceTargetDescriptor) => fieldsEqual(semantic, candidate, [...SEMANTIC_ID_FIELDS, ...labels]),
+          (candidate: TraceTargetDescriptor) =>
+            fieldsEqual(semantic, candidate, SEMANTIC_ID_FIELDS) && sameLabels(semantic, candidate, labels),
+        ]),
+  ];
 }
 
 /** Beyond this many twins a description is not a control set but a list; a position there would be noise. */
