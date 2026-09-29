@@ -77,7 +77,7 @@ await agent.act('sign in with the given credentials', {
 
 `act(instruction, options?)` plans and performs a multi-action flow and ends
 in a verdict. Passed resolves with what the step did: `summary`, `modelCalls`,
-`actions`, and `cache` (how the trace cache took part). Failed or blocked
+`actions`, and `cache` (how the replay cache took part). Failed or blocked
 throws an `AgentError` whose `code` says why: `ACTION_FAILED` for a plain
 failure, `STEP_BUDGET_EXHAUSTED` or `STEP_TIMEOUT` when the budget or the
 clock ran out, and a blocked code (`AUTH_CREDENTIAL_UNAVAILABLE`,
@@ -87,7 +87,7 @@ verdict.
 
 Options: `params` (the values the instruction refers to; a `Secret` is filled
 by the runner; a run-unique value such as `unique(\`E2E ${Date.now()}\`)` keeps
-the trace cache replaying across runs), `timeout` (default the test timeout), `maxSteps` (default 25
+the replay cache working across runs), `timeout` (default the test timeout), `maxSteps` (default 25
 actions), `maxModelCalls` (default 25). Per-call budgets can only lower the
 configured limits. `act` takes no `schema`: structured output is
 `extract({ schema })`. By default pixels reach an `act` step through the
@@ -182,7 +182,7 @@ receives the image and warning on every such observation; judgments require
 `vision: true` or `'only'`. No fallback is allowed after a secret fill. Do not
 infer that a control is absent from an unavailable tree, or reuse old node ids.
 When the tree recovers, its next presentation includes the whole tree.
-Such a step cannot record or finish from a trace cache entry, even after
+Such a step cannot record or finish from a replay cache entry, even after
 recovery. A completed cache capture may supply the executor's first look
 once, provided no action or later capture intervened. The Playwright
 engine supports timeout recovery; the device engine fails closed because its
@@ -210,7 +210,7 @@ await expect(screen.getByRole('status')).toHaveText('Created "Atlas" on the Pro 
 ```
 
 The check makes the test model-portable (the path may differ between models,
-the end state may not), and it is what lets the trace cache record the step.
+the end state may not), and it is what lets the replay cache record the step.
 
 State the step writes off screen (a database row, an API read) can land after
 `act` returns; poll the read instead of sleeping:
@@ -251,7 +251,7 @@ tool call before it executes.
 - `--debug` prints a per-step table (duration, model calls, tokens, cost)
   after the run and saves each step's transcript as an artifact.
 
-## The trace cache
+## The replay cache
 
 A passing `agent.act` can save its actions after a later check verifies the
 outcome. The next run replays them without model calls. If the app or final
@@ -333,7 +333,7 @@ the one that knows its screens, and that comes from iterating on it:
    the same tests; every result records which agent ran it.
 
 Personas are agents by name under `agents`, pinned with `{ agent }` on a
-test or block, or swept with `--agent buyer,admin`. The trace cache records
+test or block, or swept with `--agent buyer,admin`. The replay cache records
 per agent step, so a specialised agent gets the same replay benefit.
 
 ## Beyond the built-in agent

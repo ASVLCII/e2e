@@ -238,6 +238,28 @@ describe('redactTraceArchives', () => {
     ]);
   });
 
+  it('rewrites the options a context opened with and drops the screencast frames beside them', async () => {
+    const dir = attemptDir();
+    const file = path.join(dir, 'trace', 'trace.zip');
+    const frame = JSON.stringify({ type: 'screencast-frame', pageId: 'page@1', width: 1280, height: 720, timestamp: 12.5, file: 'screencast/page@1-1.jpeg' });
+    const options = { type: 'context-options', options: { httpCredentials: [{ username: 'ada', password: SECRET }] } };
+    writeFileSync(
+      file,
+      writeZip([
+        zipEntry('screencast/page@1-1.jpeg', FRAME_CLEAN),
+        zipEntry('trace.trace', Buffer.from([JSON.stringify(options), frame].join('\n'))),
+      ]),
+    );
+
+    await redactTraceArchives(dir, ['trace/trace.zip'], new SecretLedger([['staging', SECRET]]));
+
+    const after = entriesOf(file);
+    expect([...after.keys()]).toEqual(['trace.trace']);
+    expect(after.get('trace.trace')!.toString().split('\n').map((line) => JSON.parse(line) as unknown)).toEqual([
+      { type: 'context-options', options: { httpCredentials: [{ username: 'ada', password: '<secret:staging>' }] } },
+    ]);
+  });
+
   it('drops the screencast and scrubs a cut fragment in the same event stream', async () => {
     const secret = 'cut-secret-Kq7ZrT2mWx9pLd4sNv8bHc3jFg6yQa1eUo5iRk0tYw2zXn7uM';
     const dir = attemptDir();

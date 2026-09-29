@@ -1,8 +1,12 @@
 /** What one live session knows about secrets: the values to redact, and whether one reached it. */
 
 import type { ResolvedConfig } from '../config/resolve.ts';
+import { MIN_SECRET_LENGTH, secretLength } from '../config/secrets.ts';
 import type { TargetSession } from '../engine/surface.ts';
+import { ConfigurationError } from '../internal/errors.ts';
 import { SecretLedger } from '../internal/redact.ts';
+import { unavailableCode } from '../secrets.ts';
+import type { Secret } from '../types.ts';
 
 export interface SessionSecrecy {
   /** Every secret value the session may have seen; live, so a provider's value joins the moment it exists. */
@@ -12,6 +16,13 @@ export interface SessionSecrecy {
    * then on the viewport, and everything recorded from it, may carry the value.
    */
   readonly taint: { value: boolean };
+  /**
+   * Set once the engine resolved a secret for an option it holds (basic-auth
+   * credentials), and never cleared. The viewport stays clean, but a trace
+   * records the options the engine opened the attempt with, so it is
+   * rewritten as after a fill.
+   */
+  readonly engineHeld: { value: boolean };
 }
 
 /**
@@ -27,6 +38,33 @@ export function registerStaticSecrets(secrets: ResolvedConfig['secrets']): void 
   for (const [name, { value }] of secrets) {
     if (typeof value === 'string') processSecrets.register(name, value);
   }
+}
+
+/**
+ * The plaintext of one configured secret, a provider's value computed fresh.
+ * The value joins `ledger` and `processSecrets` before it is returned, so it
+ * is redacted from the moment it exists, whoever it is handed to.
+ */
+export async function resolveSecretValue(
+  secret: Secret,
+  secrets: ResolvedConfig['secrets'],
+  ledger: SecretLedger,
+): Promise<string> {
+  const registered = secrets.get(secret.name);
+  if (registered === undefined) {
+    throw new ConfigurationError(unavailableCode(secret), `secret "${secret.name}" is not configured`);
+  }
+  const value = registered.value;
+  const plaintext = typeof value === 'function' ? await value() : value;
+  if (typeof plaintext !== 'string' || secretLength(plaintext) < MIN_SECRET_LENGTH) {
+    throw new ConfigurationError(
+      unavailableCode(secret),
+      `secret "${secret.name}" provider did not return a string of at least ${MIN_SECRET_LENGTH} characters (code points)`,
+    );
+  }
+  ledger.register(secret.name, plaintext);
+  processSecrets.register(secret.name, plaintext);
+  return plaintext;
 }
 
 /** Secrets survive every fixture graph that shares the same live isolation. */
@@ -52,6 +90,7 @@ export function sessionSecrecy(
         ),
       ),
       taint: { value: false },
+      engineHeld: { value: false },
     };
     secrecyBySession.set(session, secrecy);
   }

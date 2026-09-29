@@ -43,10 +43,25 @@ working directory and each parent for `e2e.config.ts` or `e2e.config.mts`,
 stopping at the repository root. Both names in one directory is
 `CONFIG_AMBIGUOUS`. The selected file's directory is the project root.
 
-The `tests` globs select files relative to the project root. Discovery visits
-only directories that could match, skips `node_modules`, and ignores
-symlinks. A dot directory is included only when a glob segment explicitly
-starts with a dot.
+The `tests` globs select files relative to the project root. An entry that
+starts with `!` excludes: `tests: ['tests/**/*.e2e.ts', '!tests/wip/**']`
+selects every test file except those under `tests/wip/`. A file is selected
+when an including glob matches it and no exclusion does, whatever the order of
+the list, and a list of only exclusions is `INVALID_CONFIG`. Discovery visits
+only directories that could match, never enters one an exclusion takes whole,
+skips `node_modules`, and ignores symlinks. A dot directory is included only
+when a glob segment explicitly starts with a dot.
+
+e2e loads no `.env` file itself. Load one at the top of `e2e.config.ts` with
+Node's `process.loadEnvFile()`; every worker imports the config again, so the
+variables reach the workers too:
+
+```ts title="e2e.config.ts"
+process.loadEnvFile('.env');
+```
+
+It throws when the file is missing; guard it with `existsSync` from
+`node:fs` when only some machines have one.
 
 Config and test files run as ESM whatever the nearest `package.json` `type`
 says, and so does the TypeScript they import: a helper by path, or a
@@ -58,13 +73,11 @@ or `module.exports` fails to load.
 
 ```ts
 export interface E2EConfig {
-  /** The config format this runner implements: `'0.1'`. */
-  specVersion?: '0.1';
   /** Stable project id, 1 through 256 characters; defaults to the root `package.json` name. */
   projectId?: string;
   /** The surfaces tests run on; required, at least one, each naming its engine. */
   targets: readonly Target[];
-  /** Test file globs relative to the project root (`*`, `?`, and a whole `**` segment); default every `*.e2e.ts` under `tests/`. */
+  /** Test file globs relative to the project root (`*`, `?`, and a whole `**` segment; a leading `!` excludes); default every `*.e2e.ts` under `tests/`. */
   tests?: string | readonly string[];
   /** Test attempt deadline in milliseconds; default 120000. */
   timeout?: number;
@@ -80,16 +93,28 @@ export interface E2EConfig {
   retries?: number;
   /** Parallel workers, 1 through 1024; default 1 in CI, else half the cores. An engine may cap it lower. */
   workers?: number;
-  /** Artifact kinds, or `{ kinds, store, trace }` to also hand every artifact to a host store. */
-  artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
+  /** `{ store }` hands every artifact to a host store as it is produced. */
+  artifacts?: ArtifactsConfig;
+  /**
+   * Which attempts record a trace; default `on`, `on-first-retry` in CI. A
+   * target's `trace` wins over it, `--trace [mode]` over both, and a test's
+   * own `trace` over all. Applies to the targets whose engine can trace.
+   */
+  trace?: RecordingMode;
   /**
    * Which attempts record a video; default `off`. A target's `video` wins
    * over it, `--video [mode]` over both, and a test's own `video` over all.
+   * Applies to the targets whose engine can record.
    */
-  video?: VideoMode;
+  video?: RecordingMode;
   /**
-   * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
-   * `markdown` writes `.e2e/summary.md`, `json` prints the report and
+   * The results directory, relative to the project root; default `.e2e`.
+   * `--output <dir>` overrides it for one run.
+   */
+  output?: string;
+  /**
+   * Output renderers and reporter objects. `junit` writes `<output>/junit.xml`,
+   * `markdown` writes `<output>/summary.md`, `json` prints the report and
    * excludes `list`; a `Reporter` object runs
    * beside them and `--reporter` never removes it.
    */
@@ -101,7 +126,7 @@ export interface E2EConfig {
    */
   agents?: Readonly<Record<string, AgentConfig | StepExecutor>>;
   /**
-   * Trace cache mode or options. Defaults to `read-write` locally and
+   * Replay cache mode or options. Defaults to `read-write` locally and
    * `read-only` in CI. An explicit mode overrides the default;
    * `--no-cache` disables caching for the run.
    */
@@ -156,8 +181,20 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
-  /** Which attempts on this target record a video, in place of the config's `video`; `--video` and a test's own `video` win over it. */
-  video?: VideoMode;
+  /**
+   * Which attempts on this target record a trace, in place of the config's
+   * `trace`; `--trace` and a test's own `trace` win over it. A mode set here
+   * is required of the engine: one that cannot trace fails the run with
+   * `UNSUPPORTED_ARTIFACT`.
+   */
+  trace?: RecordingMode;
+  /**
+   * Which attempts on this target record a video, in place of the config's
+   * `video`; `--video` and a test's own `video` win over it. A mode set here
+   * is required of the engine: one that cannot record fails the run with
+   * `UNSUPPORTED_ARTIFACT`.
+   */
+  video?: RecordingMode;
 }
 ```
 
@@ -199,7 +236,7 @@ export interface EngineAppDeclaration {
    */
   readonly environment?: 'test' | 'staging' | 'production';
   /**
-   * App identity for trace cache and session entries. Defaults to the URL's
+   * App identity for replay cache and session entries. Defaults to the URL's
    * origin and base path. Set a stable value to reuse entries across preview
    * URLs. Without a URL or identity, entries use the target alone. Different
    * apps must have different identities to prevent replay across them.
@@ -351,11 +388,49 @@ reverse order, then their `teardown` commands. A failing teardown is a
 `cleanup` run error and never skips the ones after it.
 [Starting your app](/starting-your-app) shows a full example.
 
+## output
+
+```ts
+output: 'test-results/e2e',
+```
+
+Everything a run writes about itself goes under one directory, `.e2e` by
+default, resolved from the project root. `--output <dir>` on
+[`e2e run`](/reference/cli#e2e-run) and `e2e explore` overrides it for one
+run.
+
+| Path under the output | What |
+| --- | --- |
+| `report.json` | The canonical report; `--last-failed` reads the one here |
+| `junit.xml`, `summary.md`, `failures/` | The `junit` and `markdown` reporters' files |
+| `ai-trace.json` | `--ai-trace` |
+| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared when a run starts, so it holds the latest run's evidence and nothing its report no longer names |
+| `sessions/` | The run's encrypted `test.setup` sessions, deleted when it ends |
+| `videos/<session>/` | [`e2e mcp`](/reference/mcp#recording) session recordings |
+
+An `e2e mcp` session writes its attempt's artifacts under the same
+`artifacts/` and never clears it.
+
+The replay cache is independent: [`cache.dir`](#cache) defaults to
+`.e2e/cache` and resolves from the project root whatever `output` says, so
+moving the results never moves the recordings. Because a run clears and
+owns part of it, the output directory fails the config load with
+`INVALID_CONFIG`, naming the reason, when it:
+
+- is the project root, or outside it;
+- is `cache.dir` or inside it, or would hold `cache.dir` under `artifacts/`,
+  `sessions/`, or `videos/`;
+- holds a directory a `tests` glob scans (`output: 'tests'` with the default
+  `tests/**/*.e2e.ts`).
+
+The removed `--artifacts <dir>` flag fails with the `--output` it maps to:
+the report used to go to the directory's parent, so `--artifacts
+out/artifacts` is `--output out`.
+
 ## artifacts
 
 ```ts
 artifacts: {
-  kinds: ['screenshot', 'trace'],
   store: {
     async put(artifact) {
       const key = await bucket.upload(artifact.path, artifact.bytes);
@@ -365,19 +440,41 @@ artifacts: {
 },
 ```
 
-`kinds` accepts `screenshot` and `trace`. The default set is both, captured
-best-effort. A configured kind the target's engine cannot produce fails the
-run before any test starts with `UNSUPPORTED_ARTIFACT`. Video is not a kind: it has
-its own [`video`](#video) option, and `kinds: ['video']` or an
-`artifacts.video` block fails with `INVALID_CONFIG` naming it.
+`artifacts` says where artifacts go, not which are made: [`trace` and
+`video`](#recording) choose the recordings, and a failure's screenshot and
+screen text are captured whenever the engine can (never after a secret
+fill, see [Security](/security)). The removed forms fail with
+`INVALID_CONFIG` naming what replaced them: a kinds list (`artifacts:
+['screenshot', 'trace']` or `artifacts.kinds`) names the `trace` mode it
+meant, `artifacts.trace` names `trace: 'on-all-retries'` for `record:
+'retries'`, and `artifacts.video` names the `video` option.
 
 `store` receives every artifact once it is complete on disk and returns a
 reference the report records as `ref` beside the local path. A failed `put`
 never fails the run. Each worker constructs its own store from the config
 module. `redaction` is the report's label: a store that exports only what
 the runner vouches for keeps back an `incomplete` artifact, a video or a
-download the runner did not rewrite. A video a hosted service keeps is a
-link with no bytes, so the store never receives it.
+download the runner did not rewrite.
+
+A video a hosted service keeps (a [provider's own recording](#what-a-video-writes))
+is a link with no bytes, so `put` never receives it. A store that implements
+the optional `putLink` gets each one instead, once the attempt stopped the
+recording, and its `ref` lands on the report's artifact beside `url`. A
+passed attempt's link under `retain-on-failure` is never handed over, since
+the report leaves it out too, and a failed `putLink` never fails the run.
+
+```ts
+artifacts: {
+  store: {
+    async put(artifact) {
+      return { ref: await bucket.upload(artifact.path, artifact.bytes) };
+    },
+    async putLink(link) {
+      return { ref: await index.record(link.url, link.attemptId) };
+    },
+  },
+},
+```
 
 ```ts
 /** One produced artifact, handed to `store.put` once it is complete on disk. */
@@ -399,30 +496,29 @@ export interface StoredArtifact {
   /** When a time-based artifact (a video segment) began recording. */
   readonly startedAt?: string;
 }
+
+/** One provider-hosted recording, handed to `store.putLink` once the attempt stopped it. */
+export interface StoredArtifactLink {
+  readonly kind: 'video';
+  /** The `http(s)` URL the service serves the recording from. */
+  readonly url: string;
+  readonly mediaType: string;
+  /** A recording masks nothing, so a link is always `incomplete`. */
+  readonly redaction: 'incomplete';
+  readonly runId: string;
+  readonly testId: string;
+  readonly attemptId: string;
+  /** When the recording started, as an ISO timestamp. */
+  readonly startedAt: string;
+  /** The step that was running when the recording was registered, if any. */
+  readonly stepId?: string;
+}
 ```
 
-### trace
-
-A trace is on for every attempt by default. Recording one costs CPU for the
-whole attempt: on a 141-test suite, every-attempt traces added about a
-quarter to the run's wall time. `record: 'retries'` skips the first attempt,
-like Playwright's `on-all-retries`, so a test that passes costs nothing extra
-and one that fails and retries is traced on the retry. Only a retry is
-traced: with no retries (the local default) nothing is, and neither is a
-failure the runner does not retry, such as `LAUNCH_TIMEOUT`, or an `e2e mcp`
-session, which is a single attempt.
+## Recording
 
 ```ts
-artifacts: { trace: { record: 'retries' } },
-```
-
-| Key | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `record` | `'all' \| 'retries'` | `'all'` | `retries` records the attempts after the first; a serial group's shared trace follows the group's attempts |
-
-## video
-
-```ts
+trace: 'on-first-retry',
 video: 'retain-on-failure',
 targets: [
   { name: 'chromium', engine: web({ url }) },
@@ -430,50 +526,90 @@ targets: [
 ],
 ```
 
+`trace` and `video` choose which attempts record, with one set of modes:
+
 ```ts
-/** Which attempts record a video, and which recordings are kept. */
-export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
+/** Which attempts record a trace or a video, and which recordings are kept. */
+export type RecordingMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries';
 ```
 
 | Mode | Records | Keeps |
 | --- | --- | --- |
-| `off` (default) | nothing | nothing |
+| `off` | nothing | nothing |
 | `on` | every attempt | every recording |
-| `retain-on-failure` | every attempt | the recordings of attempts that did not pass; a passed attempt's file is deleted once its verdict is in |
-| `on-first-retry` | the first retry only, the second attempt | that recording. A test that passes first time records nothing, and with `retries: 0` nothing records |
+| `retain-on-failure` | every attempt | the recordings of attempts that did not pass; a passed attempt's files are deleted once its verdict is in |
+| `on-first-retry` | the first retry only, the second attempt | that recording. A test that passes first time records nothing |
+| `on-all-retries` | every attempt after the first | every recording. A test that passes first time records nothing |
 
-The names are Playwright's `use.video` modes. Four places set the mode, and
-each replaces the one before it:
+The names are Playwright's `use.trace` and `use.video` modes. Under a retry
+mode a test with `retries: 0` records nothing, and neither does a failure the
+runner does not retry, such as `LAUNCH_TIMEOUT`.
 
-1. `video` at the top of the config.
-2. A target's `video`.
-3. `--video [mode]` on [`e2e run`](/reference/cli#e2e-run), over the config
-   and every target. A bare `--video` is `on`.
-4. A test's or describe's own [`video` option](/reference/test#options),
+Four places set a mode, lowest first, and each replaces the one before it.
+The same rule holds for `trace` and `video`:
+
+1. `trace` or `video` at the top of the config.
+2. A target's `trace` or `video`.
+3. `--trace [mode]` or `--video [mode]` on [`e2e run`](/reference/cli#e2e-run),
+   over the config and every target. A bare flag is `on`.
+4. A test's or describe's own [`trace` or `video` option](/reference/test#options),
    innermost wins: `test('checkout', { video: 'on' }, ...)`.
 
-A serial group records one video per group attempt, so its members cannot
-set `video` (a `COLLECTION_ERROR`, like `retries`). The value on the serial
-`describe`, or on a group around it, applies to every member.
+A serial group records one trace and one video per group attempt, so its
+members cannot set `trace` or `video` (a `COLLECTION_ERROR`, like `retries`).
+The value on the serial `describe`, or on a group around it, applies to every
+member.
 
 `e2e explore` and an `e2e mcp` session are one attempt each and use the
-target's mode, `--video` included for `explore`, so `on-first-retry` records
-nothing there. An `e2e mcp` session always closes as passed, so it keeps a
-recording only under `on`.
+target's mode, `--trace` and `--video` included for `explore`, so a retry
+mode records nothing there. An `e2e mcp` session always closes as passed, so
+it keeps a trace only under `on`. It never records video from the configured
+mode: its recordings are the ones `start_recording` and `stop_recording`
+make.
+
+Neither `trace` nor `video`, at the top or on a target, enters the config
+digest: turning one on or off never invalidates cached replays.
+
+### trace
+
+The default is `on` locally and `on-first-retry` in CI (the same `CI`
+detection that makes `retries` default to 1 there). Recording a trace costs
+CPU for the whole attempt: on a 141-test suite, every-attempt traces added
+about a quarter to the run's wall time, which is why CI records only the
+retry a flaky test leaves behind. When the effective mode is a retry mode and
+a test runs with `retries: 0`, the run prints one notice at plan time saying
+no traces will be recorded for it.
+
+The web engine writes a Playwright trace per attempt, `trace/trace.zip` under
+the attempt's artifact directory, which the runner redacts after a secret
+fill; [Debugging](/debugging#artifacts) shows how to open it.
+
+### video
+
+The default is `off`. A video costs more than a trace and holds what the
+screen showed, secrets included, so it is always asked for.
 
 ### Engines that cannot record
 
-Before any test starts, the run checks every target: a selected test that
-will run, and whose mode records on some attempt, on a target whose engine
-cannot record fails the run with `UNSUPPORTED_ARTIFACT`. The message names
-the target and the test. A run whose tests all resolve to `off` asks nothing
-of the engine, even under `--video`.
+Before any test starts, the run grades every target. Where a mode was set
+decides what an engine that cannot record that kind does:
 
-### What gets written
+- Set at the top of the config or with `--trace` / `--video`: the mode applies
+  to the targets whose engine can record it. The run prints one notice at
+  plan time naming the targets that cannot, and runs them without.
+- Set on a target, or on a test that will run on that target: the mode is
+  required. A target whose engine cannot record it fails the run with
+  `UNSUPPORTED_ARTIFACT`, naming the target and, for a test's, the test.
+
+Only a mode that records on some attempt counts: a run whose tests all
+resolve to `off`, or to a retry mode with `retries: 0`, asks nothing of the
+engine.
+
+### What a video writes
 
 | Recorder | Files under the attempt's artifact directory |
 | --- | --- |
-| Web engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ video })`](/reference/web#options) sets the frame size and quality |
+| Web engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ screencast })`](/reference/web#options) sets the frame size and quality |
 | Mobile engine, agent-device | `video/video.mp4` |
 | A provider's own recording ([`BrowserProvider.record`](/browser#recording-on-the-provider), [`DeviceProvider.record`](/mobile#hosted-devices)) | the file the provider wrote, as `video/<file>`: Kernel's is `video/replay.mp4`. Or a link to a recording the service keeps, recorded with `url` in place of `path`; the runner never downloads it |
 
@@ -482,9 +618,7 @@ a step's offset into it.
 
 A recording masks nothing and is recorded with `redaction: 'incomplete'`.
 Under `retain-on-failure` a link is left out of the report of a passed
-attempt, but the service still holds the recording. `video`, at the top or on
-a target, never enters the config digest: turning it on or off never
-invalidates cached replays.
+attempt, but the service still holds the recording.
 
 ## agents
 
@@ -671,6 +805,16 @@ params; the runner fills the field, masks the value in every observation, and
 redacts it from logs, traces, and the report. An unconfigured name throws
 `SECRET_UNAVAILABLE`.
 
+Called while `e2e.config.ts` evaluates, before any run exists, `secrets.get(name)`
+returns a reference by name that an engine option can hold, such as
+`web({ basicAuth: { username, password: secrets.get('previewPassword') } })`.
+The engine declares it, the config load fails with `INVALID_CONFIG` when no
+`secrets` entry or credential has the name, and the engine resolves the value
+when each attempt starts (a provider runs again every time). The value joins
+the attempt's redaction then, without the screenshot restrictions a fill
+brings, since it goes to the engine rather than onto the page. The digest
+records the name only.
+
 ```ts
 /**
  * What a secret is for, which decides where it may be filled: a `password`
@@ -693,22 +837,22 @@ See [Secrets that are not passwords](/authentication#secrets-that-are-not-passwo
 
 ## cache
 
-In `read-write` mode the trace cache records an `agent.act()` only after a
+In `read-write` mode the replay cache records an `agent.act()` only after a
 later verification passes, such as a locator assertion or `agent.assert()`.
 `read-only` replays existing entries and writes none; `off` disables both.
 See [Caching agent steps](/cache).
 
 ```ts
 /**
- * Trace cache options. Defaults to files under `.e2e/cache/`.
+ * Replay cache options. Defaults to files under `.e2e/cache/`.
  * A custom store replaces file storage; each worker constructs its own.
  */
 export interface CacheConfig {
   /** Default `read-write`; `read-only` in CI when unset. */
   mode?: CacheMode;
   /** Custom entry store; omit it to use the file store at `dir`. */
-  store?: TraceCacheStore;
-  /** File store directory, resolved against the project root. */
+  store?: CacheStore;
+  /** File store directory, resolved against the project root; default `.e2e/cache`, whatever `output` says. */
   dir?: string;
   /** Fail a step whose recording no longer replays with `REPLAY_STALE`. Default `false`. */
   strict?: boolean;

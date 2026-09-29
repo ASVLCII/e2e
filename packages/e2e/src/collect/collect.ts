@@ -2,7 +2,7 @@
 
 import { realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { compileGlob, discoverFiles, GLOB_SYNTAX, literalPrefix, matchesGlob } from '../internal/globs.ts';
+import { compileGlob, compileGlobList, discoverFiles, GLOB_SYNTAX, literalPrefix, matchesGlob } from '../internal/globs.ts';
 import { CollectionError } from '../internal/errors.ts';
 import { setupTestId, testId } from '../internal/ids.ts';
 import { explainModuleError } from '../config/diagnose.ts';
@@ -141,14 +141,15 @@ const NEAR_MISS_SUFFIXES = [
 
 /**
  * Test-looking files under the directories the config globs name that no
- * glob matches. The scan stays inside each glob's literal prefix (`tests/`
- * for `tests/**\/*.e2e.ts`), so a repository's unit tests elsewhere are not
- * offered as candidates.
+ * glob matches. The scan stays inside each including glob's literal prefix
+ * (`tests/` for `tests/**\/*.e2e.ts`), so a repository's unit tests elsewhere
+ * are not offered as candidates, and a file a `!` exclusion names is left out
+ * on purpose, so it is never offered either.
  */
 function findNearMissTestFiles(projectRoot: string, patterns: readonly string[]): string[] {
-  const compiled = patterns.map(compileGlob);
+  const { include, exclude } = compileGlobList(patterns);
   const prefixes = new Set(
-    compiled.map((glob) => {
+    include.map((glob) => {
       const literal = literalPrefix(glob);
       // A glob with no wildcard names one file; look beside it.
       if (literal.length === glob.segments.length) literal.pop();
@@ -159,7 +160,7 @@ function findNearMissTestFiles(projectRoot: string, patterns: readonly string[])
     NEAR_MISS_SUFFIXES.map((suffix) => (prefix === '' ? `**/${suffix}` : `${prefix}/**/${suffix}`)),
   );
   return discoverFiles(projectRoot, candidates).filter(
-    (file) => !compiled.some((glob) => matchesGlob(glob, file)),
+    (file) => ![...include, ...exclude].some((glob) => matchesGlob(glob, file)),
   );
 }
 

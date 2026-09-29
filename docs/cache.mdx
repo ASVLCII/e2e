@@ -3,7 +3,7 @@ title: Caching agent steps
 description: Replay verified agent actions without model calls, and let the agent take over when the app changes.
 ---
 
-The trace cache records the actions in an `agent.act()` step after a later
+The replay cache records the actions in an `agent.act()` step after a later
 check verifies the result. On the next run, the runner replays those actions
 without calling the model. If a control or the expected end state no longer
 matches, the agent takes over from the current screen.
@@ -92,7 +92,7 @@ descriptors, paths, and anchors carry the substitution.
 For preview URLs that change on each deploy, set
 [`identity`](/reference/config#the-app-under-test) to keep the same cache
 identity. On devices, replay uses the
-[screen title](/reference/mobile#trace-cache-on-a-device) as the path.
+[screen title](/reference/mobile#replay-cache-on-a-device) as the path.
 
 ## When a recording is written
 
@@ -232,7 +232,7 @@ npx e2e cache clear   # delete every entry
 
 <Note>
 The `cached` percentage in AI usage is the provider's prompt cache. It
-reduces the cost of a model call. The trace cache described here skips the
+reduces the cost of a model call. The replay cache described here skips the
 call entirely.
 </Note>
 

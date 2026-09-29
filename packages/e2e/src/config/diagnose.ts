@@ -36,9 +36,9 @@ const REMOVED_EXPORTS: Readonly<Record<string, Readonly<Record<string, string>>>
     RUNTIME_CODES:
       "RUNTIME_CODES was removed from e2e: STEP_BUDGET_EXHAUSTED, STEP_TIMEOUT, and CANCELLED are the runtime's own codes, which an executor carries but never assigns",
     buildTraceEntry:
-      'buildTraceEntry was removed from e2e: a TraceCacheStore stores the entry it is handed as is, the runner frames and validates it',
+      'buildTraceEntry was removed from e2e: a CacheStore stores the entry it is handed as is, the runner frames and validates it',
     readTraceEntry:
-      'readTraceEntry was removed from e2e: a TraceCacheStore returns the entry it stored as is, the runner validates it',
+      'readTraceEntry was removed from e2e: a CacheStore returns the entry it stored as is, the runner validates it',
   },
   'e2e/agent': {
     isDefinedTool:

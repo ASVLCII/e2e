@@ -1,5 +1,5 @@
 /**
- * `e2e cache`: what is in the trace cache, and how to get rid of it.
+ * `e2e cache`: what is in the replay cache, and how to get rid of it.
  *
  * The store is a directory of digest-named files, so a committed cache is
  * unreadable without a reader: `ls` prints each entry's provenance — the test,
@@ -14,7 +14,7 @@
 import { readdir, rm, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import picocolors from 'picocolors';
-import { FileTraceCacheStore, MAX_CACHE_WIRE_BYTES } from '../cache/store.ts';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '../cache/store.ts';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig } from '../config/resolve.ts';
 import { errorMessage } from '../internal/errors.ts';
@@ -48,7 +48,7 @@ interface CacheContents {
   readonly foreign: readonly string[];
 }
 
-/** Store file names: the key digest, as `FileTraceCacheStore` writes them. */
+/** Store file names: the key digest, as `FileCacheStore` writes them. */
 const ENTRY_FILE = /^([a-f0-9]{64})\.json$/u;
 /** A crashed writer's leftover; a store file for cleanup purposes. */
 const TEMPORARY_FILE = /^[a-f0-9]{64}\.json\.[a-f0-9]{16}\.tmp$/u;
@@ -81,7 +81,7 @@ export async function cache(command: CacheCommand, options: CacheOptions = {}): 
         return await clear(contents);
     }
   } catch (cause) {
-    process.stderr.write(`trace cache at ${directory} could not be read: ${errorMessage(cause)}\n`);
+    process.stderr.write(`replay cache at ${directory} could not be read: ${errorMessage(cause)}\n`);
     return 2;
   }
 }
@@ -115,7 +115,7 @@ async function resolveCacheDirectory(options: CacheOptions): Promise<string> {
  * there. A directory that does not exist is an empty store.
  */
 async function readContents(directory: string): Promise<CacheContents> {
-  const store = new FileTraceCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
+  const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
   const entries: CacheEntrySummary[] = [];
   const unreadable: { name: string; bytes: number }[] = [];
   const foreign: string[] = [];
@@ -163,7 +163,7 @@ async function readContents(directory: string): Promise<CacheContents> {
  */
 function list(contents: CacheContents): number {
   if (contents.entries.length === 0) {
-    process.stdout.write(`no trace cache entries in ${contents.directory}\n`);
+    process.stdout.write(`no replay cache entries in ${contents.directory}\n`);
     warnAboutSkipped(contents);
     return 0;
   }
@@ -233,7 +233,7 @@ async function clear(contents: CacheContents): Promise<number> {
   if (contents.foreign.length === 0) await rmdir(contents.directory).catch(() => undefined);
   process.stdout.write(
     removed === 0
-      ? `no trace cache entries to clear in ${contents.directory}\n`
+      ? `no replay cache entries to clear in ${contents.directory}\n`
       : `cleared ${removed} file(s) from ${contents.directory}\n`,
   );
   warnAboutSkipped(contents);

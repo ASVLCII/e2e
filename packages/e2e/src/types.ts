@@ -10,12 +10,12 @@ import type { StepExecutor } from './agent/executor.ts';
 import type { StepCacheInfo } from './run/steps.ts';
 import type { EngineHandle } from './engine/index.ts';
 import type { KeyModifier, Momentum, ScrollDirection, SelectOption, ViewportPoint } from './engine/contract.ts';
-import type { TraceCacheStore } from './cache/store.ts';
+import type { CacheStore } from './cache/store.ts';
 import type { RunEvent, RunExitCode, RunStatus } from './run/events.ts';
 import type { Report1Document } from './report/build.ts';
 
 export type { KeyModifier, Momentum, ScrollDirection, SelectOption } from './engine/contract.ts';
-export type { CacheReadResult, TraceCacheStore } from './cache/store.ts';
+export type { CacheReadResult, CacheStore } from './cache/store.ts';
 export type { DerivedReason } from './cache/trace.ts';
 export type { StepCacheInfo } from './run/steps.ts';
 export type {
@@ -181,7 +181,7 @@ export interface ActOptions extends AgentOption {
   /**
    * JSON-safe values the instruction refers to, at most 64 KiB and 32 levels
    * deep. A `Secret` reaches the model by name only; the runner fills it. A
-   * value wrapped in `unique()` is different on every run, and the trace
+   * value wrapped in `unique()` is different on every run, and the replay
    * cache records a slot for it instead of the value.
    */
   params?: AgentParams;
@@ -197,7 +197,7 @@ export interface ActOptions extends AgentOption {
 export interface ActResult {
   /** The executor's one-line account of the step, or the replay's when the cache finished it. */
   readonly summary: string;
-  /** How the trace cache took part; absent when caching is off for the step. */
+  /** How the replay cache took part; absent when caching is off for the step. */
   readonly cache?: StepCacheInfo;
   /** Model calls the step spent; 0 when a cached replay finished it. */
   readonly modelCalls: number;
@@ -312,7 +312,7 @@ export type Role =
 /**
  * Spellings `getByRole` accepts beside the vocabulary and rewrites to a `Role`
  * before the query is built: `img` is the ARIA name of `image`. An alias never
- * reaches an engine, the trace cache, or a report; a `Role` is what they see.
+ * reaches an engine, the replay cache, or a report; a `Role` is what they see.
  */
 export type RoleAlias = 'img';
 
@@ -608,11 +608,19 @@ export interface TestOptions {
    */
   agent?: string | readonly string[];
   /**
-   * Which of the test's attempts record a video, in place of the run's:
-   * the same modes as the config's `video`. Innermost wins; inside a serial
-   * group the group's value applies, since the group records as one unit.
+   * Which of the test's attempts record a trace, in place of the run's: the
+   * same modes as the config's `trace`. Innermost wins, over `--trace` too;
+   * inside a serial group the group's value applies, since the group records
+   * as one unit. A mode set here is required of the target's engine.
    */
-  video?: VideoMode;
+  trace?: RecordingMode;
+  /**
+   * Which of the test's attempts record a video, in place of the run's:
+   * the same modes as the config's `video`. Innermost wins, over `--video`
+   * too; inside a serial group the group's value applies, since the group
+   * records as one unit. A mode set here is required of the target's engine.
+   */
+  video?: RecordingMode;
 }
 
 export interface DescribeOptions extends Omit<TestOptions, 'only'> {
@@ -958,18 +966,31 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
-  /** Which attempts on this target record a video, in place of the config's `video`; `--video` and a test's own `video` win over it. */
-  video?: VideoMode;
+  /**
+   * Which attempts on this target record a trace, in place of the config's
+   * `trace`; `--trace` and a test's own `trace` win over it. A mode set here
+   * is required of the engine: one that cannot trace fails the run with
+   * `UNSUPPORTED_ARTIFACT`.
+   */
+  trace?: RecordingMode;
+  /**
+   * Which attempts on this target record a video, in place of the config's
+   * `video`; `--video` and a test's own `video` win over it. A mode set here
+   * is required of the engine: one that cannot record fails the run with
+   * `UNSUPPORTED_ARTIFACT`.
+   */
+  video?: RecordingMode;
 }
 
 /**
- * Which attempts record a video, and which recordings are kept. `off`: none.
- * `on`: every attempt, every recording kept. `retain-on-failure`: every
- * attempt records, only the recordings of attempts that did not pass are
- * kept. `on-first-retry`: only the first retry records, so a test that passes
- * first time costs nothing and a flaky one leaves a recording of the retry.
+ * Which attempts record a trace or a video, and which recordings are kept.
+ * `off`: none. `on`: every attempt, every recording kept.
+ * `retain-on-failure`: every attempt records, only the recordings of attempts
+ * that did not pass are kept. `on-first-retry`: only the first retry records,
+ * so a test that passes first time costs nothing and a flaky one leaves a
+ * recording of the retry. `on-all-retries`: every attempt after the first.
  */
-export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
+export type RecordingMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries';
 
 /**
  * A live AI SDK language model instance: `gateway('openai/gpt-6-luna-fast')`
@@ -991,13 +1012,13 @@ export interface ModelInstance {
   readonly doGenerate: (...args: never[]) => unknown;
 }
 
-/** Trace cache posture. In CI, `read-write` is forced down to `read-only`. */
+/** Replay cache posture. In CI, `read-write` is forced down to `read-only`. */
 export type CacheMode = 'off' | 'read-only' | 'read-write';
 
 /**
- * Trace cache configuration. The store abstraction is the cloud seam: the
+ * Replay cache configuration. The store abstraction is the cloud seam: the
  * default file store keeps entries under `.e2e/cache/`, and a custom
- * `TraceCacheStore` (Redis, an API, anything implementing read/write over
+ * `CacheStore` (Redis, an API, anything implementing read/write over
  * key digests) replaces it wholesale. Like agents and model instances, a
  * store never crosses a process boundary: workers re-resolve the config
  * module and construct their own.
@@ -1006,7 +1027,7 @@ export interface CacheConfig {
   /** Default `read-write`; `read-only` in CI when unset. */
   mode?: CacheMode;
   /** Custom entry store; omit it to use the file store at `dir`. */
-  store?: TraceCacheStore;
+  store?: CacheStore;
   /** File store directory, resolved against the project root. */
   dir?: string;
   /**
@@ -1059,36 +1080,48 @@ export interface StoredArtifact {
  * an API) receives every artifact as it is produced — not after the run — and
  * returns its own reference, which the report records as the artifact's
  * `ref` beside the local path. The cloud seam for evidence, the way
- * `TraceCacheStore` is for traces. A failed `put` never fails the run: the
+ * `CacheStore` is for the replay cache. A failed `put` never fails the run: the
  * record simply carries no `ref`. Like every live value, a store never
  * crosses a process boundary.
  */
 export interface ArtifactStore {
   put(artifact: StoredArtifact): Promise<{ readonly ref: string }>;
-}
-
-/** Artifact kinds a config may ask for. Video has its own `video` option. */
-export type ConfiguredArtifactKind = 'trace' | 'screenshot';
-
-/** Options of the `trace` artifact. */
-export interface TraceArtifactConfig {
   /**
-   * Which attempts record a trace: every attempt (`all`, the default), or
-   * only retries (`retries`), like Playwright's `on-all-retries`. Under
-   * `retries` a first attempt runs without the recording's cost, so a
-   * failure the runner does not retry and an `e2e mcp` session record none.
+   * Receives a video a hosted service keeps (a browser or device provider's
+   * own recording): a link with no bytes, so `put` never sees it. Returns a
+   * reference the report records as the artifact's `ref` beside its `url`.
+   * Optional: without it a link is only recorded. A passed attempt's link
+   * under `retain-on-failure` is never handed over, since the report leaves
+   * it out. A failed `putLink` never fails the run, like `put`.
    */
-  record?: 'all' | 'retries';
+  putLink?(link: StoredArtifactLink): Promise<{ readonly ref: string }>;
 }
 
-/** Artifact configuration: which kinds to capture, and where they go. */
+/** One provider-hosted recording, handed to `store.putLink` once the attempt stopped it. */
+export interface StoredArtifactLink {
+  readonly kind: 'video';
+  /** The `http(s)` URL the service serves the recording from. */
+  readonly url: string;
+  readonly mediaType: string;
+  /** A recording masks nothing, so a link is always `incomplete`. */
+  readonly redaction: 'incomplete';
+  readonly runId: string;
+  readonly testId: string;
+  readonly attemptId: string;
+  /** When the recording started, as an ISO timestamp. */
+  readonly startedAt: string;
+  /** The step that was running when the recording was registered, if any. */
+  readonly stepId?: string;
+}
+
+/**
+ * Where artifacts go. What is recorded is not configured here: `trace` and
+ * `video` choose the recordings, and a failure's screenshot and screen text
+ * are captured whenever the engine can.
+ */
 export interface ArtifactsConfig {
-  /** Kinds to capture; defaults to screenshot and trace. */
-  kinds?: readonly ConfiguredArtifactKind[];
   /** Host store every produced artifact is handed to; omit it to keep files local only. */
   store?: ArtifactStore;
-  /** Options of the `trace` kind; ignored unless `trace` is among the kinds. */
-  trace?: TraceArtifactConfig;
 }
 
 /**
@@ -1162,7 +1195,7 @@ export interface FinishedRun {
   readonly projectRoot: string;
   /** Where `report.json` was written; undefined when the write failed or config never loaded. */
   readonly reportPath: string | undefined;
-  /** Absolute directory the report's artifact paths are relative to. */
+  /** Absolute directory the report's artifact paths are relative to: `<output>/artifacts`. */
   readonly artifactsRoot: string;
   /** Where `--ai-trace` wrote the run's model calls, when it was requested. */
   readonly aiTracePath: string | undefined;
@@ -1203,13 +1236,11 @@ export interface Reporter {
 }
 
 export interface E2EConfig {
-  /** The config format this runner implements: `'0.1'`. */
-  specVersion?: '0.1';
   /** Stable project id, 1 through 256 characters; defaults to the root `package.json` name. */
   projectId?: string;
   /** The surfaces tests run on; required, at least one, each naming its engine. */
   targets: readonly Target[];
-  /** Test file globs relative to the project root (`*`, `?`, and a whole `**` segment); default every `*.e2e.ts` under `tests/`. */
+  /** Test file globs relative to the project root (`*`, `?`, and a whole `**` segment; a leading `!` excludes); default every `*.e2e.ts` under `tests/`. */
   tests?: string | readonly string[];
   /** Test attempt deadline in milliseconds; default 120000. */
   timeout?: number;
@@ -1225,16 +1256,34 @@ export interface E2EConfig {
   retries?: number;
   /** Parallel workers, 1 through 1024; default 1 in CI, else half the cores. An engine may cap it lower. */
   workers?: number;
-  /** Artifact kinds, or `{ kinds, store, trace }` to also hand every artifact to a host store. */
-  artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
+  /** `{ store }` hands every artifact to a host store as it is produced. */
+  artifacts?: ArtifactsConfig;
+  /**
+   * Which attempts record a trace; default `on`, `on-first-retry` in CI. A
+   * target's `trace` wins over it, `--trace [mode]` over both, and a test's
+   * own `trace` over all. Applies to the targets whose engine can trace.
+   */
+  trace?: RecordingMode;
   /**
    * Which attempts record a video; default `off`. A target's `video` wins
    * over it, `--video [mode]` over both, and a test's own `video` over all.
+   * Applies to the targets whose engine can record.
    */
-  video?: VideoMode;
+  video?: RecordingMode;
   /**
-   * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
-   * `markdown` writes `.e2e/summary.md`, `json` prints the report and
+   * The directory a run writes its results to, relative to the project root;
+   * default `.e2e`. It holds `report.json`, `junit.xml`, `summary.md`,
+   * `ai-trace.json`, `artifacts/` (cleared at the start of every run),
+   * `sessions/`, and the `e2e mcp` session videos under `videos/`.
+   * `--output <dir>` overrides it for one run. It must be inside the project
+   * root and not the root itself, may not hold a test glob's directory, and
+   * is independent of `cache.dir`, which may sit inside it but not under a
+   * directory the run clears.
+   */
+  output?: string;
+  /**
+   * Output renderers and reporter objects. `junit` writes `<output>/junit.xml`,
+   * `markdown` writes `<output>/summary.md`, `json` prints the report and
    * excludes `list`; a `Reporter` object runs
    * beside them and `--reporter` never removes it.
    */
@@ -1250,7 +1299,7 @@ export interface E2EConfig {
    */
   agents?: Readonly<Record<string, AgentConfig | StepExecutor>>;
   /**
-   * The adaptive trace cache. Opt-out: unset means
+   * The adaptive replay cache. Opt-out: unset means
    * `read-write`, and `'off'` disables it, as does the `--no-cache` flag,
    * which wins over the config. A string is shorthand for `{ mode }`. In CI an
    * unset mode is demoted to `read-only`: a committed cache is untrusted

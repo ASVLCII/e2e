@@ -667,7 +667,8 @@ describe('web platform integration', () => {
     const error = result.attempts[0]!.error;
     expect(error?.code).toBe('ACTION_FAILED');
     const triggerMs = Number(/^no download started within 500ms; the trigger resolved after (\d+)ms$/.exec(error?.message ?? '')?.[1]);
-    expect(triggerMs).toBeGreaterThanOrEqual(200);
+    // The trigger sleeps 200ms; a timer can fire a millisecond or two early.
+    expect(triggerMs).toBeGreaterThanOrEqual(190);
   });
 
   it('sets a viewport before the first navigation without opening a page', () => {

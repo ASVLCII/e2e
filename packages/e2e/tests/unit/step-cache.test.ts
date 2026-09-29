@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { flushStagedTraces, type AgentCacheContext } from '../../src/cache/context.ts';
-import { FileTraceCacheStore, MAX_CACHE_WIRE_BYTES } from '../../src/cache/store.ts';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '../../src/cache/store.ts';
 import { buildTraceEntry, type ActionTrace, type TraceEntry } from '../../src/cache/trace.ts';
 import { recordedVerdictOf, StepTraceSession, type StepCacheHost, type StepCacheOptions } from '../../src/agent/step-cache.ts';
 import { AgentError } from '../../src/agent/error.ts';
@@ -625,7 +625,7 @@ describe('StepTraceSession', () => {
 
   it('leaves the entry file untouched across replays and rewrites it after a hand-off the executor healed', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'e2e-step-cache-'));
-    const store = new FileTraceCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: true });
+    const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: true });
     const context = (): AgentCacheContext => ({
       mode: 'read-write',
       store,
@@ -767,7 +767,7 @@ describe('destination path settling', () => {
 describe('flushStagedTraces and a re-recorded flow', () => {
   it('leaves an entry the same flow re-recorded untouched, and replaces it when the actions change', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'e2e-flush-'));
-    const store = new FileTraceCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: true });
+    const store = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: true });
     const context = (): AgentCacheContext => ({
       mode: 'read-write',
       store,

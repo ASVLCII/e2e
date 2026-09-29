@@ -8,7 +8,9 @@
 import { engineBrand } from '../internal/brands.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { obj } from '../internal/objects.ts';
+import { isSecret } from '../secrets.ts';
 import { ENGINE_SPI_VERSION, LOCATOR_ACTION_KINDS, POINTER_ACTION_KINDS } from './contract.ts';
+import type { Secret } from '../types.ts';
 import type { Engine, EngineAppDeclaration, EngineCapability, EngineHandle } from './index.ts';
 
 /** Every key an engine may declare; anything else is rejected at config load. */
@@ -30,6 +32,7 @@ const KNOWN_KEYS = [
   'state',
   'artifacts',
   'app',
+  'secrets',
   'session',
   'prepare',
   'finish',
@@ -135,6 +138,20 @@ function appDeclaration(name: string, value: unknown): Record<string, unknown> {
   return declaration;
 }
 
+/** Validates the `secrets` declaration: a list of `Secret` handles, each name once. */
+function declaredSecrets(name: string, value: unknown): readonly Secret[] {
+  if (!Array.isArray(value)) throw invalid(name, 'secrets must be an array of secrets.get() handles');
+  const seen = new Set<string>();
+  const declared: Secret[] = [];
+  for (const secret of value as readonly unknown[]) {
+    if (!isSecret(secret)) throw invalid(name, 'secrets lists a value that is not a secrets.get() handle');
+    if (seen.has(secret.name)) continue;
+    seen.add(secret.name);
+    declared.push(secret);
+  }
+  return Object.freeze(declared);
+}
+
 /** Validates a declared kind list (`actions`, `pointerActions`): a non-empty list of known kinds, each once. */
 function declaredKinds<Kind extends string>(
   name: string,
@@ -172,7 +189,7 @@ export function defineEngine(spec: Engine): EngineHandle {
   }
   const name = spec.name;
   if (typeof spec.version !== 'string' || spec.version.trim() === '') {
-    throw invalid(name, 'version must be a non-empty string; it is provenance and keys the trace cache');
+    throw invalid(name, 'version must be a non-empty string; it is provenance and keys the replay cache');
   }
   if (spec.spiVersion !== ENGINE_SPI_VERSION) {
     throw invalid(
@@ -303,6 +320,7 @@ export function defineEngine(spec: Engine): EngineHandle {
     capabilities.add('artifacts');
   }
   if (spec.app !== undefined) handle['app'] = appDeclaration(name, spec.app);
+  if (spec.secrets !== undefined) handle['secrets'] = declaredSecrets(name, spec.secrets);
   if (spec.session !== undefined) handle['session'] = hookManifest(name, 'session', spec.session);
 
   // Assembled key by key above, so the record is an Engine by construction.

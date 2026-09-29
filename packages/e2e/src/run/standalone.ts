@@ -8,7 +8,6 @@
  * module only borrows its session lifecycle.
  */
 
-import path from 'node:path';
 import type { ExecutorAttempt } from '../agent/executor.ts';
 import type { AgentContext } from '../agent/invocation.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
@@ -25,10 +24,11 @@ import { TargetExecutor, type ClosingRecord } from './execute.ts';
 import { createFixtures } from './fixtures.ts';
 import type { EnginePrepareResult } from '../engine/index.ts';
 import type { ProcessPool } from './process-pool.ts';
-import { PreparedEngines, startDeclaredProcesses, validateEngine, type AppProcesses } from './provision.ts';
-import { attemptVideo } from './video.ts';
+import { PreparedEngines, recordingNotices, startDeclaredProcesses, validateEngine, type AppProcesses } from './provision.ts';
+import { attemptRecording, type AttemptRecording, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
+import { outputLayout } from './output.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
 import { WorkerModels } from './worker-models.ts';
 
@@ -41,8 +41,6 @@ export interface StandaloneAttemptOptions {
   readonly signal: AbortSignal;
   /** How long the attempt may live; every fixture operation is capped by it. */
   readonly timeoutMs: number;
-  /** Where artifacts land, normally `<projectRoot>/.e2e/artifacts`. */
-  readonly artifactsRoot: string;
   /** The configured agent the `agent` fixture runs as when a call names none; default the run's first. */
   readonly agent?: string | undefined;
   /** Who starts the declared app processes: each for this attempt alone by default, or a host's `SharedAppProcesses` to share them across attempts. */
@@ -87,9 +85,10 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   const runId = uuidv7();
   const attemptId = uuidv7();
 
-  validateEngine(target, config);
-  // No test and no retry loop: the one attempt records what the target's mode says a first attempt does.
-  const video = attemptVideo(target.video, 0);
+  // A session says what it will not record, as a run does at plan time.
+  const grade = validateEngine(target);
+  for (const message of recordingNotices([{ target, pairs: [] }], new Map([[target.name, grade]]))) notice(target.name, message);
+  const recordings = { trace: sessionRecording(target.trace), video: sessionRecording(target.video) };
   // The secret registry is process-wide, as in a run: `credentials.user()` and `secrets.get()`
   // resolve while the attempt is open.
   const releaseRegistry = holdSecretRegistry(config);
@@ -112,12 +111,13 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
     throw cause;
   }
 
-  const sessionStore = SessionStore.create(runId, path.join(config.projectRoot, '.e2e', 'sessions'));
+  const layout = outputLayout(config.output);
+  const sessionStore = SessionStore.create(runId, layout.sessions);
   const executor = new TargetExecutor({
     config,
     target,
     runId,
-    artifactsRoot: options.artifactsRoot,
+    artifactsRoot: layout.artifacts,
     sessionStore,
     headed: options.headed,
     workerSlot: 0,
@@ -137,7 +137,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   });
   let session: TargetSession | undefined;
   const artifacts = createAttemptArtifacts({
-    artifactsRoot: options.artifactsRoot,
+    artifactsRoot: layout.artifacts,
     segments: [target.name, 'sessions', attemptId],
     attemptId,
     currentStepId: () => steps.currentStepId,
@@ -162,7 +162,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   };
 
   try {
-    session = await executor.launchSession({ session: undefined, video, attemptIndex: 0 }, attemptId, artifacts.dir, signal);
+    session = await executor.launchSession({ session: undefined, recordings }, attemptId, artifacts.dir, signal);
   } catch (cause) {
     await executor.dispose();
     await teardownProcesses();
@@ -213,7 +213,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
         attemptEnd.abort();
         const record: ClosingRecord = { status: 'passed', cleanup: 'complete' };
         try {
-          await executor.closeSession(session, { attemptId, video }, record, artifacts.sink, cleanupErrors);
+          await executor.closeSession(session, { attemptId, recordings }, record, artifacts.sink, cleanupErrors);
           await executor.dispose();
           cleanupErrors.push(...executor.collectedRunErrors().map((runError) => runError.error));
           await artifacts.settle();
@@ -226,4 +226,15 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
       return closing;
     },
   };
+}
+
+/**
+ * What the standalone attempt records of one kind: what the mode says a first
+ * attempt does, since there is no retry loop. The attempt always closes as
+ * passed, so a recording kept only on failure would be made and deleted, and
+ * is not made at all.
+ */
+function sessionRecording(recording: ResolvedRecording): AttemptRecording | undefined {
+  const planned = attemptRecording(recording, 0);
+  return planned?.keep === 'on-failure' ? undefined : planned;
 }

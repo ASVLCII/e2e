@@ -67,7 +67,7 @@ export interface MobileOptions {
    */
   readonly appPath?: string | undefined;
   /**
-   * Stable identity keying trace cache and session entries; defaults to `app`,
+   * Stable identity keying replay cache and session entries; defaults to `app`,
    * else `appPath`. Declare one when the pinned app differs per run (a build
    * path with a version in it) so entries survive the rename.
    */

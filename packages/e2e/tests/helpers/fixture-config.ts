@@ -3,7 +3,7 @@
 import type { EngineHandle } from '../../src/engine/index.ts';
 import type { E2EConfig } from '../../src/index.ts';
 
-/** A config whose one target is `engine`, with no artifact kinds; `extra` overrides the rest. */
+/** A config whose one target is `engine`; `extra` overrides the rest. */
 export function engineConfig(engine: EngineHandle, extra: Partial<E2EConfig> = {}): Partial<E2EConfig> {
-  return { targets: [{ name: 'fake', platform: 'fake', engine }], artifacts: [], ...extra };
+  return { targets: [{ name: 'fake', platform: 'fake', engine }], ...extra };
 }

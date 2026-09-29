@@ -7,26 +7,24 @@ import { envFlag } from '../internal/env.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { canonicalDigest, sha256Hex } from '../internal/ids.ts';
 import { didYouMean } from '../internal/suggest.ts';
-import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
+import { isRecordingMode, RECORDING_MODES, type RecordingKind, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
-import { compileGlob } from '../internal/globs.ts';
+import { compileGlob, compileGlobList, literalPrefix } from '../internal/globs.ts';
 import { boundedInt, describeValue, positiveInt } from './validate.ts';
 import type {
   ArtifactStore,
   ArtifactsConfig,
   BuiltinReporter,
   CacheMode,
-  ConfiguredArtifactKind,
   E2EConfig,
   ModelInstance,
   Reporter,
   SecretProvider,
   SecretPurpose,
+  RecordingMode,
   Target,
-  TraceCacheStore,
-  TraceArtifactConfig,
-  VideoMode,
+  CacheStore,
 } from '../types.ts';
 import { isEngineHandle, type EngineHandle } from '../engine/index.ts';
 import {
@@ -51,8 +49,10 @@ export interface ResolvedTarget {
   readonly engine: EngineHandle | undefined;
   /** The app under test, resolved from the engine's declaration. */
   readonly app: ResolvedApp;
+  /** Which attempts on the target record a trace: `--trace`, else the target's `trace`, else the config's, else `on` (`on-first-retry` in CI). A test's own `trace` wins over it. */
+  readonly trace: ResolvedRecording;
   /** Which attempts on the target record a video: `--video`, else the target's `video`, else the config's, else `off`. A test's own `video` wins over it. */
-  readonly video: VideoMode;
+  readonly video: ResolvedRecording;
 }
 
 /** A named account; its password is the `ResolvedSecret` of the same name. */
@@ -69,18 +69,7 @@ export interface ResolvedSecret {
   readonly value: string | SecretProvider;
 }
 
-/**
- * How firmly the run asks for one artifact kind. The default set (screenshot
- * and trace) is `best-effort`: an engine without evidence capture records
- * none, and a recording that cannot be finalized is dropped quietly. A kind
- * named in the config, or added by `--video`, is `required`: an engine that
- * cannot produce it fails the run before any test starts, and a recording
- * that cannot be finalized is a cleanup failure the report shows.
- */
-type ArtifactPolicy = 'best-effort' | 'required';
-
 export interface ResolvedConfig {
-  readonly specVersion: '0.1';
   readonly projectId: string;
   readonly projectRoot: string;
   readonly configPath: string | undefined;
@@ -94,12 +83,10 @@ export interface ResolvedConfig {
   readonly cleanupTimeout: number;
   readonly retries: number;
   readonly workers: number;
-  /** Every artifact kind the run captures, in config order, with how firmly it is asked for. */
-  readonly artifacts: ReadonlyMap<ConfiguredArtifactKind, ArtifactPolicy>;
   /** Host store every produced artifact is handed to; undefined keeps files local only. */
   readonly artifactStore: ArtifactStore | undefined;
-  /** Which attempts record a trace: every one, or retries only. */
-  readonly traceRecord: 'all' | 'retries';
+  /** Absolute directory the run writes its results to: `--output`, else the config's `output`, else `<projectRoot>/.e2e`. */
+  readonly output: string;
   /** The built-in renderers in force: `--reporter` when given, else the config's ids. */
   readonly reporters: readonly BuiltinReporter[];
   /** The reporter objects the config names; `--reporter` never removes one. */
@@ -122,14 +109,14 @@ export interface ResolvedConfig {
 }
 
 /**
- * The resolved trace cache posture. Like executors and model instances, a
+ * The resolved replay cache posture. Like executors and model instances, a
  * custom store never crosses a process boundary: workers re-resolve the
  * config module and construct their own.
  */
 export interface ResolvedCacheConfig {
   readonly mode: CacheMode;
   /** Custom entry store; undefined selects the file store at `dir`. */
-  readonly store: TraceCacheStore | undefined;
+  readonly store: CacheStore | undefined;
   /** Absolute file store directory. */
   readonly dir: string;
   /** A recording that no longer replays fails its step with `REPLAY_STALE` instead of handing off. */
@@ -138,19 +125,23 @@ export interface ResolvedCacheConfig {
 
 /**
  * Flags that replace config keys, so workers re-resolving the config file
- * apply them too. `--headed` and `--artifacts` are run options, not config
- * overrides, and travel separately.
+ * apply them too. `--headed` is a run option, not a config
+ * override, and travels separately.
  */
 export interface CliOverrides {
   retries?: number;
   workers?: number;
   reporters?: readonly BuiltinReporter[];
-  /** Trace cache mode override; `--no-cache` maps to `'off'`. */
+  /** Replay cache mode override; `--no-cache` maps to `'off'`. */
   cache?: CacheMode;
   /** `--strict-cache`: turns `cache.strict` on for the run. */
   cacheStrict?: boolean;
+  /** `--output <dir>`: the results directory for this run, over the config's `output`. */
+  output?: string;
+  /** `--trace [mode]`: which attempts record a trace, over the config's and every target's `trace`. */
+  trace?: RecordingMode;
   /** `--video [mode]`: which attempts record a video, over the config's and every target's `video`. */
-  video?: VideoMode;
+  video?: RecordingMode;
   /** `--agent`: the configured agents unpinned tests run as, instead of `default` alone. */
   agents?: readonly string[];
 }
@@ -158,10 +149,9 @@ export interface CliOverrides {
 /** A safe artifact path segment: the filename alphabet, and never `.` or `..`, which would name a directory's self or parent. */
 const TARGET_NAME_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]+$/;
 
-const TARGET_KEYS = new Set(['name', 'platform', 'engine', 'video']);
+const TARGET_KEYS = new Set(['name', 'platform', 'engine', 'trace', 'video']);
 
 const TOP_LEVEL_KEYS = new Set([
-  'specVersion',
   'projectId',
   'targets',
   'tests',
@@ -173,6 +163,8 @@ const TOP_LEVEL_KEYS = new Set([
   'retries',
   'workers',
   'artifacts',
+  'output',
+  'trace',
   'video',
   'reporters',
   'agents',
@@ -187,6 +179,11 @@ const CACHE_MODES = new Set(['off', 'read-only', 'read-write']);
 
 const APP_BELONGS_TO_ENGINE =
   'the app under test is declared by the engine: engine: web({ url }) for a browser, mobile({ platform, app }) for a device';
+
+/** Keys this runner used to accept, each mapped to what replaces it. */
+const REMOVED_TOP_LEVEL_KEYS: ReadonlyMap<string, string> = new Map([
+  ['specVersion', 'remove it; the runner version is the format version'],
+]);
 
 /** Keys from other runners' configs, each mapped to where that fact lives here. */
 const FOREIGN_TOP_LEVEL_KEYS: Readonly<Record<string, string>> = {
@@ -253,6 +250,10 @@ export function resolveConfig(
     throw new ConfigurationError('INVALID_CONFIG', 'config must be an object');
   }
   for (const key of Object.keys(raw)) {
+    const removed = REMOVED_TOP_LEVEL_KEYS.get(key);
+    if (removed !== undefined) {
+      throw new ConfigurationError('INVALID_CONFIG', `config key "${key}" was removed; ${removed}`);
+    }
     if (!TOP_LEVEL_KEYS.has(key)) {
       throw new ConfigurationError(
         'INVALID_CONFIG',
@@ -260,14 +261,8 @@ export function resolveConfig(
       );
     }
   }
-  if (raw.specVersion !== undefined && raw.specVersion !== '0.1') {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `unsupported specVersion ${JSON.stringify(raw.specVersion)}; this runner implements 0.1`,
-    );
-  }
 
-  const targets = resolveTargets(raw, options.projectRoot, options.ports ?? {}, runVideo(raw, cli));
+  const targets = resolveTargets(raw, options.projectRoot, options.ports ?? {}, runRecordings(raw, cli, ci));
   const tests = normalizeTests(raw.tests);
 
   const timeout = positiveInt(raw.timeout, 'timeout', 'milliseconds') ?? 120_000;
@@ -287,11 +282,12 @@ export function resolveConfig(
     boundedInt(raw.workers, 'workers', 1, 1024) ??
     (ci ? 1 : Math.max(1, Math.floor(os.availableParallelism() / 2)));
 
-  const { artifacts, artifactStore, traceRecord } = resolveArtifactsConfig(raw);
+  const artifactStore = resolveArtifactStore(raw);
   const { reporters, customReporters } = resolveReporters(raw, cli);
 
   const projectId = resolveProjectId(raw.projectId, options.projectRoot);
   const { credentials, secrets } = resolveSecrets(raw, env);
+  checkEngineSecrets(targets, secrets);
   // Limits first: the agent context budget is a limits key, and the resolved
   // observation budget is agent-owned, so the dependency runs one way.
   const baseLimits = resolveLimits(raw);
@@ -304,9 +300,9 @@ export function resolveConfig(
     maxObservationBytes: Math.max(...[...agents.values()].map((entry) => entry.maxObservationBytes)),
   };
   const cache = resolveCacheConfig(raw, ci, options.projectRoot, cli.cache, cli.cacheStrict === true);
+  const output = resolveOutput(raw.output, cli.output, options.projectRoot, cache.dir, tests);
 
   const resolved: ResolvedConfig = {
-    specVersion: '0.1',
     projectId,
     projectRoot: options.projectRoot,
     configPath: options.configPath,
@@ -320,9 +316,8 @@ export function resolveConfig(
     cleanupTimeout,
     retries,
     workers,
-    artifacts,
     artifactStore,
-    traceRecord,
+    output,
     reporters,
     customReporters,
     agentNames,
@@ -375,7 +370,7 @@ function resolveCacheConfig(
   let mode: CacheMode = 'read-write';
   /** Whether the config named a mode; only a defaulted mode is demoted in CI. */
   let explicit = false;
-  let store: TraceCacheStore | undefined;
+  let store: CacheStore | undefined;
   let dir: string | undefined;
   let strict = false;
   if (typeof value === 'string') {
@@ -399,10 +394,10 @@ function resolveCacheConfig(
     mode = value.mode ?? 'read-write';
     explicit = value.mode !== undefined;
     store = value.store;
-    if (store !== undefined && !isTraceCacheStore(store)) {
+    if (store !== undefined && !isCacheStore(store)) {
       throw new ConfigurationError(
         'INVALID_CONFIG',
-        'cache.store must implement TraceCacheStore: { writable, read(keyHash), write(keyHash, payload) }',
+        'cache.store must implement CacheStore: { writable, read(keyHash), write(keyHash, payload) }',
       );
     }
     if (value.dir !== undefined) {
@@ -434,115 +429,171 @@ function resolveCacheConfig(
   };
 }
 
-/** The default artifact set, captured best-effort. */
-const DEFAULT_ARTIFACT_KINDS = ['screenshot', 'trace'] as const;
-const ARTIFACT_KINDS: readonly ConfiguredArtifactKind[] = ['screenshot', 'trace'];
-const ARTIFACTS_KEYS = new Set(['kinds', 'store', 'trace']);
-const TRACE_KEYS = new Set(['record']);
-const TRACE_RECORD_VALUES = ['all', 'retries'] as const;
+/** The directories under the output a run clears or owns, which nothing else may live in. */
+const OUTPUT_OWNED_DIRS = ['artifacts', 'sessions', 'videos'] as const;
+
+/** Whether `inner` is `outer` or a path below it. */
+function isWithin(inner: string, outer: string): boolean {
+  const relative = path.relative(outer, inner);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * Resolves the results directory, `--output` over the config's `output`,
+ * from the project root. A run clears `<output>/artifacts` and writes over
+ * its reports, so the directory must be one it can own: inside the project
+ * root and not the root itself, not holding the directory a test glob scans,
+ * not the cache directory or inside it, and not wrapping the cache in a
+ * directory the run clears or owns.
+ */
+function resolveOutput(
+  configured: unknown,
+  flag: string | undefined,
+  projectRoot: string,
+  cacheDir: string,
+  tests: readonly string[],
+): string {
+  const where = flag === undefined ? 'output' : '--output';
+  const value: unknown = flag ?? configured;
+  if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} must be a non-empty path relative to the project root, got ${describeValue(value)}`);
+  }
+  const output = path.resolve(projectRoot, (value as string | undefined) ?? '.e2e');
+  const refuse = (reason: string): never => {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} ${JSON.stringify(value)} ${reason}`);
+  };
+  if (output === projectRoot) refuse("is the project root; the run clears <output>/artifacts, so name a directory of its own, such as '.e2e'");
+  if (!isWithin(output, projectRoot)) refuse(`is outside the project root ${projectRoot}; name a directory inside it`);
+  if (isWithin(output, cacheDir)) refuse(`is the cache directory ${path.relative(projectRoot, cacheDir)} or inside it; keep results and the replay cache apart`);
+  for (const owned of OUTPUT_OWNED_DIRS) {
+    if (isWithin(cacheDir, path.join(output, owned))) {
+      refuse(`would hold cache.dir ${path.relative(projectRoot, cacheDir)} under ${owned}/, which the run owns; move cache.dir or the output`);
+    }
+  }
+  for (const pattern of tests) {
+    if (pattern.startsWith('!')) continue;
+    const glob = compileGlob(pattern);
+    const names = literalPrefix(glob);
+    const root = path.join(projectRoot, ...(names.length === glob.segments.length ? names.slice(0, -1) : names));
+    if (isWithin(root, output)) {
+      refuse(`holds ${path.relative(projectRoot, root) || '.'}, where the tests glob ${JSON.stringify(pattern)} finds test files; name a directory outside it`);
+    }
+  }
+  return output;
+}
+
+const ARTIFACTS_KEYS = new Set(['store']);
 
 /** Where a video fact lives now, for a config that still says it the old way. */
 const VIDEO_MOVED =
   "video is its own option: video: 'on' in the config or on a target, video: 'retain-on-failure' to keep only failed attempts' recordings, or --video [mode] for one run";
 
+/** The modes, as a sentence fragment every message that names one reads. */
+const MODES_LIST = RECORDING_MODES.join(', ');
+
 /**
- * Resolves the `artifacts` key: a bare array of kinds, or `{ kinds, store,
- * trace }` where `store` is the host seam every produced artifact is handed
- * to and `trace` holds the trace's recording options. Named kinds are
- * required; the default set (screenshot and trace) is best-effort. A store
- * is a live value validated structurally, like `cache.store`. Video is not
- * an artifact kind: `artifacts.kinds: ['video']` and `artifacts.video` are
- * refused with where the fact lives now.
+ * What replaces a removed artifact kinds list, from what the list held: the
+ * trace mode it amounted to, the video option for a `video` kind, and the
+ * failure screenshot a list without `screenshot` used to turn off.
  */
-function resolveArtifactsConfig(raw: E2EConfig): {
-  artifacts: ReadonlyMap<ConfiguredArtifactKind, ArtifactPolicy>;
-  artifactStore: ArtifactStore | undefined;
-  traceRecord: 'all' | 'retries';
-} {
+function kindsReplacement(kinds: unknown): string {
+  const listed = Array.isArray(kinds) ? (kinds as readonly unknown[]) : [];
+  const parts = [
+    `write trace: '${listed.includes('trace') ? 'on' : 'off'}' at the config root instead (the modes are ${MODES_LIST})`,
+  ];
+  if (listed.includes('video')) parts.push(VIDEO_MOVED);
+  if (!listed.includes('screenshot')) parts.push('failure screenshots are always captured now');
+  return parts.join('; ');
+}
+
+/** What replaces a removed `artifacts.trace` block: the trace mode its `record` meant. */
+function traceBlockReplacement(trace: unknown): string {
+  const record = typeof trace === 'object' && trace !== null ? (trace as { record?: unknown }).record : undefined;
+  const mode = record === 'retries' ? 'on-all-retries' : 'on';
+  return `write trace: '${mode}' at the config root instead (the modes are ${MODES_LIST})`;
+}
+
+/**
+ * Resolves the `artifacts` key, `{ store }`: the host seam every produced
+ * artifact is handed to, a live value validated structurally like
+ * `cache.store`. What is recorded is not an artifacts fact: the old kinds
+ * list (bare or as `kinds`) and the `trace` block are refused with the
+ * `trace` mode they meant, and `video` with the option that replaced it.
+ */
+function resolveArtifactStore(raw: E2EConfig): ArtifactStore | undefined {
   const value: unknown = raw.artifacts;
-  let kinds: unknown = value;
-  let store: ArtifactStore | undefined;
-  let trace: unknown;
-  if (value !== undefined && !Array.isArray(value)) {
-    if (!isArtifactsObject(value)) {
-      throw new ConfigurationError('INVALID_CONFIG', 'artifacts must be an array of artifact kinds or { kinds, store, trace }');
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    throw new ConfigurationError('INVALID_CONFIG', `artifacts no longer lists kinds; ${kindsReplacement(value)}`);
+  }
+  if (typeof value !== 'object' || value === null) {
+    throw new ConfigurationError('INVALID_CONFIG', 'artifacts must be { store }');
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'kinds') {
+      throw new ConfigurationError('INVALID_CONFIG', `artifacts.kinds was removed; ${kindsReplacement(entry)}`);
     }
-    for (const key of Object.keys(value)) {
-      if (key === 'video') throw new ConfigurationError('INVALID_CONFIG', `artifacts.video is gone; ${VIDEO_MOVED}`);
-      if (!ARTIFACTS_KEYS.has(key)) {
-        throw new ConfigurationError(
-          'INVALID_CONFIG',
-          `unknown artifacts config key "${key}"${didYouMean(key, [...ARTIFACTS_KEYS])}`,
-        );
-      }
+    if (key === 'trace') {
+      throw new ConfigurationError('INVALID_CONFIG', `artifacts.trace was removed; ${traceBlockReplacement(entry)}`);
     }
-    kinds = value.kinds;
-    store = value.store;
-    trace = value.trace;
-    if (store !== undefined && !isArtifactStore(store)) {
+    if (key === 'video') throw new ConfigurationError('INVALID_CONFIG', `artifacts.video is gone; ${VIDEO_MOVED}`);
+    if (!ARTIFACTS_KEYS.has(key)) {
       throw new ConfigurationError(
         'INVALID_CONFIG',
-        'artifacts.store must implement ArtifactStore: { put(artifact) }',
+        `unknown artifacts config key "${key}"${didYouMean(key, [...ARTIFACTS_KEYS])}`,
       );
     }
   }
-  const resolved = (kinds ?? DEFAULT_ARTIFACT_KINDS) as readonly unknown[];
-  if (!Array.isArray(resolved)) {
-    throw new ConfigurationError('INVALID_CONFIG', 'artifacts kinds must be an array of artifact kinds');
+  const store = (value as ArtifactsConfig).store;
+  if (store !== undefined && !isArtifactStore(store)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      'artifacts.store must implement ArtifactStore: { put(artifact), putLink?(link) }',
+    );
   }
-  for (const artifact of resolved) {
-    if (artifact === 'video') throw new ConfigurationError('INVALID_CONFIG', `"video" is no longer an artifact kind; ${VIDEO_MOVED}`);
-    if (!(ARTIFACT_KINDS as readonly unknown[]).includes(artifact)) {
-      throw new ConfigurationError('INVALID_CONFIG', `unknown artifact kind "${String(artifact)}"`);
-    }
-  }
-  const policy: ArtifactPolicy = kinds === undefined ? 'best-effort' : 'required';
-  const artifacts = new Map((resolved as readonly ConfiguredArtifactKind[]).map((kind) => [kind, policy] as const));
-  return { artifacts, artifactStore: store, traceRecord: resolveTraceRecord(trace) };
+  return store;
 }
 
-/** Checks one `video` value: a mode, or undefined when the key is unset. */
-function videoMode(value: unknown, where: string): VideoMode | undefined {
+/** Checks one `trace` or `video` value: a mode, or undefined when the key is unset. */
+function recordingMode(value: unknown, where: string): RecordingMode | undefined {
   if (value === undefined) return undefined;
-  if (!isVideoMode(value)) {
-    throw new ConfigurationError('INVALID_CONFIG', `${where} must be one of ${VIDEO_MODES.join(', ')}, got ${describeValue(value)}`);
+  if (!isRecordingMode(value)) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} must be one of ${MODES_LIST}, got ${describeValue(value)}`);
   }
   return value;
 }
 
-/** The run's video mode before any target speaks: `--video`, else the config's `video`; undefined when neither says. */
-function runVideo(raw: E2EConfig, cli: CliOverrides): { readonly cli: VideoMode | undefined; readonly config: VideoMode | undefined } {
-  return { cli: videoMode(cli.video, '--video'), config: videoMode(raw.video, 'video') };
+/** One kind's modes before any target speaks: the flag, the config root, and the default under both. */
+interface RunRecording {
+  readonly cli: RecordingMode | undefined;
+  readonly config: RecordingMode | undefined;
+  readonly fallback: RecordingMode;
 }
 
-/** Validates the `artifacts.trace` block; absent means every attempt records one. */
-function resolveTraceRecord(value: unknown): 'all' | 'retries' {
-  if (value === undefined) return 'all';
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ConfigurationError('INVALID_CONFIG', 'artifacts.trace must be an object');
-  }
-  for (const key of Object.keys(value)) {
-    if (!TRACE_KEYS.has(key)) {
-      throw new ConfigurationError(
-        'INVALID_CONFIG',
-        `unknown artifacts.trace config key "${key}"${didYouMean(key, [...TRACE_KEYS])}`,
-      );
-    }
-  }
-  const record = (value as TraceArtifactConfig).record;
-  if (record === undefined) return 'all';
-  if (!(TRACE_RECORD_VALUES as readonly unknown[]).includes(record)) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `artifacts.trace.record must be one of ${TRACE_RECORD_VALUES.join(', ')}, got ${JSON.stringify(record)}`,
-    );
-  }
-  return record;
+/**
+ * The run's `trace` and `video` modes before any target speaks. A trace is
+ * on by default locally and recorded on the first retry in CI, where a
+ * trace of every attempt is the cost of a large share of the run.
+ */
+function runRecordings(raw: E2EConfig, cli: CliOverrides, ci: boolean): Readonly<Record<RecordingKind, RunRecording>> {
+  return {
+    trace: { cli: recordingMode(cli.trace, '--trace'), config: recordingMode(raw.trace, 'trace'), fallback: ci ? 'on-first-retry' : 'on' },
+    video: { cli: recordingMode(cli.video, '--video'), config: recordingMode(raw.video, 'video'), fallback: 'off' },
+  };
 }
 
-/** The `{ kinds, store }` form, as opposed to the bare kinds array. */
-function isArtifactsObject(value: unknown): value is ArtifactsConfig {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * A target's effective mode of one kind, with where it came from: the flag,
+ * else the target's own, else the config root's, else the default. The
+ * target's own is checked whether or not the flag wins over it, so a flag
+ * never hides a config mistake.
+ */
+function targetRecording(run: RunRecording, own: unknown, where: string): ResolvedRecording {
+  const target = recordingMode(own, where);
+  if (run.cli !== undefined) return { mode: run.cli, source: 'run' };
+  if (target !== undefined) return { mode: target, source: 'target' };
+  if (run.config !== undefined) return { mode: run.config, source: 'run' };
+  return { mode: run.fallback, source: 'default' };
 }
 
 
@@ -603,12 +654,13 @@ function isArtifactStore(value: unknown): value is ArtifactStore {
   return (
     typeof value === 'object' &&
     value !== null &&
-    typeof (value as { put?: unknown }).put === 'function'
+    typeof (value as { put?: unknown }).put === 'function' &&
+    ['undefined', 'function'].includes(typeof (value as { putLink?: unknown }).putLink)
   );
 }
 
 /** Structural store check, mirroring how executors and models are detected. */
-function isTraceCacheStore(value: unknown): value is TraceCacheStore {
+function isCacheStore(value: unknown): value is CacheStore {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
@@ -623,7 +675,7 @@ function resolveTargets(
   raw: E2EConfig,
   projectRoot: string,
   ports: PortAssignments,
-  video: { readonly cli: VideoMode | undefined; readonly config: VideoMode | undefined },
+  recordings: Readonly<Record<RecordingKind, RunRecording>>,
 ): readonly ResolvedTarget[] {
   if (raw.targets === undefined) {
     throw new ConfigurationError(
@@ -647,7 +699,7 @@ function resolveTargets(
           : didYouMean(key, [...TARGET_KEYS]);
         throw new ConfigurationError(
           'INVALID_CONFIG',
-          `${where} has unknown key "${key}"; a target is { name?, platform?, engine?, video? }${hint}`,
+          `${where} has unknown key "${key}"; a target is { name?, platform?, engine?, trace?, video? }${hint}`,
         );
       }
     }
@@ -676,15 +728,14 @@ function resolveTargets(
     }
     seen.add(name);
     if (target.name === undefined) defaulted.add(name);
-    // Checked whether or not `--video` wins over it, so a flag never hides a config mistake.
-    const ownVideo = videoMode(target.video, `${where} video`);
     return {
       name,
       index,
       platform,
       engine: target.engine,
       app: resolveTargetApp(name, target.engine, projectRoot, ports[name]),
-      video: video.cli ?? ownVideo ?? video.config ?? 'off',
+      trace: targetRecording(recordings.trace, target.trace, `${where} trace`),
+      video: targetRecording(recordings.video, target.video, `${where} video`),
     };
   });
 }
@@ -744,7 +795,12 @@ function normalizeTests(tests: unknown): readonly string[] {
         `tests must be a glob or a list of globs relative to the project root, got ${describeValue(glob)} in the list`,
       );
     }
-    compileGlob(glob);
+  }
+  if (compileGlobList(list).include.length === 0) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `tests has only "!" exclusions, which select nothing; add a glob that selects files, such as ["tests/**/*.e2e.ts", ${list.map((glob) => JSON.stringify(glob)).join(', ')}]`,
+    );
   }
   return [...new Set(list)];
 }
@@ -805,6 +861,23 @@ function resolveSecrets(
     secrets.set(name, { name, purpose: 'generic-secret', value });
   }
   return { credentials, secrets };
+}
+
+/**
+ * Every secret an engine's options hold (a `secrets.get()` the config
+ * evaluated before any run existed) names a configured secret, so a typo
+ * fails the config load instead of the first attempt that resolves it.
+ */
+function checkEngineSecrets(targets: readonly ResolvedTarget[], secrets: ReadonlyMap<string, ResolvedSecret>): void {
+  for (const target of targets) {
+    for (const secret of target.engine?.secrets ?? []) {
+      if (secrets.has(secret.name)) continue;
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `target "${target.name}" engine ${target.engine!.name} uses secrets.get(${JSON.stringify(secret.name)}), which is not configured; add it to config.secrets or config.credentials${didYouMean(secret.name, [...secrets.keys()])}`,
+      );
+    }
+  }
 }
 
 /**
@@ -870,12 +943,6 @@ function resolveAgents(
   return { agents, agentNames, agent: agents.get(agentNames[0]!)! };
 }
 
-/** The artifact kinds as the digest sees them: no store. */
-function digestedArtifactKinds(artifacts: NonNullable<E2EConfig['artifacts']>): ConfiguredArtifactKind[] {
-  const kinds = isArtifactsObject(artifacts) ? artifacts.kinds : artifacts;
-  return [...(kinds ?? DEFAULT_ARTIFACT_KINDS)];
-}
-
 function computeConfigDigest(raw: E2EConfig, projectId: string): string {
   // An agent may be the executor itself; its digest identity is name/version,
   // which is exactly what survives the function-stripping JSON clone below.
@@ -886,17 +953,15 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
   // may not serialize at all. Other live values are reduced before the clone:
   // a store or a reporter may hold a client whose graph JSON cannot handle.
   //
-  // An artifact store is a live value: only the kinds are configuration, so
-  // the array and object forms digest identically and a host store never
-  // enters the digest. Nor does video, at the top or on a target: recording a
-  // run must never invalidate the traces it would otherwise replay. A reporter
-  // object changes nothing about what a run records, so it never enters the
-  // digest either; the built-in ids digest as they always have, so adding a
-  // reporter to a config leaves its cache valid.
-  const { video: _video, ...recorded } = raw;
+  // `artifacts` holds only a host store, a live value, so it never enters the
+  // digest. Nor does `output`, where results land, nor `trace` and `video`, at the top or on a target: recording
+  // a run must never invalidate the replays it would otherwise make. A
+  // reporter object changes nothing about what a run records, so it never
+  // enters the digest either; the built-in ids digest as they always have,
+  // so adding a reporter to a config leaves its cache valid.
+  const { artifacts: _artifacts, output: _output, trace: _trace, video: _video, ...recorded } = raw;
   const forClone: Record<string, unknown> = {
     ...recorded,
-    ...(raw.artifacts === undefined ? {} : { artifacts: digestedArtifactKinds(raw.artifacts) }),
     ...(Array.isArray(raw.reporters)
       ? { reporters: raw.reporters.filter((reporter) => typeof reporter === 'string') }
       : {}),
@@ -925,7 +990,7 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
       // drives (a named target inherits it, so two workers whose engines
       // declare different platforms must not agree on the digest), capability
       // set, and what it declares about the app under test.
-      const { video: _targetVideo, ...digested } = target;
+      const { trace: _targetTrace, video: _targetVideo, ...digested } = target;
       if (isEngineHandle(digested.engine)) {
         const { engine, ...rest } = digested;
         return {

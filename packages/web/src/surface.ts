@@ -30,6 +30,7 @@ import {
   type NodeRef,
   type OperationContext,
   type PointerAction,
+  type Secret,
   type SemanticNode,
   type VideoSegment,
   type ViewportPoint,
@@ -127,11 +128,16 @@ export interface WebConnectOptions {
 export interface WebBasicAuth {
   /** The user name; `:` is not allowed in one (RFC 7617). */
   readonly username: string;
-  readonly password: string;
+  /**
+   * The password, or `secrets.get(name)` for one in `config.secrets`: resolved
+   * when each attempt starts and redacted from reports, logs, and observations
+   * like any configured secret.
+   */
+  readonly password: string | Secret;
 }
 
 /** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
-export interface WebVideoOptions {
+export interface WebScreencastOptions {
   /** Frame size in pixels; default the viewport's, or the window's under `viewport: null`. A smaller size makes a smaller file. */
   readonly size?: ViewportSize;
   /** JPEG quality of each captured frame, 0 through 100; Playwright's default when unset. */
@@ -161,9 +167,10 @@ export interface WebOptions extends EngineAppDeclaration {
   /**
    * How the engine's own screencast records an attempt that records video.
    * A browser provider that records (`BrowserProvider.record`) records in
-   * its place, and ignores these.
+   * its place, and ignores these. Which attempts record is the config's
+   * `video`, not an engine option.
    */
-  readonly video?: WebVideoOptions;
+  readonly screencast?: WebScreencastOptions;
   /**
    * Attach to a remote browser over CDP instead of launching locally. Requires
    * the chromium browser (the default). Wired by a hosted-browser engine.
@@ -226,7 +233,7 @@ export class PlaywrightSurface {
   private session: AttemptSession | undefined;
   private readonly usedContexts = new Set<string>();
   private readonly viewport: ViewportSize | null;
-  private readonly video: WebVideoOptions;
+  private readonly screencast: WebScreencastOptions;
   /** Injected request headers, names lowercased so they replace the browser's own of the same name. */
   private readonly headers: Readonly<Record<string, string>> | undefined;
   private readonly basicAuth: WebBasicAuth | undefined;
@@ -249,7 +256,7 @@ export class PlaywrightSurface {
     this.leases = typeof options.browser === 'object' && options.browser !== null ? new LeasedBrowsers(options.browser) : undefined;
     this.connect = options.connect;
     this.viewport = options.viewport === undefined ? DEFAULT_VIEWPORT : options.viewport;
-    this.video = options.video ?? {};
+    this.screencast = options.screencast ?? {};
     this.headers = options.headers === undefined ? undefined : lowercaseNames(options.headers);
     this.basicAuth = options.basicAuth;
     this.testIdAttribute = options.testIdAttribute ?? DEFAULT_TEST_ID_ATTRIBUTE;
@@ -382,6 +389,13 @@ export class PlaywrightSurface {
   /** Opens one attempt owner before setup starts, so cleanup can cancel pending attachment. */
   async startAttempt(context: EngineAttemptContext): Promise<void> {
     if (this.session !== undefined) throw invalidState('an attempt is already running');
+    // Raced with the launch budget: a provider still resolving when the
+    // runner gives up must not open a session after the runner ended it.
+    const basicAuth = this.basicAuth;
+    const credentials =
+      basicAuth === undefined
+        ? undefined
+        : await raceAbort(() => httpCredentials(basicAuth, context.resolveSecret), context.signal, 'resolving the basic-auth password');
     const persistent = await this.persistentBinding(context);
     this.artifactsDir = context.artifactsDir;
     this.artifactCounter = 0;
@@ -390,11 +404,10 @@ export class PlaywrightSurface {
     const dialogs = new DialogRouter(this.latch);
     this.routes = routes;
     this.dialogs = dialogs;
-    const credentials = httpCredentials(this.basicAuth);
     const session = new AttemptSession({
       artifactsDir: context.artifactsDir,
       viewport: this.viewport,
-      video: this.video,
+      screencast: this.screencast,
       acquire: (signal) => this.acquireBrowser(signal),
       contextOptions: {
         viewport: this.viewport,

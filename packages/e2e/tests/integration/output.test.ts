@@ -1,0 +1,200 @@
+/**
+ * `output` and `--output`: every result a run writes lands under one
+ * directory, the artifact tree is cleared when a run starts, `--last-failed`
+ * reads the report there, and a store's `putLink` receives the recordings a
+ * hosted service keeps.
+ */
+
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createFakeEngine, FAKE_APP_URL } from '../helpers/fake-engine.ts';
+import { engineConfig } from '../helpers/fixture-config.ts';
+import { assertValidReport } from '../helpers/report-schema.ts';
+import { createProject, resultByTitle, runExisting, runProject } from '../helpers/run-project.ts';
+import type { StoredArtifact, StoredArtifactLink } from '../../src/index.ts';
+
+const PASSING_TEST = `import { test } from 'e2e';
+
+test('taps a node', async ({ app, screen }) => {
+  await app.open('/');
+  await screen.getByRole('button', { name: 'Submit' }).tap();
+});
+`;
+
+const FAILING_TEST = `import { test } from 'e2e';
+
+test('fails on purpose', async ({ app }) => {
+  await app.open('/');
+  throw new Error('nope');
+});
+`;
+
+const HOSTED = 'https://recordings.example/r.mp4';
+
+/** A store that records what it is handed; `putLink` throws when `failLinks` is set. */
+function capturingStore(options: { failLinks?: boolean } = {}) {
+  const puts: StoredArtifact[] = [];
+  const links: StoredArtifactLink[] = [];
+  return {
+    puts,
+    links,
+    store: {
+      async put(artifact: StoredArtifact) {
+        puts.push(artifact);
+        return { ref: `store://${artifact.kind}/${artifact.sha256.slice(0, 8)}` };
+      },
+      async putLink(link: StoredArtifactLink) {
+        links.push(link);
+        if (options.failLinks === true) throw new Error('the bucket is down');
+        return { ref: `store://link/${links.length}` };
+      },
+    },
+  };
+}
+
+describe('output', () => {
+  it(
+    'writes the report, the reporter files, and the artifacts under output, and leaves .e2e alone',
+    async () => {
+      const fake = createFakeEngine({ artifacts: true });
+      const { outcome, project } = await runProject(
+        { 'tests/fail.e2e.ts': FAILING_TEST },
+        { appUrl: FAKE_APP_URL, config: engineConfig(fake.engine, { output: 'results', reporters: ['list', 'junit', 'markdown'] }) },
+      );
+      try {
+        assertValidReport(outcome.report);
+        const output = path.join(project.dir, 'results');
+        expect(outcome.reportPath).toBe(path.join(output, 'report.json'));
+        for (const file of ['report.json', 'junit.xml', 'summary.md']) expect(existsSync(path.join(output, file)), file).toBe(true);
+        const screenshot = resultByTitle(outcome, 'fails on purpose').attempts[0]!.artifacts.find((artifact) => artifact.kind === 'screenshot')!;
+        expect(existsSync(path.join(output, 'artifacts', screenshot.path!))).toBe(true);
+        expect(existsSync(path.join(project.dir, '.e2e', 'report.json'))).toBe(false);
+        expect(existsSync(path.join(project.dir, '.e2e', 'artifacts'))).toBe(false);
+      } finally {
+        project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'clears the artifact tree when a run starts, and reads --last-failed from the output the run names',
+    async () => {
+      const project = createProject({ 'tests/pass.e2e.ts': PASSING_TEST, 'tests/fail.e2e.ts': FAILING_TEST });
+      try {
+        const config = engineConfig(createFakeEngine({ artifacts: true }).engine, { output: 'results' });
+        const first = await runExisting(project, { appUrl: FAKE_APP_URL, config });
+        expect(first.status).toBe('failed');
+        const stale = path.join(project.dir, 'results', 'artifacts', 'stale', 'left-over.txt');
+        mkdirSync(path.dirname(stale), { recursive: true });
+        writeFileSync(stale, 'from a run long ago');
+
+        const rerun = await runExisting(project, { appUrl: FAKE_APP_URL, config, runOptions: { lastFailed: true } });
+        expect(rerun.results.filter((result) => result.selected).map((result) => result.test.title)).toEqual(['fails on purpose']);
+        expect(existsSync(stale)).toBe(false);
+
+        // --output over the config: no report there yet, so nothing to rerun from.
+        const elsewhere = await runExisting(project, { appUrl: FAKE_APP_URL, config, runOptions: { lastFailed: true, output: 'other' } });
+        expect(elsewhere.report.run.errors.map((error) => error.code)).toEqual(['NO_LAST_RUN']);
+        expect(rerun.reportPath).toBe(path.join(project.dir, 'results', 'report.json'));
+      } finally {
+        project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'refuses an output the run cannot own before anything runs',
+    async () => {
+      const fake = createFakeEngine();
+      const { outcome, project } = await runProject(
+        { 'tests/pass.e2e.ts': PASSING_TEST },
+        { appUrl: FAKE_APP_URL, config: engineConfig(fake.engine, { output: '.' }) },
+      );
+      try {
+        expect(outcome.exitCode).toBe(2);
+        expect(fake.stats().attemptsStarted).toBe(0);
+        expect(outcome.report.run.errors[0]).toMatchObject({ code: 'INVALID_CONFIG', message: expect.stringContaining('output "." is the project root') });
+      } finally {
+        project.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+describe('ArtifactStore.putLink', () => {
+  it(
+    'hands a hosted recording to putLink with its identity, and records the ref beside the url',
+    async () => {
+      const fake = createFakeEngine({ video: true, videoLinks: [HOSTED] });
+      const { links, puts, store } = capturingStore();
+      const { outcome, project } = await runProject(
+        { 'tests/pass.e2e.ts': PASSING_TEST },
+        { appUrl: FAKE_APP_URL, config: engineConfig(fake.engine, { video: 'on', artifacts: { store } }) },
+      );
+      try {
+        assertValidReport(outcome.report);
+        const attempt = resultByTitle(outcome, 'taps a node').attempts[0]!;
+        const hosted = attempt.artifacts.find((artifact) => artifact.url === HOSTED)!;
+        expect(hosted.ref).toBe('store://link/1');
+        expect(links).toEqual([
+          {
+            kind: 'video',
+            url: HOSTED,
+            mediaType: 'video/mp4',
+            redaction: 'incomplete',
+            runId: outcome.report.run.id,
+            testId: resultByTitle(outcome, 'taps a node').test.id,
+            attemptId: attempt.id,
+            startedAt: hosted.startedAt,
+          },
+        ]);
+        // The file segment still goes to put, and the link never does.
+        expect(puts.filter((artifact) => artifact.kind === 'video').map((artifact) => artifact.path)).toEqual([expect.stringMatching(/video\/fake\.webm$/)]);
+      } finally {
+        project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    "never hands over a passed attempt's link under retain-on-failure, and a failing putLink fails nothing",
+    async () => {
+      const kept = capturingStore();
+      const passed = await runProject(
+        { 'tests/pass.e2e.ts': PASSING_TEST },
+        {
+          appUrl: FAKE_APP_URL,
+          config: engineConfig(createFakeEngine({ video: true, videoLinks: [HOSTED] }).engine, { video: 'retain-on-failure', artifacts: { store: kept.store } }),
+        },
+      );
+      expect(passed.outcome.status).toBe('passed');
+      expect(kept.links).toEqual([]);
+      passed.project.cleanup();
+
+      const broken = capturingStore({ failLinks: true });
+      const failing = await runProject(
+        { 'tests/pass.e2e.ts': PASSING_TEST },
+        {
+          appUrl: FAKE_APP_URL,
+          config: engineConfig(createFakeEngine({ video: true, videoLinks: [HOSTED] }).engine, { video: 'on', artifacts: { store: broken.store } }),
+        },
+      );
+      try {
+        expect(failing.outcome.status).toBe('passed');
+        expect(broken.links).toHaveLength(1);
+        const attempt = resultByTitle(failing.outcome, 'taps a node').attempts[0]!;
+        expect(attempt.cleanup).toBe('complete');
+        const hosted = attempt.artifacts.find((artifact) => artifact.url === HOSTED)!;
+        expect(hosted.ref).toBeUndefined();
+      } finally {
+        failing.project.cleanup();
+      }
+    },
+    60_000,
+  );
+});

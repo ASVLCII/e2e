@@ -122,10 +122,16 @@ name fails with `UNKNOWN_TOOL` and the list of names.
 
 ### Recording
 
-A session records only between `start_recording` and `stop_recording`, as
-many times as needed; the configured [`video`](/reference/config#video)
-mode applies to runs, not sessions. Each recording is saved to
-`.e2e/videos/<session>/<n>[-<name>].webm` (`.mp4` on mobile), where `n`
+A session records video only between `start_recording` and
+`stop_recording`, as many times as needed; the configured
+[`video`](/reference/config#video) mode applies to runs, not sessions. The
+configured [`trace`](/reference/config#trace) mode does apply: a session is
+one attempt that closes as passed, so it keeps a trace under `on` (the local
+default) and records none under a retry mode (the CI default) or
+`retain-on-failure`. A `trace` the config sets on an engine that cannot
+trace is skipped with a notice in the server log, as a run skips it. Each recording is saved to
+`<output>/videos/<session>/<n>[-<name>].webm` (`.mp4` on mobile, and
+[`output`](/reference/config#output) is `.e2e` by default), where `n`
 counts the session's recordings. A web recording that spans a restart or a
 state reset has one file per page, `-part2`, `-part3`, and so on, in play
 order. A browser or device provider that records the lease itself records
@@ -150,9 +156,10 @@ been filled, `screenshot` and the point tools (`tap_at`, `hover_at`,
 `type_at`, `press_at`, `select_at`) stay in the catalog but answer
 `PIXEL_TAINTED` for the rest of the session. Every text a `call` returns, a node `locate` found,
 an action's result, or an error, passes the attempt's secret ledger. Nothing a
-session does is recorded as a test result or into the trace cache; its
-artifacts land under `.e2e/artifacts/<target>/sessions/`, its videos under
-`.e2e/videos/`.
+session does is recorded as a test result or into the replay cache; its
+artifacts land under `<output>/artifacts/<target>/sessions/`, its videos under
+`<output>/videos/`. A later `e2e run` clears `<output>/artifacts`; the
+videos stay.
 
 ## Resources
 

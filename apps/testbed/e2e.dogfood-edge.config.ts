@@ -11,7 +11,6 @@ import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
 
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.testbed-dogfood-edge',
   tests: 'tests-dogfood-edge/**/*.e2e.ts',
   targets: [

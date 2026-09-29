@@ -86,10 +86,11 @@ A rerun of the same goal writes to the same directory, and the digest keeps
 different goals apart.
 
 `--reporter list,markdown` also writes the findings to `.e2e/summary.md`.
-`--debug`, `--ai-trace`, and `--video` work as they do for `e2e run`. Video
-requires an engine that supports recording. The exploration is one attempt,
-so `--video=on-first-retry` records nothing; put the goal before a bare
-`--video`.
+`--debug`, `--ai-trace`, `--trace`, and `--video` work as they do for
+`e2e run`: they apply when the engine can record, with a notice otherwise.
+The exploration is one attempt, so a retry mode (`on-first-retry`,
+`on-all-retries`, and the CI trace default) records nothing; put the goal
+before a bare `--trace` or `--video`.
 
 ## Your config applies
 
@@ -104,7 +105,7 @@ an engine that supports sensitive fills. Configure only the accounts needed
 for the exploration. Without credentials, it skips password sign-in.
 
 Use `--target <name>` to choose among several targets. Otherwise, explore
-uses the first and prints a notice. Exploration disables the trace cache
+uses the first and prints a notice. Exploration disables the replay cache
 and retries.
 
 ## Start signed in
@@ -120,7 +121,7 @@ Explore collects the config's test files, runs the one setup test that
 declares the session, then restores the session into the exploration and,
 when the target declares a URL, opens the app. This works the same way as a test that declares
 `{ session: 'admin' }`. No other test runs. The setup test runs as it does
-for `e2e run`, with your configured agents, trace cache, and retries; only
+for `e2e run`, with your configured agents, replay cache, and retries; only
 the exploration runs as the explorer. The planner and the agent are
 told the app starts signed in, so they do not plan a sign-in step. If no
 setup test declares the name, the run stops with `COLLECTION_ERROR` before

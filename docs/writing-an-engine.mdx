@@ -82,7 +82,7 @@ export function hyperdrive(options: { device: string; app: string }): EngineHand
 targets: [{ name: 'phone', engine: hyperdrive({ device: 'iPhone 16', app: 'com.example.app' }) }],
 ```
 
-`version` is required and forms part of the trace cache key. Change it when
+`version` is required and forms part of the replay cache key. Change it when
 engine behavior changes. With `perform`, also declare `actions` to list the
 supported action kinds. `app` describes the app under test; `session`
 provides methods to open or restart it.
@@ -153,6 +153,14 @@ observation, and compatible editable field. The engine receives a
 `fill` action with `sensitive: true` and must handle it securely or throw
 `UNSUPPORTED_CAPABILITY`. Screenshots are withheld after a secret fill;
 `app.screenshot()` then raises `POLICY_DENIED`.
+
+An engine option can take a secret too, such as a password the engine sends
+the app. Accept `string | Secret` (tell them apart with `isSecret` from
+`e2e/engine`), list each handle in the engine's `secrets`, and read the value
+in `startAttempt` through `context.resolveSecret(secret)`. The config load
+rejects a name no secret has, and the runner redacts the value from the
+moment it resolves. A config calls `secrets.get()` before any run exists, so
+the handle is a reference by name until then.
 
 ### Lifecycle
 

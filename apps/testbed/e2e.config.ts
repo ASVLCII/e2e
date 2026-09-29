@@ -2,7 +2,6 @@ import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
 
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.testbed',
   targets: [
     {

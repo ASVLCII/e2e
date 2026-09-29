@@ -1,5 +1,6 @@
 /** Run orchestration: config, collection, selection, execution, reporting. */
 
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import {
@@ -39,16 +40,17 @@ import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
 import { runUnits } from './scheduler.ts';
 import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
+import { outputLayout } from './output.ts';
 import { lastFailedIds, readLastRun } from './last-run.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setSecretRegistry } from '../secrets.ts';
 import { withAbort } from '../internal/time.ts';
-import type { BuiltinReporter, E2EConfig, FinishedRun, Reporter, ReporterSummary, VideoMode } from '../types.ts';
+import type { BuiltinReporter, E2EConfig, FinishedRun, RecordingMode, Reporter, ReporterSummary } from '../types.ts';
 import { modelLabel } from '../config/agent.ts';
 import { positiveInt } from '../config/validate.ts';
 import { detectVcs, type VcsInfo } from '../internal/vcs.ts';
 import type { EnginePrepareResult } from '../engine/index.ts';
-import { PreparedEngines, startDeclaredProcesses, validateEngine, type AppProcesses, type PrepareScope } from './provision.ts';
+import { PreparedEngines, recordingNotices, startDeclaredProcesses, validateEngine, type AppProcesses, type EngineGrade, type PrepareScope } from './provision.ts';
 
 export interface RunOptions {
   cwd?: string | undefined;
@@ -91,7 +93,13 @@ export interface RunOptions {
    */
   repeatEach?: number | undefined;
   reporters?: readonly BuiltinReporter[] | undefined;
-  artifactsDir?: string | undefined;
+  /**
+   * The results directory for this run (`--output`), relative to the project
+   * root, over the config's `output`: the report, the other reporter files,
+   * the AI trace, `artifacts/`, and `sessions/` go under it, and
+   * `lastFailed` reads the `report.json` there.
+   */
+  output?: string | undefined;
   passWithNoTests?: boolean | undefined;
   /** Runs with the trace cache off (`--no-cache`), overriding the config. */
   noCache?: boolean | undefined;
@@ -104,15 +112,16 @@ export interface RunOptions {
   agent?: string | readonly string[] | undefined;
   /** Prints aggregated phase timings to stderr after the run. */
   debug?: boolean | undefined;
-  /** Records every model call to `.e2e/ai-trace.json` (`--ai-trace`). */
+  /** Records every model call to `<output>/ai-trace.json` (`--ai-trace`). */
   aiTrace?: boolean | undefined;
   /**
-   * Which attempts record a video (`--video [mode]`), over the config's and
-   * every target's `video`; a test's own `video` still wins. An engine that
-   * cannot record fails the run with `UNSUPPORTED_ARTIFACT` before any test
-   * starts, when a test that runs on it would record.
+   * Which attempts record a trace (`--trace [mode]`), over the config's and
+   * every target's `trace`; a test's own `trace` still wins. Applies to the
+   * targets whose engine can trace; the run names the others in a notice.
    */
-  video?: VideoMode | undefined;
+  trace?: RecordingMode | undefined;
+  /** Which attempts record a video (`--video [mode]`), on the same terms as `trace`. */
+  video?: RecordingMode | undefined;
   /**
    * A config value instead of a discovered file, for the test harness. May
    * hold live values (executors, engine handles, model instances, cache
@@ -198,7 +207,7 @@ export type ListOptions = Pick<
   | 'shard'
   | 'targetIds'
   | 'passWithNoTests'
-  | 'artifactsDir'
+  | 'output'
   | 'rawConfig'
   | 'env'
 >;
@@ -226,7 +235,7 @@ export interface ListedPair {
 export async function list(options: ListOptions = {}): Promise<{ pairs: ListedPair[] }> {
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
-  const config = await loadRunConfig(options, cwd, env, {});
+  const config = await loadRunConfig(options, cwd, env, options.output === undefined ? {} : { output: options.output });
   const collection = await collect(config, options.files);
   const selection = select(
     collection,
@@ -306,6 +315,8 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   if (options.reporters !== undefined) cli.reporters = options.reporters;
   if (options.noCache === true) cli.cache = 'off';
   if (options.strictCache === true) cli.cacheStrict = true;
+  if (options.output !== undefined) cli.output = options.output;
+  if (options.trace !== undefined) cli.trace = options.trace;
   if (options.video !== undefined) cli.video = options.video;
   if (options.agent !== undefined) cli.agents = typeof options.agent === 'string' ? [options.agent] : options.agent;
 
@@ -420,7 +431,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
    * is not retried — the destination just failed.
    */
   const writeCanonicalReport = async (config: ResolvedConfig, document: Report1Document): Promise<string | undefined> => {
-    const target = reportSibling(config, options.artifactsDir, 'report.json');
+    const target = outputLayout(config.output).report;
     try {
       await writeJsonReport(target, document);
       return target;
@@ -452,7 +463,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       aiTraceRecorder.dispose();
       aiTraceRecorder = undefined;
     }
-    const target = reportSibling(config, options.artifactsDir, 'ai-trace.json');
+    const target = outputLayout(config.output).aiTrace;
     try {
       await writeJsonReport(target, aiTrace.document());
       return target;
@@ -513,10 +524,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
         exitCode,
         projectRoot: loaded.config?.projectRoot ?? cwd,
         reportPath,
-        artifactsRoot:
-          loaded.config === undefined
-            ? path.resolve(cwd, options.artifactsDir ?? path.join('.e2e', 'artifacts'))
-            : resolveArtifactsRoot(loaded.config, options.artifactsDir),
+        artifactsRoot: outputLayout(loaded.config?.output ?? path.resolve(cwd, options.output ?? '.e2e')).artifacts,
         aiTracePath,
         ...(lastRun === undefined ? {} : { lastRun }),
       },
@@ -544,7 +552,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     runId,
     projectId: config.projectId,
     projectRoot: config.projectRoot,
-    artifactsRoot: resolveArtifactsRoot(config, options.artifactsDir),
+    artifactsRoot: outputLayout(config.output).artifacts,
     ci: isCiMode(env),
     targets: config.targets.map((target) => target.name),
     ...(config.agentNames.length === 1 && config.agentNames[0] === 'default' ? {} : { agents: config.agentNames }),
@@ -557,6 +565,15 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // A run cancelled before it began collects nothing: the interrupt alone
     // decides the outcome.
     if (interrupted.aborted) return;
+
+    // Every run starts from an empty artifact tree, so what is there once it
+    // ends is this run's evidence and nothing a report no longer names.
+    try {
+      await rm(outputLayout(config.output).artifacts, { recursive: true, force: true });
+    } catch (cause) {
+      recordFailure(cause, 'collection');
+      return;
+    }
 
     // Which targets the run is for, settled before anything is collected,
     // downloaded, or started: an unknown --target is a collection failure.
@@ -625,9 +642,13 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // Pre-flight: grade every selected target from its engine declaration
     // before any worker starts, so a config that asks for more than the
     // engine offers fails here, once, instead of inside a launch budget.
+    const grades = new Map<string, EngineGrade>();
     for (const { target, pairs } of selection.perTarget) {
-      targetProvenance.set(target.name, validateEngine(target, config, pairs));
+      const grade = validateEngine(target, pairs);
+      grades.set(target.name, grade);
+      targetProvenance.set(target.name, grade.provenance);
     }
+    for (const message of recordingNotices(selection.perTarget, grades)) notice('run', message);
 
     // The work units, built once: the same plans tell each engine's `prepare`
     // how many worker slots to provision and the scheduler what to dispatch.
@@ -689,9 +710,9 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // alone decides the outcome.
     if (interrupted.aborted) return;
 
-    const artifactsRoot = resolveArtifactsRoot(config, options.artifactsDir);
-    const sessionsRoot = path.join(config.projectRoot, '.e2e', 'sessions');
-    const store = SessionStore.create(runId, sessionsRoot);
+    const layout = outputLayout(config.output);
+    const artifactsRoot = layout.artifacts;
+    const store = SessionStore.create(runId, layout.sessions);
     sessionStore = store;
 
     // Both transports are reached through `SpawnUnitRunner`: the scheduler is
@@ -724,7 +745,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             runId,
             artifactsRoot,
             headed: options.headed ?? false,
-            sessionsRoot,
+            sessionsRoot: layout.sessions,
             sessionKeyBase64: store.exportKeyForWorker(),
             debug: debug.enabled,
             aiTrace: aiTrace !== undefined,
@@ -907,7 +928,7 @@ interface SelectionInputs {
  */
 async function selectionInputs(options: ListOptions, config: ResolvedConfig): Promise<SelectionInputs> {
   const lastRun =
-    options.lastFailed === true ? await readLastRun(reportSibling(config, options.artifactsDir, 'report.json')) : undefined;
+    options.lastFailed === true ? await readLastRun(outputLayout(config.output).report) : undefined;
   const filters: SelectionFilters = {
     ...(lastRun !== undefined ? { lastFailed: lastFailedIds(lastRun) } : {}),
     ...(options.shard !== undefined ? { shard: options.shard } : {}),
@@ -1071,12 +1092,3 @@ function isSummaryRow(value: unknown): value is ReporterSummary[number] {
   return typeof label === 'string' && label.length > 0 && typeof text === 'string' && text.length > 0;
 }
 
-function resolveArtifactsRoot(config: ResolvedConfig, override: string | undefined): string {
-  if (override !== undefined) return path.resolve(config.projectRoot, override);
-  return path.join(config.projectRoot, '.e2e', 'artifacts');
-}
-
-/** A file the run keeps beside the artifact tree: `.e2e/report.json`, `.e2e/ai-trace.json`. */
-function reportSibling(config: ResolvedConfig, artifactsDir: string | undefined, name: string): string {
-  return path.join(path.dirname(resolveArtifactsRoot(config, artifactsDir)), name);
-}

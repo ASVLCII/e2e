@@ -144,6 +144,14 @@ export interface Engine {
   readonly artifacts?: EngineArtifacts;
   /** The app under test, as data: url, identity, environment, command, services. */
   readonly app?: EngineAppDeclaration;
+  /**
+   * The `secrets.get()` handles the engine's options hold, such as a
+   * basic-auth password. The config load checks each names a configured
+   * secret (`INVALID_CONFIG` otherwise), and only these resolve through
+   * `EngineAttemptContext.resolveSecret`. The handles carry names only, so
+   * no value reaches the config digest.
+   */
+  readonly secrets?: readonly Secret[];
   /** Steering hooks: open, back, restart, reset. */
   readonly session?: EngineSession;
   /**
@@ -226,7 +234,7 @@ export interface OperationContext {
 | `keyboard.{type,press,dismiss?}` | `keyboard` | `observe` | the agent's `type` and `press` without a target, the keyboard fallback of `type_at` and `press_at` on a point the tree lists nothing at, and `dismiss_keyboard` when `dismiss` exists: input to whatever holds focus, for a field drawn on a canvas or flattened out of a platform's tree; with the `focus` action, `locator.pressSequentially`, which the harness composes as `focus` then `keyboard.type` |
 | `fixtures.<name>` | `<name>` | - | a contributed fixture; `requires: ['<name>']` gates at selection |
 | `state` | `state` | - | `test.setup` sessions and the `session:` option |
-| `artifacts` | `artifacts` | - | `app.screenshot()`, assertion evidence, `artifacts: ['trace']`, and every [`video` mode](/reference/config#video) but `off`, from the config, a target, a test, or `--video` |
+| `artifacts` | `artifacts` | - | `app.screenshot()`, assertion evidence, the failure screenshot, and every [`trace` and `video` mode](/reference/config#recording) but `off`, from the config, a target, a test, `--trace`, or `--video` |
 | `app` | - | - | data only: the app under test, its origin policy, identity, and process |
 | `session` | - | - | `app.open()` and the agent's `navigate` verb (`open`), `app.back()` and the agent's `back` verb (`back`), `app.restart()` (`restart`), `app.clearState()` (`reset`) |
 
@@ -456,6 +464,15 @@ export interface EngineAttemptContext {
   readonly attemptId: string;
   /** Absolute directory every artifact of this attempt is written under. */
   readonly artifactsDir: string;
+  /**
+   * The plaintext of a secret the engine declared in `secrets`, for an
+   * option the engine hands the app itself (basic-auth credentials). A
+   * provider runs again on every call. The value joins the attempt's
+   * redaction before this resolves, so reports, logs, and every observation
+   * redact it; unlike a fill, it does not taint the viewport.
+   * A secret the engine did not declare is `SECRET_UNAVAILABLE`.
+   */
+  readonly resolveSecret: (secret: Secret) => Promise<string>;
   /**
    * Aborts with the attempt, and the moment `startAttempt` fails or exceeds
    * the launch timeout: a hook still running then must stop, because the
@@ -756,7 +773,7 @@ export interface EngineAppDeclaration {
    */
   readonly environment?: 'test' | 'staging' | 'production';
   /**
-   * App identity for trace cache and session entries. Defaults to the URL's
+   * App identity for replay cache and session entries. Defaults to the URL's
    * origin and base path. Set a stable value to reuse entries across preview
    * URLs. Without a URL or identity, entries use the target alone. Different
    * apps must have different identities to prevent replay across them.
@@ -1007,7 +1024,8 @@ export interface VideoLink {
 ```
 
 The runner calls `startVideo` only for an attempt whose
-[video mode](/reference/config#video) records, then starts tracing, after
+[video mode](/reference/config#video) records, then `startTrace` for one whose
+[trace mode](/reference/config#trace) records, after
 `startAttempt` and any session restore. Both use the launch budget and stop
 before `endAttempt`, within the cleanup budget; a `startVideo` that fails
 fails the launch. Return segments in recording order from `stopVideo` and
@@ -1085,6 +1103,9 @@ target argument's type is exported as `ProviderRecordingTarget`.
 After a secret fill, the runner redacts every text entry in each trace
 archive and drops its screencast frames: every `screencast/` entry, each
 `screencast-frame` record in a `.trace` entry, and any image a record names.
+After `resolveSecret` returns, it redacts the trace the same way and keeps
+the frames: a trace records the options the engine opened the attempt with,
+and the value never reached the screen.
 If redaction fails, it deletes the archives and records
 `TRACE_WITHHELD`. Videos are unmasked and carry `redaction: 'incomplete'`.
 A `download` an engine attaches is the app's bytes: after a secret fill the
@@ -1176,7 +1197,8 @@ so a result built from optional inputs satisfies exact optional property
 types, plus `raceAbort(work, signal, label)`, `withTimeout(promise,
 timeoutMs, onTimeout)`, and `withinCleanupBudget(promise, { signal,
 timeoutMs })`. Pass a thunk to `raceAbort` to check cancellation before
-dispatch.
+dispatch. `isSecret(value)` tells a `secrets.get()` handle from a string, for
+an option that takes either.
 
 ## Vocabulary
 
@@ -1187,7 +1209,7 @@ dispatch.
 `KeyModifier`, `KeyName`, `ParsedKey`, `ENGINE_SPI_VERSION`,
 `LOCATOR_ACTION_KINDS`, `POINTER_ACTION_KINDS`, `KEY_MODIFIERS`,
 `KEY_NAMES`, `parseKey`, `ENGINE_ERROR_CODES`, `RETRYABLE_ENGINE_ERROR_CODES`,
-`OBSERVED_NAME_LIMIT` and `OBSERVED_TEXT_LIMIT` are exported from
+`Secret`, `isSecret`, `OBSERVED_NAME_LIMIT` and `OBSERVED_TEXT_LIMIT` are exported from
 `e2e/engine`. An engine that cuts an observed field cuts it at exactly its
 limit: `name` at the name limit, `text` and any `value` or `selection` it
 cuts at the text limit. So a field exactly at its limit may have been cut; a

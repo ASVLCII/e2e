@@ -482,7 +482,7 @@ export type Role =
 /**
  * Spellings `getByRole` accepts beside the vocabulary and rewrites to a `Role`
  * before the query is built: `img` is the ARIA name of `image`. An alias never
- * reaches an engine, the trace cache, or a report; a `Role` is what they see.
+ * reaches an engine, the replay cache, or a report; a `Role` is what they see.
  */
 export type RoleAlias = 'img';
 
@@ -604,7 +604,7 @@ A role query never matches a node hidden from the accessibility tree.
 
 `img` is an alias, not a role: `getByRole('img', { name })` builds the same
 query as `getByRole('image', { name })`, so a test ported from Playwright keeps
-its spelling while engines, the trace cache, and reports see `image`. On the
+its spelling while engines, the replay cache, and reports see `image`. On the
 web, `image` covers `<img>` with alt text and any element with `role="img"`;
 an `<img alt="">` is decoration and matches nothing.
 

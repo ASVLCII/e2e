@@ -31,11 +31,11 @@ export const GLOB_SYNTAX = /[*?{}[\]]|[+@!]\(/;
  * Compiles one glob string. Supported: `*` (zero or more non-`/`), `?` (one
  * non-`/`), a complete `**` segment (zero or more path segments). A leading
  * `./`, a `.` segment, and a doubled `/` are dropped. The syntax other glob
- * dialects add (braces, character classes, extglobs, a leading `!`) and the
- * forms that name no file (an absolute path, a backslash separator, a `..`
- * segment, a trailing `/` or `.`) are `INVALID_GLOB` with a hint: taken
- * literally each would match nothing, and an empty selection is a poor way
- * to learn that.
+ * dialects add (braces, character classes, extglobs, a `!` anywhere but the
+ * start of a glob list entry, see `compileGlobList`) and the forms that name
+ * no file (an absolute path, a backslash separator, a `..` segment, a
+ * trailing `/` or `.`) are `INVALID_GLOB` with a hint: taken literally each
+ * would match nothing, and an empty selection is a poor way to learn that.
  */
 export function compileGlob(pattern: string): CompiledGlob {
   if (pattern.length === 0) throw invalidGlob('empty glob pattern');
@@ -64,12 +64,37 @@ export function compileGlob(pattern: string): CompiledGlob {
     );
   }
   if (parts[0]!.startsWith('!')) {
-    throw invalidGlob(`leading "!" exclusions are unsupported, narrow the glob instead: ${pattern}`);
+    throw invalidGlob(`a "!" exclusion is written once, at the very start of a tests entry: ${pattern}`);
   }
   if (parts.includes('..')) {
     throw invalidGlob(`a ".." segment is not resolved in a glob: ${pattern}; write the path from the project root`);
   }
   return { segments: parts.map((segment) => compileSegment(segment, pattern)) };
+}
+
+/** A glob list split into the globs that select files and the `!`-prefixed ones that take files out again. */
+export interface CompiledGlobList {
+  readonly include: readonly CompiledGlob[];
+  readonly exclude: readonly CompiledGlob[];
+}
+
+/**
+ * Compiles a glob list in which a leading `!` marks an exclusion. A file is
+ * selected when an including glob matches it and no excluding glob does,
+ * whatever order the list is written in.
+ */
+export function compileGlobList(patterns: readonly string[]): CompiledGlobList {
+  const include: CompiledGlob[] = [];
+  const exclude: CompiledGlob[] = [];
+  for (const pattern of patterns) {
+    if (!pattern.startsWith('!')) {
+      include.push(compileGlob(pattern));
+      continue;
+    }
+    if (pattern === '!') throw invalidGlob('"!" excludes nothing; write the glob to exclude after it, such as !tests/wip/**');
+    exclude.push(compileGlob(pattern.slice(1)));
+  }
+  return { include, exclude };
 }
 
 function invalidGlob(message: string): ConfigurationError {
@@ -161,6 +186,22 @@ function canMatchBeneath(glob: CompiledGlob, states: States): boolean {
   return false;
 }
 
+/** Whether the glob sits on its trailing `**`, which matches every file beneath whose parts do not start with a dot. */
+function matchesAllBeneath(glob: CompiledGlob, states: States): boolean {
+  const last = glob.segments.length - 1;
+  return glob.segments[last]?.kind === 'globstar' && states.has(last);
+}
+
+/** Whether a segment the glob has left to satisfy is spelled with a leading dot, so it could match a dot-named part beneath. */
+function reachesDotBeneath(glob: CompiledGlob, states: States): boolean {
+  for (const index of states) {
+    for (const segment of glob.segments.slice(index)) {
+      if (segment.kind === 'literal' ? segment.name.startsWith('.') : segment.kind === 'wildcard' && segment.allowsDot) return true;
+    }
+  }
+  return false;
+}
+
 /** Matches one already-normalized relative path (with `/` separators). */
 export function matchesGlob(glob: CompiledGlob, relativePath: string): boolean {
   let states = initialStates(glob.segments);
@@ -169,19 +210,21 @@ export function matchesGlob(glob: CompiledGlob, relativePath: string): boolean {
 }
 
 /**
- * Discovers regular files under `root` matching any glob. Matching is
- * case-sensitive and results are sorted by Unicode code point. The walk lists
- * the project root and then enters a directory only while some glob has a
- * segment left to satisfy beneath it, so `tests/**\/*.e2e.ts` reads `tests/`
- * and its subdirectories and nothing else of a large repository; a dot
- * directory is entered only when a segment written with a leading dot matches
- * it, and `node_modules` never. Symlinks are not followed: a symlinked
- * directory or test file is not discovered.
+ * Discovers regular files under `root` matching any including glob and no
+ * `!` exclusion. Matching is case-sensitive and results are sorted by Unicode
+ * code point. The walk lists the project root and then enters a directory
+ * only while some including glob has a segment left to satisfy beneath it and
+ * no exclusion takes every file it could, so `tests/**\/*.e2e.ts` reads
+ * `tests/` and its subdirectories and nothing else of a large repository, and
+ * `!tests/wip/**` never reads `tests/wip/`; a dot directory is entered only
+ * when a segment written with a leading dot matches it, and `node_modules`
+ * never. Symlinks are not followed: a symlinked directory or test file is not
+ * discovered.
  */
 export function discoverFiles(root: string, patterns: readonly string[]): string[] {
-  const globs = patterns.map(compileGlob);
+  const { include, exclude } = compileGlobList(patterns);
   const matched: string[] = [];
-  const visit = (dir: string, relativeDir: string, states: readonly States[]): void => {
+  const visit = (dir: string, relativeDir: string, states: readonly States[], excluded: readonly States[]): void => {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -189,20 +232,32 @@ export function discoverFiles(root: string, patterns: readonly string[]): string
       return;
     }
     for (const entry of entries) {
-      const next = globs.map((glob, i) => advance(glob.segments, states[i]!, entry.name));
+      const next = include.map((glob, i) => advance(glob.segments, states[i]!, entry.name));
+      const nextExcluded = exclude.map((glob, i) => advance(glob.segments, excluded[i]!, entry.name));
       const relative = relativeDir === '' ? entry.name : `${relativeDir}/${entry.name}`;
       if (entry.isFile()) {
-        if (globs.some((glob, i) => isMatch(glob, next[i]!))) matched.push(relative);
+        if (include.some((glob, i) => isMatch(glob, next[i]!)) && !exclude.some((glob, i) => isMatch(glob, nextExcluded[i]!))) {
+          matched.push(relative);
+        }
       } else if (
         entry.isDirectory() &&
         entry.name !== 'node_modules' &&
-        globs.some((glob, i) => canMatchBeneath(glob, next[i]!))
+        include.some((glob, i) => canMatchBeneath(glob, next[i]!)) &&
+        !(
+          exclude.some((glob, i) => matchesAllBeneath(glob, nextExcluded[i]!)) &&
+          !include.some((glob, i) => reachesDotBeneath(glob, next[i]!))
+        )
       ) {
-        visit(path.join(dir, entry.name), relative, next);
+        visit(path.join(dir, entry.name), relative, next, nextExcluded);
       }
     }
   };
-  visit(root, '', globs.map((glob) => initialStates(glob.segments)));
+  visit(
+    root,
+    '',
+    include.map((glob) => initialStates(glob.segments)),
+    exclude.map((glob) => initialStates(glob.segments)),
+  );
   return matched.toSorted(compareCodePoints);
 }
 

@@ -203,6 +203,28 @@ describe('collect', () => {
       rmSync(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it('collects no file that a "!" exclusion names, and never offers one as a look-alike', async () => {
+    const projectRoot = mkdtempSync(path.join(tmpdir(), 'e2e-exclude-'));
+    try {
+      for (const file of ['tests/wip/b.e2e.ts', 'tests/wip/c.test.ts', 'tests/login.test.ts']) {
+        mkdirSync(path.dirname(path.join(projectRoot, file)), { recursive: true });
+        writeFileSync(path.join(projectRoot, file), '');
+      }
+      const resolve = (): ReturnType<typeof resolveConfig> =>
+        resolveConfig(
+          { targets: [{ name: 'web', platform: 'web' }], tests: ['tests/**/*.e2e.ts', '!tests/wip/**'] },
+          { projectRoot, env: {} as NodeJS.ProcessEnv },
+        );
+      const empty = await collect(resolve());
+      expect(empty.files).toEqual([]);
+      expect(empty.nearMisses).toEqual(['tests/login.test.ts']);
+      writeFileSync(path.join(projectRoot, 'tests', 'a.e2e.ts'), '');
+      expect((await collect(resolve())).files.map((file) => file.file)).toEqual(['tests/a.e2e.ts']);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('relativeToRoot', () => {

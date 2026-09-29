@@ -19,10 +19,11 @@ import { inflateEntry, readZip, writeZip, zipEntry, type ZipEntry } from '../int
  * returned from `stopTrace`, relative to `dir`; one that resolves outside
  * `dir` is refused before anything is touched. An archive that cannot be
  * rewritten is deleted together with the rest of the trace, and the failure
- * is thrown: the runner keeps no trace it cannot vouch for. Only a trace from
- * a session a secret was filled on comes here, and its viewport is
- * pixel-tainted: its screencast frames are dropped, as a screenshot would be
- * denied.
+ * is thrown: the runner keeps no trace it cannot vouch for. A trace comes
+ * here from a session a secret was filled on, or whose engine holds one in
+ * its options. Its screencast frames are dropped either way: a frame cannot
+ * be rewritten, and an app can render what its engine was handed (a page
+ * that echoes the basic-auth user) as well as what was typed.
  */
 export async function redactTraceArchives(
   dir: string,
@@ -63,10 +64,10 @@ function isInside(root: string, absolute: string): boolean {
  * unchanged is carried as stored, so an archive with nothing to redact is not
  * rewritten at all. An entry that is not UTF-8 text (a font, an image) cannot
  * be rewritten: it is carried as stored unless a secret's bytes occur in it,
- * in which case it is dropped from the archive. Screencast frames are dropped
- * whatever they hold: every entry under `screencast/`, referenced or not, the
- * `screencast-frame` records in each event stream (a `.trace` entry), and any
- * other entry such a record names.
+ * in which case it is dropped from the archive. Screencast frames are
+ * dropped whatever they hold: every entry under
+ * `screencast/`, referenced or not, the `screencast-frame` records in each
+ * event stream (a `.trace` entry), and any other entry such a record names.
  */
 async function redactArchive(absolute: string, ledger: SecretLedger): Promise<void> {
   const entries = readZip(await readFile(absolute));

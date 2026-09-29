@@ -24,6 +24,7 @@ import {
   type PointHit,
   type PointTapResult,
   type PollExpectation,
+  type RecordingMode,
   type Reporter,
   type Role,
   type RoleAlias,
@@ -34,13 +35,14 @@ import {
   type Secret,
   type StepExecutorContext,
   type StepTurn,
+  type StoredArtifactLink,
   type Target,
   type Unique,
-  type TraceCacheStore,
+  type CacheStore,
   type ExecutorObservation,
   type ValueExpectation,
 } from '../../src/index.ts';
-import type { EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
+import type { Engine, EngineAttemptContext, EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
 import { createAgent, defineTool, type DefaultAgent } from '../../src/agent/public.ts';
 import type { Report } from '../../src/index.ts';
 import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/provider';
@@ -57,7 +59,10 @@ BLOCKABLE_CODES;
 
 declare const agent: Agent;
 declare const appFixture: App;
-declare const remoteStore: TraceCacheStore;
+declare const remoteStore: CacheStore;
+// @ts-expect-error TraceCacheStore is CacheStore: the store serves the replay cache
+declare const renamedStore: import('../../src/index.ts').TraceCacheStore;
+renamedStore;
 declare const artifactStore: ArtifactStore;
 declare const asyncExpectation: AsyncExpectation;
 declare const screen: Screen;
@@ -82,6 +87,8 @@ engineSnapshot.treeUnavailable satisfies true | undefined;
 ({ targets, cache: 'read-write' }) satisfies E2EConfig;
 ({ targets, cache: { mode: 'read-only', store: remoteStore, dir: 'shared-cache' } }) satisfies E2EConfig;
 ({ targets: [{ platform: 'ios' }] }) satisfies E2EConfig;
+// @ts-expect-error specVersion is gone; the runner version is the format version
+({ targets, specVersion: '0.1' }) satisfies E2EConfig;
 // A target inherits its platform from the engine; the resolver rejects one with neither.
 ({ targets: [{ engine }] }) satisfies E2EConfig;
 declare const model: ModelInstance;
@@ -102,6 +109,12 @@ subscriptionModel satisfies ModelInstance;
 // @ts-expect-error a secret needs a value; an env variable that may be unset must be defaulted.
 ({ targets, secrets: { key: process.env['STRIPE_KEY'] } }) satisfies E2EConfig;
 secrets.get('key') satisfies Secret;
+// An engine declares the secrets its options hold and resolves them per attempt.
+({ name: 'gated', version: '1.0.0', spiVersion: 1, secrets: [secrets.get('key')] }) satisfies Engine;
+// @ts-expect-error an engine declares secrets.get() handles, never the values.
+({ name: 'gated', version: '1.0.0', spiVersion: 1, secrets: ['sk_test'] }) satisfies Engine;
+declare const attemptContext: EngineAttemptContext;
+attemptContext.resolveSecret(secrets.get('key')) satisfies Promise<string>;
 credentials.user('admin').password satisfies Secret;
 // @ts-expect-error a Secret has no plaintext accessor.
 secrets.get('key').value;
@@ -123,24 +136,37 @@ unique(7);
 ({ targets: [{ name: 'phone', engine }] }) satisfies E2EConfig;
 // @ts-expect-error cache mode is a closed union
 ({ targets, cache: 'sometimes' }) satisfies E2EConfig;
+({ targets, artifacts: { store: artifactStore } }) satisfies E2EConfig;
+// @ts-expect-error artifacts no longer lists kinds; trace and video choose the recordings
 ({ targets, artifacts: ['screenshot', 'trace'] }) satisfies E2EConfig;
+// @ts-expect-error artifacts.kinds was removed
 ({ targets, artifacts: { kinds: ['trace'], store: artifactStore } }) satisfies E2EConfig;
-// @ts-expect-error artifact kinds are a closed union
-({ targets, artifacts: ['gif'] }) satisfies E2EConfig;
-// @ts-expect-error video is its own option, not an artifact kind
-({ targets, artifacts: ['video'] }) satisfies E2EConfig;
+// @ts-expect-error artifacts.trace was removed; trace is a mode at the config root
+({ targets, artifacts: { trace: { record: 'retries' } } }) satisfies E2EConfig;
 // @ts-expect-error video retention moved to the video mode
 ({ targets, artifacts: { video: { retain: 'on-failure' } } }) satisfies E2EConfig;
-({ targets, video: 'retain-on-failure' }) satisfies E2EConfig;
-({ targets: [{ name: 'phone', engine, video: 'on-first-retry' }], video: 'off' }) satisfies E2EConfig;
+({ targets, trace: 'on-all-retries', video: 'retain-on-failure' }) satisfies E2EConfig;
+({ targets: [{ name: 'phone', engine, trace: 'off', video: 'on-first-retry' }], trace: 'on', video: 'off' }) satisfies E2EConfig;
+'on-all-retries' satisfies RecordingMode;
+// @ts-expect-error trace is a closed set of modes; record: 'retries' is on-all-retries
+({ targets, trace: 'retries' }) satisfies E2EConfig;
 // @ts-expect-error video is a closed set of modes
 ({ targets, video: 'sometimes' }) satisfies E2EConfig;
 // @ts-expect-error video is a mode, not a boolean
 ({ targets, video: true }) satisfies E2EConfig;
-({ targets, artifacts: { trace: { record: 'retries' } } }) satisfies E2EConfig;
-// @ts-expect-error trace recording is a closed union
-({ targets, artifacts: { trace: { record: 'on-failure' } } }) satisfies E2EConfig;
+// @ts-expect-error trace is a mode, not a boolean
+({ targets: [{ name: 'phone', engine, trace: true }] }) satisfies E2EConfig;
 ({ put: async (artifact) => ({ ref: artifact.startedAt ?? artifact.sha256 }) }) satisfies ArtifactStore;
+({
+  put: async (artifact) => ({ ref: artifact.sha256 }),
+  putLink: async (link: StoredArtifactLink) => ({ ref: `${link.url}#${link.attemptId}@${link.startedAt}` }),
+}) satisfies ArtifactStore;
+({ kind: 'video', url: 'https://r.example/a.mp4', mediaType: 'video/mp4', redaction: 'incomplete', runId: 'r', testId: 't', attemptId: 'a', startedAt: '2026-01-01T00:00:00.000Z' }) satisfies StoredArtifactLink;
+// @ts-expect-error a link has no bytes, and only video links exist
+({ kind: 'trace', url: 'https://r.example/a.zip', mediaType: 'application/zip', redaction: 'incomplete', runId: 'r', testId: 't', attemptId: 'a', startedAt: '2026-01-01T00:00:00.000Z' }) satisfies StoredArtifactLink;
+({ targets, output: 'results/e2e' }) satisfies E2EConfig;
+// @ts-expect-error output is one directory
+({ targets, output: ['a', 'b'] }) satisfies E2EConfig;
 declare const reporter: Reporter;
 ({ targets, reporters: ['list', reporter] }) satisfies E2EConfig;
 ({ targets, reporters: [reporter] }) satisfies E2EConfig;
@@ -396,6 +422,10 @@ test.extend<{ device: unknown }>()('types a device', async ({ device }) => { dev
 
 // A test, a group, and a call each pin a configured agent by name.
 test('as the buyer', { agent: 'buyer' }, async () => {});
+test('traced on retries', { trace: 'on-all-retries', video: 'retain-on-failure' }, async () => {});
+test.describe('untraced', { trace: 'off' }, () => {});
+// @ts-expect-error a test's trace is a mode
+test('traced', { trace: 'all' }, async () => {});
 test.describe('admin flows', { agent: 'admin' }, () => {});
 await agent.act('approve it', { agent: 'admin' });
 await agent.assert('it is approved', { agent: 'buyer' });

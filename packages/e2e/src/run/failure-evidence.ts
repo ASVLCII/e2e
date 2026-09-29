@@ -90,9 +90,9 @@ export async function captureFailureEvidence(options: FailureEvidenceOptions): P
     if (candidates.length > 0) evidence.candidates = candidates;
   }
 
-  // Pixels only when the run keeps screenshots and no secret has been filled:
-  // rectangle masking cannot prove a tainted viewport redacted.
-  if (options.config.artifacts.has('screenshot') && !options.secrecy.taint.value && !signal.aborted) {
+  // Pixels only when no secret has been filled: rectangle masking cannot
+  // prove a tainted viewport redacted.
+  if (!options.secrecy.taint.value && !signal.aborted) {
     try {
       const relative = await options.session.artifacts.screenshot('failure', operation);
       evidence.screenshot = options.artifacts.register('screenshot', relative);

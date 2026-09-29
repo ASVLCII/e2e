@@ -24,8 +24,9 @@ import { obj } from '../internal/objects.ts';
 import { Deadline, NEVER_ABORTS, withAbort, withScopedBudget, withTimeout } from '../internal/time.ts';
 import { createAgentCacheContext, flushStagedTraces } from '../cache/context.ts';
 import type { ModuleRegistration, RegisteredTest } from '../collect/registry.ts';
-import { pairVideoMode, type TestTargetPair } from '../collect/select.ts';
-import type { ArtifactStore } from '../types.ts';
+import { pairRecordings, type TestTargetPair } from '../collect/select.ts';
+import type { AttemptRecording, AttemptRecordings, RecordingKind } from '../internal/recording-modes.ts';
+import type { ArtifactStore, Secret } from '../types.ts';
 import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import { AttemptBudget } from './budget.ts';
 import { ENGINE_SPI_VERSION } from '../engine/contract.ts';
@@ -47,11 +48,11 @@ import { isFailedStatus } from './records.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialHost, type SharedSerialSession } from './serial.ts';
 import { interruptedSkip, pairKey, pairResult, repeatSegment, unstartedResult } from './units.ts';
-import { adoptSecrecy, carriedSecrecy, processSecrets, sessionSecrecy } from './secrecy.ts';
+import { adoptSecrecy, carriedSecrecy, processSecrets, resolveSecretValue, sessionSecrecy } from './secrecy.ts';
+import { isSecret } from '../secrets.ts';
 import { SessionStaging, SessionStore, type SessionIdentity } from './sessions.ts';
 import { redactTraceArchives } from './trace-redaction.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
-import { attemptVideo, type AttemptVideo } from './video.ts';
 import { EngineError } from '../engine/contract.ts';
 import { hostedVideoUrl } from '../engine/recording.ts';
 import { WorkerModels } from './worker-models.ts';
@@ -124,21 +125,18 @@ export interface ClosingRecord {
 }
 
 /**
- * What one attempt's session opens with: the saved session to restore, what
- * the attempt records on video (`attemptVideo`), undefined for nothing, and
- * its place in the retry loop, which decides whether it traces.
+ * What one attempt's session opens with: the saved session to restore, and
+ * what the attempt records (`pairRecordings`).
  */
 export interface SessionPlan {
   readonly session: string | undefined;
-  readonly video: AttemptVideo | undefined;
-  /** 0 for the first run, 1 for the first retry. */
-  readonly attemptIndex: number;
+  readonly recordings: AttemptRecordings;
 }
 
-/** What closing an attempt's session needs besides its verdict: the video it recorded. */
+/** What closing an attempt's session needs besides its verdict: the recordings it started. */
 export interface SessionClose {
   readonly attemptId: string;
-  readonly video: AttemptVideo | undefined;
+  readonly recordings: AttemptRecordings;
 }
 
 /** How one attempt acquires its session and session-staging hooks. */
@@ -168,8 +166,6 @@ export class TargetExecutor implements SerialHost {
   private lastAttemptTestId: string | undefined;
   private readonly models: WorkerModels;
   private readonly sessionIdentity: SessionIdentity;
-  /** Sessions whose attempt records a trace; `closeSession` stops only those. */
-  private readonly traced = new WeakSet<TargetSession>();
   /** Resolves once the engine's init hook completed for this worker. */
   private engineReady: Promise<void> | undefined;
 
@@ -555,11 +551,7 @@ export class TargetExecutor implements SerialHost {
 
   // --- attempt core ---
 
-  /**
-   * Starts one attempt on the engine, restores the planned session, and
-   * starts the recordings: the trace on a retry only when it records retries
-   * only.
-   */
+  /** Starts one attempt on the engine, restores the planned session, and starts the planned recordings. */
   async launchSession(
     plan: SessionPlan,
     attemptId: string,
@@ -590,7 +582,12 @@ export class TargetExecutor implements SerialHost {
       if (startAttempt !== undefined) {
         await this.debug.time('session.launch', () =>
           launch(`starting an attempt on engine ${engine?.name ?? 'none'}`, (launchSignal) =>
-            startAttempt({ attemptId, artifactsDir, signal: launchSignal }),
+            startAttempt({
+              attemptId,
+              artifactsDir,
+              signal: launchSignal,
+              resolveSecret: (secret) => this.resolveEngineSecret(session, secret),
+            }),
           ),
         );
       }
@@ -604,26 +601,25 @@ export class TargetExecutor implements SerialHost {
           session.restoreState!(saved.state, launchOp(launchSignal)),
         );
       }
-      // A recording the attempt asks for starts here, when the engine has it.
-      // Video is always asked for explicitly, so its failure fails the
-      // launch; a best-effort trace's is swallowed. Video before trace: a
-      // surface that records both through one screencast sizes it for
-      // whichever came first, and the recording is the one a person watches.
+      // A recording the attempt asks for starts here, when the engine has it:
+      // an engine without it was either refused before the run (a mode a
+      // target or test set) or skipped with a notice (a run-wide mode). A
+      // required recording's failure fails the launch; a default one's is
+      // swallowed. Video before trace: a surface that records both through
+      // one screencast sizes it for whichever came first, and the recording
+      // is the one a person watches.
       const startRecording = async (
-        kind: 'trace' | 'video',
-        policy: 'best-effort' | 'required' | undefined,
+        kind: RecordingKind,
+        recording: AttemptRecording | undefined,
         start: ((operation: OperationContext) => Promise<void>) | undefined,
       ): Promise<void> => {
-        if (policy === undefined || start === undefined) return;
+        if (recording === undefined || start === undefined) return;
         const starting = launch(`starting the ${kind}`, (launchSignal) => start(launchOp(launchSignal)));
-        if (policy === 'required') await starting;
+        if (recording.policy === 'required') await starting;
         else await starting.catch(() => undefined);
       };
-      await startRecording('video', plan.video === undefined ? undefined : 'required', session.artifacts.startVideo);
-      if (this.config.traceRecord === 'all' || plan.attemptIndex > 0) {
-        this.traced.add(session);
-        await startRecording('trace', this.config.artifacts.get('trace'), session.artifacts.startTrace);
-      }
+      await startRecording('video', plan.recordings.video, session.artifacts.startVideo);
+      await startRecording('trace', plan.recordings.trace, session.artifacts.startTrace);
     } catch (cause) {
       // The attempt's isolation is open, or a timed-out startAttempt may still
       // open it: end it within the cleanup budget, or the retry opens a second
@@ -632,6 +628,29 @@ export class TargetExecutor implements SerialHost {
       throw cause;
     }
     return session;
+  }
+
+  /**
+   * The plaintext of a secret the target's engine declared, for an option it
+   * hands the app (basic-auth credentials). Registered for the session's and
+   * the process's redaction by `resolveSecretValue`; the viewport is not
+   * tainted, since the value goes to the engine, not into a field, but the
+   * session is marked so its trace, which records the engine's options, is
+   * rewritten.
+   */
+  private async resolveEngineSecret(session: TargetSession, secret: Secret): Promise<string> {
+    const engine = this.target.engine;
+    if (!isSecret(secret) || !(engine?.secrets ?? []).some((declared) => declared.name === secret.name)) {
+      const name = isSecret(secret) ? `"${secret.name}"` : 'a value that is not a secrets.get() handle';
+      throw new ConfigurationError(
+        'SECRET_UNAVAILABLE',
+        `engine ${engine?.name ?? 'none'} asked for secret ${name}, which it did not declare in its secrets`,
+      );
+    }
+    const secrecy = sessionSecrecy(session, this.config.secrets);
+    const plaintext = await resolveSecretValue(secret, this.config.secrets, secrecy.ledger);
+    secrecy.engineHeld.value = true;
+    return plaintext;
   }
 
   /**
@@ -663,7 +682,7 @@ export class TargetExecutor implements SerialHost {
   /**
    * Finalizes the recordings, then ends the attempt with a fresh cleanup
    * budget. The caller has classified the attempt by now: `record.status`
-   * decides whether an `on-failure` video is kept.
+   * decides whether an `on-failure` recording is kept.
    */
   async closeSession(
     session: TargetSession,
@@ -672,13 +691,15 @@ export class TargetExecutor implements SerialHost {
     artifactSink: ArtifactSink,
     secondaryErrors: SerializedError[],
   ): Promise<void> {
-    const { attemptId, video } = close;
+    const { attemptId, recordings } = close;
     const { stopVideo, stopTrace } = session.artifacts;
+    // Recorded so a failure could be looked at; a pass has nothing to show.
+    const discarded = (recording: AttemptRecording): boolean => recording.keep === 'on-failure' && !isFailedStatus(record.status);
+    const { video, trace } = recordings;
     if (stopVideo !== undefined && video !== undefined) {
-      await this.stopRecording('video', 'required', attemptId, record, secondaryErrors, async (operation) => {
+      await this.stopRecording('video', video, attemptId, record, secondaryErrors, async (operation) => {
         const segments = await stopVideo(operation);
-        if (video.keep === 'on-failure' && !isFailedStatus(record.status)) {
-          // Recorded so a failure could be watched; a pass has nothing to show.
+        if (discarded(video)) {
           await Promise.all(
             segments.flatMap((segment) => ('path' in segment ? [rm(path.join(artifactSink.dir, segment.path), { force: true })] : [])),
           );
@@ -687,26 +708,31 @@ export class TargetExecutor implements SerialHost {
         registerVideos(artifactSink, segments);
       });
     }
-    const tracePolicy = this.config.artifacts.get('trace');
-    if (stopTrace !== undefined && this.traced.has(session)) {
-      await this.stopRecording('trace', tracePolicy, attemptId, record, secondaryErrors, async (operation) => {
+    if (stopTrace !== undefined && trace !== undefined) {
+      await this.stopRecording('trace', trace, attemptId, record, secondaryErrors, async (operation) => {
         const stopped = await stopTrace(operation);
         const archives = typeof stopped === 'string' ? [stopped] : stopped;
+        if (discarded(trace)) {
+          await Promise.all(archives.map((relative) => rm(path.join(artifactSink.dir, relative), { force: true })));
+          return;
+        }
         // An engine records what happened, filled secrets included, so the
         // trace is the runner's to redact before anything hashes or stores
-        // it. Only a session a secret was filled on can have recorded one:
-        // the taint is the fill's own mark, so an untainted trace needs no
-        // rewriting, and a tainted one is kept only once rewritten.
+        // it. Only a session a secret was filled on, or whose engine holds
+        // one in its options (a trace records the options the attempt opened
+        // with), can have recorded one: an unmarked trace needs no
+        // rewriting, and a marked one is kept only once rewritten, without
+        // its screencast frames.
         const secrecy = sessionSecrecy(session, this.config.secrets);
         let redaction: 'complete' | 'not-required' = 'not-required';
-        if (secrecy.taint.value) {
+        if (secrecy.taint.value || secrecy.engineHeld.value) {
           try {
             await redactTraceArchives(artifactSink.dir, archives, secrecy.ledger);
           } catch (cause) {
             // The trace is gone. The report says why whatever the policy, and
             // a required trace that is missing is a cleanup failure.
             secondaryErrors.push(serializeError(classifyError(cause), { phase: 'cleanup' }));
-            if (tracePolicy === 'required') record.cleanup = 'failed';
+            if (trace.policy === 'required') record.cleanup = 'failed';
             return;
           }
           redaction = 'complete';
@@ -723,19 +749,18 @@ export class TargetExecutor implements SerialHost {
   }
 
   /**
-   * Stops one recording the run asked for, within the cleanup budget. A
-   * required kind that cannot be finalized is a cleanup failure the report
-   * must show; a best-effort kind fails quietly.
+   * Stops one recording the attempt started, within the cleanup budget. A
+   * required recording that cannot be finalized is a cleanup failure the
+   * report must show; a best-effort one fails quietly.
    */
   private async stopRecording(
-    kind: 'trace' | 'video',
-    policy: 'best-effort' | 'required' | undefined,
+    kind: RecordingKind,
+    recording: AttemptRecording,
     attemptId: string,
     record: ClosingRecord,
     secondaryErrors: SerializedError[],
     stop: (operation: OperationContext) => Promise<void>,
   ): Promise<void> {
-    if (policy === undefined) return;
     try {
       await this.lifecycle(
         `stopping the ${kind}`,
@@ -745,7 +770,7 @@ export class TargetExecutor implements SerialHost {
         (signal) => stop(this.op(attemptId, this.config.cleanupTimeout, signal)),
       );
     } catch (cause) {
-      if (policy !== 'required') return;
+      if (recording.policy !== 'required') return;
       record.cleanup = 'failed';
       secondaryErrors.push(serializeError(classifyError(cause), { phase: 'cleanup' }));
     }
@@ -783,7 +808,7 @@ export class TargetExecutor implements SerialHost {
     context: AttemptContext,
   ): Promise<AttemptRecord> {
     const attemptId = uuidv7();
-    const video = attemptVideo(pairVideoMode(pair), attemptIndex);
+    const recordings = pairRecordings(pair, attemptIndex);
     const startedAt = timestamp();
     const startedMs = Date.now();
     // Serial members borrow the group's shared session, open state, artifact
@@ -928,7 +953,7 @@ export class TargetExecutor implements SerialHost {
     try {
       const session =
         shared?.session ??
-        (await this.launchSession({ session: pair.options.session, video, attemptIndex }, attemptId, artifacts.dir, attemptAbort.signal));
+        (await this.launchSession({ session: pair.options.session, recordings }, attemptId, artifacts.dir, attemptAbort.signal));
       openSession = session;
 
       const testDeadline = new Deadline(pair.options.timeout);
@@ -1154,7 +1179,7 @@ export class TargetExecutor implements SerialHost {
         await captureEvidence();
       }
       if (openSession !== null && shared === undefined) {
-        await this.closeSession(openSession, { attemptId, video }, record, artifacts.sink, secondaryErrors);
+        await this.closeSession(openSession, { attemptId, recordings }, record, artifacts.sink, secondaryErrors);
       }
     }
 

@@ -54,7 +54,7 @@ a name such as `tap`, `screenshot`, or `complete_step`.
 
 | Annotation | Meaning |
 | --- | --- |
-| `mutates: true` | Changes state. The runner reserves an action slot and runs the tool in the action queue. The call creates a replay gap in the [trace cache](/cache). |
+| `mutates: true` | Changes state. The runner reserves an action slot and runs the tool in the action queue. The call creates a replay gap in the [replay cache](/cache). |
 | `mutates: false` | Read-only. Runs without an action slot and may observe the screen. |
 | `platforms: ['ios', 'android']` | Offers the tool only on those platforms. Omit this to offer it on every target. |
 

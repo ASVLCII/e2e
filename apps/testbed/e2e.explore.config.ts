@@ -16,7 +16,6 @@ import { gateway } from 'ai';
 
 const url = process.env.EXPLORE_APP_URL;
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.testbed-explore',
   tests: 'tests-explore/**/*.e2e.ts',
   targets: [

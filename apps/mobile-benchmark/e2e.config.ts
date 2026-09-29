@@ -59,7 +59,6 @@ export const android = mobile({
 });
 
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.mobile-benchmark',
   tests: 'tests/**/*.e2e.ts',
   targets: [

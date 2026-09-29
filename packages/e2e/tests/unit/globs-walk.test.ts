@@ -94,6 +94,22 @@ describe('discoverFiles walk', () => {
     expect(discover(['node_modules/**/*.e2e.ts'])).toEqual({ files: [], dirs: ['.'] });
   });
 
+  it('leaves out what a "!" exclusion names, in any order, and never reads a directory it takes whole', () => {
+    expect(discover(['!tests/sub/**', 'tests/**/*.e2e.ts'])).toEqual({ files: ['tests/a.e2e.ts'], dirs: ['.', 'tests'] });
+    expect(discover(['**/*.e2e.ts', '!build/**', '!**/components/**'])).toEqual({
+      files: ['linked-target/t.e2e.ts', 'tests/a.e2e.ts', 'tests/sub/b.e2e.ts'],
+      dirs: ['.', 'apps', 'apps/web', 'apps/web/src', 'linked-target', 'tests', 'tests/sub'],
+    });
+    expect(discover(['tests/**/*.e2e.ts', '!tests/sub/b.e2e.ts'])).toEqual({ files: ['tests/a.e2e.ts'], dirs: ['.', 'tests', 'tests/sub'] });
+  });
+
+  it('still reads beneath an excluded directory when an including glob reaches a dot name the exclusion cannot take', () => {
+    expect(discover(['tests/**/.hidden/*.e2e.ts', '!tests/**'])).toEqual({
+      files: ['tests/.hidden/h.e2e.ts'],
+      dirs: ['.', 'tests', 'tests/.hidden', 'tests/sub'],
+    });
+  });
+
   it('does not follow symlinks to directories or files', (ctx) => {
     if (!symlinks) ctx.skip();
     const { files, dirs } = discover(['tests/**/*.e2e.ts', 'tests/**/*.ts']);

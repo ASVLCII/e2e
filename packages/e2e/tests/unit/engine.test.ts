@@ -10,6 +10,7 @@ import {
 } from '../../src/engine/index.ts';
 import { createEngineSession } from '../../src/engine/session.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
+import { secrets } from '../../src/secrets.ts';
 import { snapshot } from '../helpers/snapshot.ts';
 import type { OperationContext, SemanticNode } from '../../src/engine/surface.ts';
 
@@ -120,6 +121,16 @@ describe('defineEngine', () => {
     expect(() => defineEngine(observingEngine({ keyboard: { type: keyboard.type } as never }))).toThrow(/keyboard\.press/);
     expect(() => defineEngine(observingEngine({ keyboard: { ...keyboard, hide: keyboard.press } as never }))).toThrow(
       /keyboard has unknown key "hide"/,
+    );
+  });
+
+  it('keeps the secrets its options hold as handles, each name once', () => {
+    const handle = defineEngine(observingEngine({ secrets: [secrets.get('key'), secrets.get('key'), secrets.get('other')] }));
+    expect(handle.secrets?.map((secret) => secret.name)).toEqual(['key', 'other']);
+    expect(Object.isFrozen(handle.secrets)).toBe(true);
+    expect(() => defineEngine(observingEngine({ secrets: secrets.get('key') as never }))).toThrow(/secrets must be an array/);
+    expect(() => defineEngine(observingEngine({ secrets: [{ name: 'key', purpose: 'generic-secret' }] as never }))).toThrow(
+      /not a secrets\.get\(\) handle/,
     );
   });
 
@@ -550,12 +561,13 @@ describe('engine targets in config', () => {
     ).toThrow(/defineEngine/);
   });
 
-  it('accepts a video mode on a target without an engine; the runner grades it later', () => {
+  it('accepts a trace and a video mode on a target without an engine; the runner grades them later', () => {
     const config = resolveConfig(
-      { targets: [{ name: 'ios', platform: 'ios', video: 'on' }] },
+      { targets: [{ name: 'ios', platform: 'ios', trace: 'off', video: 'on' }] },
       { projectRoot: ROOT, env: {} as NodeJS.ProcessEnv },
     );
-    expect(config.targets[0]!.video).toBe('on');
+    expect(config.targets[0]!.trace).toEqual({ mode: 'off', source: 'target' });
+    expect(config.targets[0]!.video).toEqual({ mode: 'on', source: 'target' });
   });
 
   it('accepts agent options alongside an executor', () => {

@@ -5,6 +5,7 @@ import type { OperationContext } from 'e2e/engine';
 import type { RawObservedNode } from '../../src/read-node.ts';
 import { PlaywrightSurface } from '../../src/surface.ts';
 import { BrowserConnection } from '../../src/browser-connection.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 type ReadStage = 'evaluation' | 'metadata' | 'elements' | 'properties' | 'frame';
 const surfaces = new Set<PlaywrightSurface>();
@@ -86,7 +87,7 @@ async function setup(stalled?: ReadStage) {
     runId: 'run', targetName: 'fixture', projectRoot: process.cwd(), app: {}, env: {},
     headed: false, workerSlot: 0, signal: controller.signal, log: () => undefined,
   });
-  await surface.startAttempt({ attemptId: 'attempt', artifactsDir: tmpdir(), signal: controller.signal });
+  await surface.startAttempt({ attemptId: 'attempt', artifactsDir: tmpdir(), signal: controller.signal, resolveSecret: noSecrets });
   await surface.ensurePage();
   return { ...doc, surface, page, context, screenshot, count, operation, controller };
 }

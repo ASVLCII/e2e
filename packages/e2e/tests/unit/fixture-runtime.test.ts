@@ -203,7 +203,8 @@ describe('generic secrets', () => {
     } finally {
       setSecretRegistry(undefined);
     }
-    expect(() => secrets.get('known')).toThrow(/runner is active/);
+    // Outside a run the handle is a reference by name, which the config load checks.
+    expect(secrets.get('unknown').name).toBe('unknown');
   });
 });
 

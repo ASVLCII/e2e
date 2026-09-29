@@ -123,7 +123,7 @@ Use the [device engine](/mobile) for tests on a simulator or emulator.
 
 A video on a Playwright target records each page at its viewport when the
 page's segment starts, the window's size under `viewport: null`, unless
-`web({ video: { size } })` sets one size for every segment. A resize
+`web({ screencast: { size } })` sets one size for every segment. A resize
 mid-segment does not change that segment's dimensions; the page a restart
 or a state reset opens after it starts a new segment at the new size. A
 browser provider that records, such as

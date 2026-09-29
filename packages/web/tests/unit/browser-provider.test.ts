@@ -15,6 +15,7 @@ import { connectCdp } from '../../src/browser-connection.ts';
 import { web } from '../../src/index.ts';
 import { LeasedBrowsers, type BrowserLease, type BrowserProvider, type BrowserRequest } from '../../src/provider.ts';
 import { PlaywrightSurface } from '../../src/surface.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 vi.mock('../../src/browser-connection.ts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/browser-connection.ts')>()),
@@ -111,7 +112,7 @@ const initInfo = (workerSlot: number, env: Readonly<Record<string, string | unde
   signal: new AbortController().signal,
   log: () => undefined,
 });
-const attempt = (attemptId: string): EngineAttemptContext => ({ attemptId, artifactsDir: '/tmp/e2e-provider-artifacts', signal: new AbortController().signal });
+const attempt = (attemptId: string): EngineAttemptContext => ({ attemptId, artifactsDir: '/tmp/e2e-provider-artifacts', signal: new AbortController().signal, resolveSecret: noSecrets });
 const cleanup = (): EngineCleanupContext => ({ timeoutMs: 1_000, signal: new AbortController().signal });
 const operation = (): OperationContext => ({ timeoutMs: 1_000, signal: new AbortController().signal, runId: 'run-1', attemptId: 'a1', origin: 'test' });
 
@@ -499,7 +500,7 @@ describe('attempt scope', () => {
     const worker = new PlaywrightSurface({ browser: cloud.impl });
     await worker.init(initInfo(0, (await prepared(provider({ scope: 'attempt' }).impl, 1)).env));
     const controller = new AbortController();
-    const starting = worker.startAttempt({ attemptId: 'a1', artifactsDir: '/tmp/e2e-provider-artifacts', signal: controller.signal });
+    const starting = worker.startAttempt({ attemptId: 'a1', artifactsDir: '/tmp/e2e-provider-artifacts', signal: controller.signal, resolveSecret: noSecrets });
     controller.abort();
     await expect(starting).rejects.toMatchObject({ code: 'CANCELLED' });
     await worker.endAttempt(cleanup());
@@ -516,7 +517,7 @@ describe('attempt scope', () => {
       const worker = new PlaywrightSurface({ browser: cloud.impl });
       await worker.init(initInfo(0, (await prepared(provider({ scope: 'attempt' }).impl, 1)).env));
       const controller = new AbortController();
-      const starting = worker.startAttempt({ attemptId: 'a1', artifactsDir: '/tmp/e2e-provider-artifacts', signal: controller.signal });
+      const starting = worker.startAttempt({ attemptId: 'a1', artifactsDir: '/tmp/e2e-provider-artifacts', signal: controller.signal, resolveSecret: noSecrets });
       if (how === 'aborted') controller.abort();
       else await worker.endAttempt(cleanup());
       grant();
@@ -609,7 +610,7 @@ describe('recording', () => {
     await worker.init(initInfo(0, env));
     const artifactsDir = mkdtempSync(path.join(tmpdir(), 'e2e-provider-recording-'));
     artifactDirs.push(artifactsDir);
-    await worker.startAttempt({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal });
+    await worker.startAttempt({ attemptId: 'a1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
     return { worker, artifactsDir };
   }
 

@@ -22,11 +22,13 @@ import type {
   OperationContext,
   PointerAction,
   PointerActionKind,
+  Secret,
   SemanticNode,
   ViewportPoint,
 } from '../../src/engine/index.ts';
 import { defineEngine, ENGINE_SPI_VERSION, LOCATOR_ACTION_KINDS } from './engine-runtime.ts';
 import { createScene, type Scene, type ScriptedNode, type Stage } from './scripted-scene.ts';
+import { writeZip, zipEntry } from '../../src/internal/zip.ts';
 
 /** The EBML magic every WebM file starts with, followed by nothing worth decoding. */
 const FAKE_WEBM = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00, 0x00, 0x00, 0x00]);
@@ -137,12 +139,16 @@ export interface FakeEngineBehavior {
   video?: boolean;
   /** Links `stopVideo` reports before its file, as `video/mp4` segments starting with it. */
   videoLinks?: readonly string[];
+  /** Declares tracing on top of screenshots: `stopTrace` writes one small `trace/fake.zip` into the attempt directory. */
+  trace?: boolean;
   /** Throw to fail state restore after startAttempt succeeded. */
   onRestore?(state: EngineState): void | Promise<void>;
   /** Contributes a `gadget` fixture exercising every fixture-context facility. */
   fixtures?: boolean;
   /** What the engine declares about its app; defaults to `FAKE_APP_URL`, which every observation reports as its location. */
   app?: EngineAppDeclaration;
+  /** The secrets the engine declares, which `onStartAttempt` may resolve through its context. */
+  secrets?: readonly Secret[];
 }
 
 /** The app URL the fake serves and declares by default. */
@@ -282,6 +288,7 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
     },
     actions: behavior.actions ?? LOCATOR_ACTION_KINDS.filter((kind) => kind !== 'swipe'),
     app: behavior.app ?? { url: FAKE_APP_URL },
+    ...(behavior.secrets === undefined ? {} : { secrets: behavior.secrets }),
     session: {
       async open(url, operation) {
         record(`session.open(${url})`, operation);
@@ -413,7 +420,7 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
           },
         }
       : {}),
-    ...(behavior.artifacts === true || behavior.video === true
+    ...(behavior.artifacts === true || behavior.video === true || behavior.trace === true
       ? {
           artifacts: {
             async screenshot(label, operation) {
@@ -446,6 +453,22 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
                     videoStartedAt = undefined;
                     const links = (behavior.videoLinks ?? []).map((url) => ({ url, mediaType: 'video/mp4', startedAt }));
                     return [...links, { path: 'video/fake.webm', startedAt }];
+                  },
+                }
+              : {}),
+            ...(behavior.trace === true
+              ? {
+                  async startTrace(operation) {
+                    record('artifacts.startTrace', operation);
+                  },
+                  async stopTrace(operation) {
+                    record('artifacts.stopTrace', operation);
+                    const dir = attempts[current]!.artifactsDir;
+                    mkdirSync(path.join(dir, 'trace'), { recursive: true });
+                    // A real archive, so the runner's trace redaction can read it.
+                    const traceEvents = JSON.stringify({ type: 'context-options', attemptId: operation.attemptId });
+                    writeFileSync(path.join(dir, 'trace', 'fake.zip'), writeZip([zipEntry('trace.trace', Buffer.from(traceEvents, 'utf8'))]));
+                    return 'trace/fake.zip';
                   },
                 }
               : {}),

@@ -12,7 +12,6 @@ import { github } from '@e2e-dev/github';
  * the run as one comment there and says why when it cannot.
  */
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.web-benchmark',
   tests: 'tests/**/*.e2e.ts',
   targets: [

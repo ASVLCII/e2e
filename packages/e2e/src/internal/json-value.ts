@@ -5,7 +5,7 @@
  * cannot drift between call sites.
  */
 
-import { isSecret } from '../locator/screen.ts';
+import { isSecret } from '../secrets.ts';
 import { ConfigurationError, TestError } from './errors.ts';
 
 export interface JsonValueRules {

@@ -111,27 +111,28 @@ describe('registration', () => {
     ).rejects.toThrow(/0 through 10/);
   });
 
-  it('accepts a video mode on tests, groups, and setups, and rejects anything else', async () => {
+  it.each(['trace', 'video'] as const)('accepts a %s mode on tests, groups, and setups, and rejects anything else', async (kind) => {
     const registration = await collectModule(async () => {
-      test.setup('auth', { sessions: ['a'], video: 'off' }, noop);
-      test.describe('group', { video: 'on' }, () => {
-        test('x', { video: 'on-first-retry' }, noop);
+      test.setup('auth', { sessions: ['a'], [kind]: 'off' }, noop);
+      test.describe('group', { [kind]: 'on' }, () => {
+        test('x', { [kind]: 'on-all-retries' }, noop);
       });
     });
-    expect(registration.tests.map((item) => item.options.video)).toEqual(['off', 'on-first-retry']);
-    const register = (video: unknown) =>
+    expect(registration.tests.map((item) => item.options[kind])).toEqual(['off', 'on-all-retries']);
+    const register = (mode: unknown) =>
       collectModule(async () => {
-        test('x', { video } as never, noop);
+        test('x', { [kind]: mode } as never, noop);
       });
-    await expect(register(true)).rejects.toThrow('test options: video must be one of off, on, retain-on-failure, on-first-retry, got true');
+    const modes = 'off, on, retain-on-failure, on-first-retry, on-all-retries';
+    await expect(register(true)).rejects.toThrow(`test options: ${kind} must be one of ${modes}, got true`);
     await expect(register('on-failure')).rejects.toThrow('got "on-failure"');
     await expect(
       collectModule(async () => {
-        test.describe('group', { video: 'yes' } as never, () => {
+        test.describe('group', { [kind]: 'yes' } as never, () => {
           test('x', noop);
         });
       }),
-    ).rejects.toThrow('describe options: video must be one of off, on, retain-on-failure, on-first-retry, got "yes"');
+    ).rejects.toThrow(`describe options: ${kind} must be one of ${modes}, got "yes"`);
   });
 });
 
@@ -173,20 +174,20 @@ describe('serial groups', () => {
     ).rejects.toThrow(/nested serial/);
   });
 
-  it('rejects a video on a describe nested in a serial group, which records as one unit', async () => {
+  it.each(['trace', 'video'] as const)('rejects a %s on a describe nested in a serial group, which records as one unit', async (kind) => {
     await expect(
       collectModule(async () => {
         test.describe('unit', { serial: true }, () => {
-          test.describe('inner', { video: 'off' }, () => {
+          test.describe('inner', { [kind]: 'off' }, () => {
             test('x', noop);
           });
         });
       }),
-    ).rejects.toThrow('describe option "video" cannot be set inside a serial group');
+    ).rejects.toThrow(`describe option "${kind}" cannot be set inside a serial group`);
   });
 
   it('rejects member overrides of unit-owned options', async () => {
-    for (const options of [{ retries: 1 }, { video: 'on' }, { session: 's' }, { skip: true }, { only: true }]) {
+    for (const options of [{ retries: 1 }, { trace: 'on' }, { video: 'on' }, { session: 's' }, { skip: true }, { only: true }]) {
       await expect(
         collectModule(async () => {
           test.describe('unit', { serial: true }, () => {

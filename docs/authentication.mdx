@@ -115,7 +115,9 @@ admin.username; // a plain string
 admin.password; // Secret: opaque, with no plaintext accessor
 ```
 
-A `Secret` has no `.value`. Exactly two sinks accept one:
+A `Secret` has no `.value`. In a test, exactly two sinks accept one (an
+engine option can hold one too, as
+[`basicAuth`](/starting-your-app#protected-previews) does):
 
 <Tabs>
   <Tab title="Deterministic">
@@ -222,6 +224,11 @@ entry in setup tests and assert the result of submitting it. See the
 
 `secrets.get('admin')` also returns the password handle for the `admin`
 credential. A name cannot appear under both `credentials` and `secrets`.
+
+In `e2e.config.ts`, `secrets.get()` hands an engine option a secret it needs
+before any test runs, such as a [basic-auth password](/starting-your-app#protected-previews).
+The config load checks the name, and the value is redacted once the engine
+resolves it.
 
 ## Several signed-in users
 

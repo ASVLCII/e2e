@@ -125,7 +125,10 @@ implemented yet.
 ## Rerunning failures
 
 `--last-failed` runs only the tests the previous run did not pass, read from
-`.e2e/report.json` before the new run overwrites it. A `beforeAll` or
+`.e2e/report.json` (under the [`output`](/reference/config#output) the run
+uses) before the new run overwrites it. The rerun empties `.e2e/artifacts/`
+when it starts, so upload the first run's artifacts before rerunning in the
+same job if you want both. A `beforeAll` or
 `afterAll` that failed brings back every test in its describe or file on that
 target, even one whose body passed, until a rerun of those tests passes the
 hook; in a setup's file, the tests that consume its session. Locally it is the loop after
@@ -158,7 +161,7 @@ A failed agent step fails the job like a failed `expect`. Keep the checks
 predictable by giving each `agent.act` one goal and checking its outcome
 with a locator assertion or `agent.assert`.
 
-To reuse verified actions in CI, [share the trace cache](/cache#commit-your-traces).
+To reuse verified actions in CI, [share the replay cache](/cache#commit-your-traces).
 A cache hit avoids a model call for that action step. Agent judgments still
 run live, and a cache miss or hand-off uses the model.
 

@@ -8,6 +8,7 @@ import type { Page } from 'playwright';
 import type { EngineFixtureContext } from 'e2e/engine';
 import { PlaywrightSurface } from '../../src/surface.ts';
 import { createWebFixture, type Web } from '../../src/web.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 /**
  * One origin with a body for every outcome `waitForResponse` reports: a full
@@ -75,7 +76,7 @@ describe('web.waitForResponse bodies', () => {
   });
 
   beforeEach(async () => {
-    await surface.startAttempt({ attemptId: 'responses', artifactsDir, signal });
+    await surface.startAttempt({ attemptId: 'responses', artifactsDir, signal, resolveSecret: noSecrets });
     page = await surface.ensurePage();
     await page.goto(`${origin}/`);
     web = createWebFixture(surface, {

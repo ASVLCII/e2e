@@ -332,8 +332,8 @@ describe('e2e run argument parsing', () => {
       '--pass-with-no-tests',
       '--config',
       'custom.config.ts',
-      '--artifacts',
-      'out/artifacts',
+      '--output',
+      'out',
     );
     const options = lastRunOptions();
     expect(options.headed).toBe(true);
@@ -341,7 +341,37 @@ describe('e2e run argument parsing', () => {
     expect(options.aiTrace).toBe(true);
     expect(options.passWithNoTests).toBe(true);
     expect(options.configPath).toBe('custom.config.ts');
-    expect(options.artifactsDir).toBe('out/artifacts');
+    expect(options.output).toBe('out');
+  });
+
+  it('parses --trace and --video modes, a bare flag as on', async () => {
+    await invoke('run', '--trace=on-all-retries', '--video');
+    expect(lastRunOptions()).toMatchObject({ trace: 'on-all-retries', video: 'on' });
+    runMock.mockClear();
+    await invoke('run', '--trace', '--video=retain-on-failure');
+    expect(lastRunOptions()).toMatchObject({ trace: 'on', video: 'retain-on-failure' });
+    runMock.mockClear();
+    await invoke('run', 'tests/a.e2e.ts');
+    expect(lastRunOptions()).toMatchObject({ trace: undefined, video: undefined });
+  });
+
+  it('refuses a --trace value that is not a mode, with the way to write one', async () => {
+    await invoke('run', '--trace', 'tests/a.e2e.ts');
+    expect(runMock).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+    expect(written(stderrSpy)).toContain('write --trace=<mode>, or put test files before --trace');
+  });
+
+  it('refuses the removed --artifacts, mapping it to --output of its parent', async () => {
+    for (const command of ['run', 'explore']) {
+      runMock.mockClear();
+      process.exitCode = undefined;
+      stderrSpy.mockClear();
+      await invoke(command, '--artifacts', 'out/artifacts');
+      expect(runMock).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(2);
+      expect(written(stderrSpy)).toContain('--artifacts was removed; write --output out instead');
+    }
   });
 
   it('propagates the run outcome exit code', async () => {
@@ -545,7 +575,7 @@ describe('e2e --version and --help', () => {
     expect(help).toContain('Usage: e2e <command> [options]');
     expect(help).toMatch(/^ {2}init \[options\] \[directory\] {2,}scaffold/mu);
     expect(help).toMatch(/^ {2}run \[options\] \[files\.\.\.\] {2,}run the tests$/mu);
-    expect(help).toMatch(/^ {2}cache {2,}inspect, measure, and clear the trace cache$/mu);
+    expect(help).toMatch(/^ {2}cache {2,}inspect, measure, and clear the replay cache$/mu);
     expect(help).toMatch(/^ {2}mcp \[options\] {2,}serve the project to a coding agent over MCP$/mu);
     expect(help).toMatch(/^ {2}help \[command\] {2,}show help for a command$/mu);
     expect(help).toMatch(/^ {2}-v, --version {2,}print the version$/mu);
@@ -585,9 +615,10 @@ describe('e2e --version and --help', () => {
       '--no-cache',
       '--strict-cache',
       '--reporter',
-      '--artifacts',
+      '--output',
       '--debug',
       '--ai-trace',
+      '--trace',
       '--video',
       '-h',
     ]);

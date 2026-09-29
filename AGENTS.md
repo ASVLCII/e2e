@@ -240,7 +240,7 @@ before changing prompts in `src/agent/`, and again after, with `compare`. In
 integration tests, pass `runOptions: { aiTrace: true }` and read the file from
 the fixture project (`tests/integration/agent-ai-trace.test.ts` shows how).
 
-- Steps the trace cache replays make no model call and leave no run; use
+- Steps replayed from the replay cache make no model call and leave no run; use
   `--no-cache` when you want the whole flow traced.
 - Cost shows as `-` in unbox-ai (the devtools shape carries none); the AI
   Gateway's `marketCost` is in each step's `output.providerMetadata`, and the
@@ -249,9 +249,9 @@ the fixture project (`tests/integration/agent-ai-trace.test.ts` shows how).
   directory, then `E2E_DEVTOOLS=1 ... test:agent -- --workers 1` (the testbed
   agent config registers `@ai-sdk/devtools`; that recorder is one database
   per process, hence one worker). Prefer `--ai-trace` for anything to keep.
-- "Trace" means three things here: the trace cache (`trace-1`, recorded
-  actions under `.e2e/cache/`), the Playwright trace artifact, and this AI
-  trace. Say which.
+- "Trace" means three things here: the recorded actions the replay cache
+  keeps (`trace-1` entries under `.e2e/cache/`), the Playwright trace
+  artifact, and this AI trace. Say which.
 
 ## Cross-checking the web engine's tree
 
@@ -345,7 +345,7 @@ trees, on both platforms, without a device.
   locate cache are both gone, for example). Verify against `src/` before
   repeating or relying on any "not implemented yet" list — and fix the prose
   when you find it stale.
-- Committed recordings. The two benchmarks commit their agentic suites' trace
+- Committed recordings. The two benchmarks commit their agentic suites' replay
   cache (`apps/web-benchmark/.e2e/cache/`,
   `apps/mobile-benchmark/.e2e/cache/`; their `.gitignore`s leave it
   tracked, the testbed's ignores its own, since fixture-app recordings are

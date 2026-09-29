@@ -712,18 +712,18 @@ test('asserts after a degraded pixel request', async ({ app, agent }) => {
   );
 
   it(
-    'surfaces UNSUPPORTED_ARTIFACT before any attempt when config demands more than the engine offers',
+    'surfaces UNSUPPORTED_ARTIFACT before any attempt when a target demands more than the engine offers',
     async () => {
       const fake = createFakeEngine();
       const { outcome, project } = await runProject(
         { 'tests/artifact.e2e.ts': PASSING_TEST },
-        { appUrl: APP_URL, config: engineConfig(fake.engine, { artifacts: ['trace'] }) },
+        { appUrl: APP_URL, config: { targets: [{ name: 'fake', platform: 'fake', engine: fake.engine, trace: 'on' }] } },
       );
       expect(outcome.status).toBe('error');
       expect(fake.stats().attemptsStarted).toBe(0);
-      expect(
-        outcome.report.run.errors.some((error) => error.code === 'UNSUPPORTED_ARTIFACT'),
-      ).toBe(true);
+      expect(outcome.report.run.errors.find((error) => error.code === 'UNSUPPORTED_ARTIFACT')?.message).toBe(
+        "target \"fake\" (engine fake) cannot record a trace, and the target sets trace: 'on'",
+      );
       project.cleanup();
     },
     60_000,
@@ -955,22 +955,29 @@ test('fails on purpose', async ({ app }) => {
   const videosOf = (outcome: Awaited<ReturnType<typeof runProject>>['outcome'], title: string, attempt = 0) =>
     resultByTitle(outcome, title).attempts[attempt]!.artifacts.filter((artifact) => artifact.kind === 'video');
 
-  /** A config with the default artifact kinds, so `--video` adds to a best-effort set. */
-  const defaultKindsConfig = (fake: FakeEngineHandle): Partial<E2EConfig> => ({
+  /** A config that sets no recording, so `--video` is the only one asking. */
+  const plainConfig = (fake: FakeEngineHandle): Partial<E2EConfig> => ({
     targets: [{ name: 'fake', platform: 'fake', engine: fake.engine }],
   });
 
   it(
-    'is a contract even without explicit kinds: --video on an engine that cannot record is UNSUPPORTED_ARTIFACT',
+    'applies --video best-effort: an engine that cannot record runs without one, and the run says so once',
     async () => {
       const fake = createFakeEngine({ artifacts: true });
+      const notices: { target: string; message: string }[] = [];
       const { outcome, project } = await runProject(
         { 'tests/video.e2e.ts': PASSING_TEST },
-        { appUrl: APP_URL, config: defaultKindsConfig(fake), runOptions: { video: 'on' } },
+        {
+          appUrl: APP_URL,
+          config: plainConfig(fake),
+          runOptions: { video: 'on', onEvent: (event) => { if (event.type === 'notice') notices.push({ target: event.target, message: event.message }); } },
+        },
       );
-      expect(outcome.status).toBe('error');
-      expect(fake.stats().attemptsStarted).toBe(0);
-      expect(outcome.report.run.errors.some((error) => error.code === 'UNSUPPORTED_ARTIFACT')).toBe(true);
+      expect(outcome.status).toBe('passed');
+      expect(videosOf(outcome, 'taps a node')).toEqual([]);
+      expect(notices).toEqual([
+        { target: 'run', message: 'video records only on targets whose engine can record it; target "fake" (engine fake) records no video' },
+      ]);
       project.cleanup();
     },
     60_000,
@@ -982,8 +989,8 @@ test('fails on purpose', async ({ app }) => {
       const fake = createFakeEngine({ video: true });
       const { outcome, project } = await runProject(
         { 'tests/video.e2e.ts': PASSING_TEST },
-        // Default kinds stay best-effort: the fake has no trace, and the run does not mind.
-        { appUrl: APP_URL, config: defaultKindsConfig(fake), runOptions: { video: 'on' } },
+        // The default trace is best-effort: the fake has no trace, and the run does not mind.
+        { appUrl: APP_URL, config: plainConfig(fake), runOptions: { video: 'on' } },
       );
       expect(outcome.status).toBe('passed');
       assertValidReport(outcome.report);
@@ -1071,6 +1078,20 @@ test('fails on purpose', async ({ app }) => {
   );
 
   it(
+    'records every retry with on-all-retries',
+    async () => {
+      const fake = createFakeEngine({ video: true });
+      const { outcome, project } = await runProject(
+        { 'tests/fail.e2e.ts': FAILING_TEST },
+        { appUrl: APP_URL, config: engineConfig(fake.engine, { video: 'on-all-retries', retries: 2 }) },
+      );
+      expect([0, 1, 2].map((attempt) => videosOf(outcome, 'fails on purpose', attempt).length)).toEqual([0, 1, 1]);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
     "lets a test's own video win over --video, and a target's win over the config",
     async () => {
       const fake = createFakeEngine({ video: true });
@@ -1116,9 +1137,20 @@ test.describe('checkout', () => {
       expect(refused.outcome.status).toBe('error');
       expect(fake.stats().attemptsStarted).toBe(0);
       expect(refused.outcome.report.run.errors.find((error) => error.code === 'UNSUPPORTED_ARTIFACT')?.message).toBe(
-        'target "fake" (engine fake) cannot record video, and test "checkout > records" in tests/video.e2e.ts records with video: on',
+        "target \"fake\" (engine fake) cannot record video, and test \"checkout > records\" in tests/video.e2e.ts sets video: 'on'",
       );
       refused.project.cleanup();
+
+      // A mode a target sets is required of its engine, like a test's.
+      const targeted = createFakeEngine({ artifacts: true });
+      const byTarget = await runProject(
+        { 'tests/video.e2e.ts': PASSING_TEST },
+        { appUrl: APP_URL, config: { targets: [{ name: 'fake', platform: 'fake', engine: targeted.engine, video: 'retain-on-failure' }] } },
+      );
+      expect(byTarget.outcome.report.run.errors.find((error) => error.code === 'UNSUPPORTED_ARTIFACT')?.message).toBe(
+        "target \"fake\" (engine fake) cannot record video, and the target sets video: 'retain-on-failure'",
+      );
+      byTarget.project.cleanup();
 
       // on-first-retry with no retries never records, and a --video run whose tests all opt out asks nothing.
       for (const [config, runOptions, body] of [
@@ -1130,6 +1162,77 @@ test.describe('checkout', () => {
         expect(run.outcome.status).toBe('passed');
         run.project.cleanup();
       }
+    },
+    60_000,
+  );
+});
+
+describe('trace capability and plan notices', () => {
+  /** Runs `files` on `fake` with `config` and returns the outcome with the run's notices. */
+  const runWithNotices = async (fake: FakeEngineHandle, files: Record<string, string>, config: Partial<E2EConfig> = {}) => {
+    const notices: string[] = [];
+    const { outcome, project } = await runProject(files, {
+      appUrl: APP_URL,
+      config: engineConfig(fake.engine, config),
+      runOptions: { onEvent: (event) => { if (event.type === 'notice' && event.target === 'run') notices.push(event.message); } },
+    });
+    project.cleanup();
+    return { outcome, notices };
+  };
+
+  it(
+    'applies a config trace best-effort, naming the targets that cannot trace, and says nothing for the default',
+    async () => {
+      const set = await runWithNotices(createFakeEngine({ artifacts: true }), { 'tests/a.e2e.ts': PASSING_TEST }, { trace: 'on' });
+      expect(set.outcome.status).toBe('passed');
+      expect(set.notices).toEqual(['trace records only on targets whose engine can record it; target "fake" (engine fake) records no trace']);
+      const fallback = await runWithNotices(createFakeEngine({ artifacts: true }), { 'tests/a.e2e.ts': PASSING_TEST });
+      expect(fallback.outcome.status).toBe('passed');
+      expect(fallback.notices).toEqual([]);
+    },
+    60_000,
+  );
+
+  it(
+    "refuses a test's trace on an engine that cannot trace, naming the test",
+    async () => {
+      const fake = createFakeEngine({ artifacts: true });
+      const { outcome } = await runWithNotices(fake, {
+        'tests/a.e2e.ts': PASSING_TEST.replace("test('taps a node', async", "test('taps a node', { trace: 'retain-on-failure' }, async"),
+      });
+      expect(outcome.status).toBe('error');
+      expect(fake.stats().attemptsStarted).toBe(0);
+      expect(outcome.report.run.errors.find((error) => error.code === 'UNSUPPORTED_ARTIFACT')?.message).toBe(
+        "target \"fake\" (engine fake) cannot record a trace, and test \"taps a node\" in tests/a.e2e.ts sets trace: 'retain-on-failure'",
+      );
+    },
+    60_000,
+  );
+
+  it(
+    'warns at plan time that a retry mode with no retries records no traces',
+    async () => {
+      const fake = createFakeEngine({ trace: true });
+      const { outcome, notices } = await runWithNotices(fake, { 'tests/a.e2e.ts': PASSING_TEST }, { trace: 'on-first-retry', retries: 0 });
+      expect(outcome.status).toBe('passed');
+      expect(notices).toEqual([
+        "trace: 'on-first-retry' records retries only, and 1 test runs with retries: 0, so no traces will be recorded for it; set retries, or trace: 'on'",
+      ]);
+      expect(fake.operations.some((operation) => operation.method === 'artifacts.startTrace')).toBe(false);
+    },
+    60_000,
+  );
+
+  it(
+    'traces with the fake engine, keeping a passed attempt out of the report under retain-on-failure',
+    async () => {
+      const fake = createFakeEngine({ trace: true });
+      const { outcome } = await runWithNotices(fake, { 'tests/a.e2e.ts': PASSING_TEST }, { trace: 'retain-on-failure' });
+      expect(outcome.status).toBe('passed');
+      const attempt = resultByTitle(outcome, 'taps a node').attempts[0]!;
+      expect(attempt.artifacts.filter((artifact) => artifact.kind === 'trace')).toEqual([]);
+      expect(existsSync(path.join(fake.attempts[0]!.artifactsDir, 'trace', 'fake.zip'))).toBe(false);
+      expect(fake.operations.map((operation) => operation.method)).toEqual(expect.arrayContaining(['artifacts.startTrace', 'artifacts.stopTrace']));
     },
     60_000,
   );
@@ -1160,7 +1263,7 @@ test.describe(${JSON.stringify(LONG_DESCRIBE)}, () => {
       const fake = createFakeEngine({ artifacts: true });
       const { outcome, project } = await runProject(
         { 'tests/checkouts.e2e.ts': SHARED_PREFIX_FILE },
-        { appUrl: APP_URL, config: engineConfig(fake.engine, { artifacts: ['screenshot'] }) },
+        { appUrl: APP_URL, config: engineConfig(fake.engine) },
       );
       const first = resultByTitle(outcome, 'keeps the coupon after a reload');
       const second = resultByTitle(outcome, 'drops the coupon after sign-out');

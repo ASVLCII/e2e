@@ -1,7 +1,7 @@
 /** e2e CLI. */
 
 import { existsSync } from 'node:fs';
-import { resolve as resolvePath } from 'node:path';
+import { dirname, resolve as resolvePath } from 'node:path';
 import { Argument, Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 import picocolors from 'picocolors';
 import { detectPackageManager, execCommand, runScriptCommand } from '../internal/package-manager.ts';
@@ -12,8 +12,8 @@ import { list, run, type ListedPair, type RunOptions, type RunOutcome } from '..
 import { explore, STEP_BOUNDS, TIMEOUT_BOUNDS } from '../explore/index.ts';
 import { BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { bounded } from '../report/format.ts';
-import type { BuiltinReporter, VideoMode } from '../types.ts';
-import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
+import type { BuiltinReporter, RecordingMode } from '../types.ts';
+import { isRecordingMode, RECORDING_MODES } from '../internal/recording-modes.ts';
 import { runsFromCheckout } from '../telemetry/checkout.ts';
 import { initCompletedEvent, runCompletedEvent, USAGE_ERROR_CODE } from '../telemetry/events.ts';
 import { Telemetry } from '../telemetry/telemetry.ts';
@@ -149,21 +149,35 @@ function parseReporters(value: string): Reporter[] {
 }
 
 /**
- * `--video [mode]`: a bare flag is `on`. An optional value is greedy, so a
- * test file after the flag would be read as the mode; one that is not a mode
- * is refused with the way to write it.
+ * The parser of `--trace [mode]` or `--video [mode]`: a bare flag is `on`.
+ * An optional value is greedy, so a test file after the flag would be read
+ * as the mode; one that is not a mode is refused with the way to write it.
  */
-function parseVideoMode(value: string): VideoMode {
-  if (!isVideoMode(value)) {
-    throw new InvalidArgumentError(
-      `expected a mode (${VIDEO_MODES.join(', ')}), got "${value}"; write --video=<mode>, or put test files before --video`,
-    );
-  }
-  return value;
+function parseRecordingMode(flag: '--trace' | '--video'): (value: string) => RecordingMode {
+  return (value) => {
+    if (!isRecordingMode(value)) {
+      throw new InvalidArgumentError(
+        `expected a mode (${RECORDING_MODES.join(', ')}), got "${value}"; write ${flag}=<mode>, or put test files before ${flag}`,
+      );
+    }
+    return value;
+  };
 }
 
-/** The mode `--video [mode]` parsed to: `on` for the bare flag, undefined when it was not given. */
-function videoOption(value: VideoMode | true | undefined): VideoMode | undefined {
+/**
+ * The removed `--artifacts <dir>`, kept hidden so a script that still passes
+ * it fails with the new spelling: the directory's parent held the report
+ * beside it, and is what `--output` names now.
+ */
+function removedArtifactsFlag(value: string): never {
+  const parent = dirname(value);
+  throw new InvalidArgumentError(
+    `--artifacts was removed; write --output ${parent} instead: the report and the artifacts/ directory go under the output directory (--artifacts out/artifacts is --output out)`,
+  );
+}
+
+/** The mode `--trace [mode]` or `--video [mode]` parsed to: `on` for the bare flag, undefined when it was not given. */
+function recordingOption(value: RecordingMode | true | undefined): RecordingMode | undefined {
   return value === true ? 'on' : value;
 }
 
@@ -181,7 +195,7 @@ function selectionOptions(command: Command): Command {
     .option('--exclude-tag <tags>', 'leave out tests carrying any of these tags, comma-separated or repeated', parseNames('tag'))
     .option('--grep <pattern>', 'only tests whose title matches the regular expression (describe titles and test title, space-joined); repeat for alternatives', parsePattern)
     .option('--grep-invert <pattern>', 'leave out tests whose title matches the regular expression; repeat for alternatives', parsePattern)
-    .option('--last-failed', 'only the tests the previous run did not pass, read from .e2e/report.json')
+    .option('--last-failed', 'only the tests the previous run did not pass, read from <output>/report.json')
     .option('--shard <index/total>', 'one contiguous slice of the selected tests, such as 2/3; serial groups stay together', parseShard)
     .option('--pass-with-no-tests', 'exit 0 on an empty selection instead of NO_TESTS');
 }
@@ -486,7 +500,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .command('run')
     .summary('run the tests')
     .description(
-      'Run the tests the config discovers and write .e2e/report.json. Files, directories, and quoted globs narrow that selection, as do --tag, --exclude-tag, --grep, and --target.',
+      'Run the tests the config discovers and write <output>/report.json (.e2e by default). Files, directories, and quoted globs narrow that selection, as do --tag, --exclude-tag, --grep, and --target.',
     )
     .argument('[files...]', FILES_DESCRIPTION)
     .optionsGroup('Selection:')
@@ -504,14 +518,16 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--retries <n>', 'retries per failing test (default: from the config)', parseNonNegativeInt)
     .option('--max-failures <n>', 'stop the run once this many tests have failed; the rest are skipped', parsePositiveInt)
     .option('--repeat-each <n>', 'run every selected test this many times, each run its own result (pair with --no-cache to exercise the model each time)', parsePositiveInt)
-    .option('--no-cache', 'run with the trace cache off, whatever the config says')
+    .option('--no-cache', 'run with the replay cache off, whatever the config says')
     .option('--strict-cache', 'fail a step whose recording no longer replays (REPLAY_STALE) instead of handing it to the agent')
     .optionsGroup('Output:')
     .option('--reporter <ids>', `comma-separated reporters: ${BUILTIN_REPORTERS.join(', ')}`, parseReporters)
-    .option('--artifacts <dir>', 'artifact root (default: .e2e/artifacts)')
+    .option('--output <dir>', 'results directory: report, artifacts, sessions (default: output in the config, else .e2e)')
+    .addOption(new Option('--artifacts <dir>').hideHelp().argParser(removedArtifactsFlag))
     .option('--debug', 'print phase timings and the agent step table to stderr')
-    .option('--ai-trace', 'record every model call to .e2e/ai-trace.json (unbox-ai)')
-    .option('--video [mode]', `which attempts record a video: ${VIDEO_MODES.join(', ')} (bare: on), over the config and every target`, parseVideoMode)
+    .option('--ai-trace', 'record every model call to <output>/ai-trace.json (unbox-ai)')
+    .option('--trace [mode]', `which attempts record a trace: ${RECORDING_MODES.join(', ')} (bare: on), over the config and every target`, parseRecordingMode('--trace'))
+    .option('--video [mode]', `which attempts record a video: ${RECORDING_MODES.join(', ')} (bare: on), over the config and every target`, parseRecordingMode('--video'))
     .addHelpText(
       'after',
       [
@@ -553,13 +569,14 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           maxFailures?: number;
           repeatEach?: number;
           reporter?: Reporter[];
-          artifacts?: string;
+          output?: string;
           /** Commander negation: `--no-cache` parses as `cache: false`. */
           cache?: boolean;
           strictCache?: boolean;
           debug?: boolean;
           aiTrace?: boolean;
-          video?: VideoMode | true;
+          trace?: RecordingMode | true;
+          video?: RecordingMode | true;
         },
         command: Command,
       ) => {
@@ -577,12 +594,13 @@ function createProgram(version: string, telemetry: Telemetry): Command {
             maxFailures: options.maxFailures,
             repeatEach: options.repeatEach,
             reporters: options.reporter,
-            artifactsDir: options.artifacts,
+            output: options.output,
             noCache: options.cache === false,
             strictCache: options.strictCache,
             debug: options.debug,
             aiTrace: options.aiTrace,
-            video: videoOption(options.video),
+            trace: recordingOption(options.trace),
+            video: recordingOption(options.video),
             interruptSignal: signals.interruptSignal,
             forceSignal: signals.forceSignal,
           }),
@@ -594,7 +612,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .command('explore')
     .summary('explore the app toward a goal and report findings, without a test file')
     .description(
-      'Run the agent against the app with a goal instead of a test: it plans one exploration step at a time, drives the app, reports every defect it has evidence of, and ends with an assessment. The run writes .e2e/report.json like e2e run, with the exploration record under run.explore. The model is the one the selected agent holds, as for e2e run.',
+      'Run the agent against the app with a goal instead of a test: it plans one exploration step at a time, drives the app, reports every defect it has evidence of, and ends with an assessment. The run writes <output>/report.json like e2e run, with the exploration record under run.explore. The model is the one the selected agent holds, as for e2e run.',
     )
     .argument('[goal]', 'what to explore, in a sentence (default: "Explore the app and find bugs")')
     .optionsGroup('Selection:')
@@ -617,10 +635,12 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--headed', 'show the UI while the agent explores, when the engine supports it')
     .optionsGroup('Output:')
     .option('--reporter <ids>', `comma-separated reporters: ${BUILTIN_REPORTERS.join(', ')}`, parseReporters)
-    .option('--artifacts <dir>', 'artifact root (default: .e2e/artifacts)')
+    .option('--output <dir>', 'results directory: report, artifacts, sessions (default: output in the config, else .e2e)')
+    .addOption(new Option('--artifacts <dir>').hideHelp().argParser(removedArtifactsFlag))
     .option('--debug', 'print phase timings and the agent step table to stderr')
-    .option('--ai-trace', 'record every model call to .e2e/ai-trace.json (unbox-ai)')
-    .option('--video [mode]', 'record a video of the exploration (bare: on), when the engine supports it', parseVideoMode)
+    .option('--ai-trace', 'record every model call to <output>/ai-trace.json (unbox-ai)')
+    .option('--trace [mode]', 'record a trace of the exploration (bare: on), when the engine supports it; one attempt, so retry modes record none', parseRecordingMode('--trace'))
+    .option('--video [mode]', 'record a video of the exploration (bare: on), when the engine supports it; one attempt, so retry modes record none', parseRecordingMode('--video'))
     .addHelpText(
       'after',
       [
@@ -651,10 +671,11 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           timeout?: number;
           headed?: boolean;
           reporter?: Reporter[];
-          artifacts?: string;
+          output?: string;
           debug?: boolean;
           aiTrace?: boolean;
-          video?: VideoMode | true;
+          trace?: RecordingMode | true;
+          video?: RecordingMode | true;
         },
         command: Command,
       ) =>
@@ -669,10 +690,11 @@ function createProgram(version: string, telemetry: Telemetry): Command {
             timeoutMs: options.timeout,
             headed: options.headed,
             reporters: options.reporter,
-            artifactsDir: options.artifacts,
+            output: options.output,
             debug: options.debug,
             aiTrace: options.aiTrace,
-            video: videoOption(options.video),
+            trace: recordingOption(options.trace),
+            video: recordingOption(options.video),
             interruptSignal: signals.interruptSignal,
             forceSignal: signals.forceSignal,
             notice: (message) => process.stderr.write(`e2e explore: ${message}\n`),
@@ -747,9 +769,9 @@ function createProgram(version: string, telemetry: Telemetry): Command {
 
   const cacheCommand = program
     .command('cache')
-    .summary('inspect, measure, and clear the trace cache')
+    .summary('inspect, measure, and clear the replay cache')
     .description(
-      'Read the trace cache the runs write under .e2e/cache: what a committed cache holds, how much room it takes, and how to empty it. Reads the same config as e2e run, so cache.dir and --config decide which store is meant.',
+      'Read the replay cache the runs write under .e2e/cache: what a committed cache holds, how much room it takes, and how to empty it. Reads the same config as e2e run, so cache.dir and --config decide which store is meant.',
     )
     .addHelpText(
       'after',

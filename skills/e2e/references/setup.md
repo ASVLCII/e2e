@@ -110,19 +110,21 @@ export default {
 | Key | Default | Notes |
 | --- | --- | --- |
 | `targets` | required | Non-empty. UI targets set `engine`; `platform` defaults to the engine's platform and `name` defaults to that platform. Tools-only targets may omit `engine` and must set `platform`. Use `name` with `--target`. |
-| `tests` | `'tests/**/*.e2e.ts'` | A glob or an array of globs relative to the project root: `*`, `?`, and a whole `**` segment, `/` separators; a leading `./` is fine. Braces, character classes, extglobs, `..`, and absolute paths are `INVALID_GLOB`. Discovery enters only the directories a glob can match beneath and does not follow symlinks. |
+| `tests` | `'tests/**/*.e2e.ts'` | A glob or an array of globs relative to the project root: `*`, `?`, and a whole `**` segment, `/` separators; a leading `./` is fine. An entry starting with `!` excludes (`['tests/**/*.e2e.ts', '!tests/wip/**']`), in any order; only exclusions is `INVALID_CONFIG`. Braces, character classes, extglobs, `..`, and absolute paths are `INVALID_GLOB`. Discovery enters only the directories a glob can match beneath and does not follow symlinks. |
 | `timeout` | `120000` | Per test attempt, in ms. Also the default `agent.act` deadline. |
 | `actionTimeout` | `30000` | Every locator action and engine operation, including each observation inside an agent step. Raise it for slow UI operations. |
 | `assertionTimeout` | `5000` | `expect` polling window. |
 | `retries` | `0`, `1` in CI | 0 to 10. |
 | `workers` | half the cores, `1` in CI | Test files run in parallel across workers, at most the `workers` the engine declares per target (a device target: one per device). |
 | `reporters` | `['list']` | `list`, `json`, `junit`, `markdown`, and reporter objects (`{ name, onEvent?, onRunFinished? }`) that receive the finished run. `json` excludes `list`; `--reporter` keeps the objects. |
-| `cache` | `'read-write'`, `'read-only'` in CI | The trace cache for `agent.act`; `'off'` disables it. |
+| `cache` | `'read-write'`, `'read-only'` in CI | The replay cache for `agent.act`; `'off'` disables it. |
 | `agents` | `{ default: built-in }` | Agents by name. `default` is what tests run with; `e2e run --agent <name>` runs with another. Each entry is `createAgent(...)`, an options block `{ model, judge, context, maxSteps, maxModelCalls, providerOptions }`, or a custom `StepExecutor`. The built-in agent requires `model` as an AI SDK instance. Custom executors can implement `act` and `assert` without a model; `waitFor` and `extract` still need one. |
 | `credentials` | `{}` | Named `{ username, password }` entries; `password` is a string of at least 6 characters (code points) or a function returning the value. |
 | `secrets` | `{}` | Named values the model never sees (API keys, tokens): a string of at least 6 characters (code points) or a function returning the value. A name cannot also be a credential. |
-| `artifacts` | `['screenshot', 'trace']` | Kinds to keep (`screenshot`, `trace`), or `{ kinds, store, trace }` to hand each artifact to a host store; `trace: { record: 'retries' }` traces retries only (a trace on every attempt is a large share of a run's CPU). Video is not a kind; `kinds: ['video']` and `artifacts.video` are `INVALID_CONFIG`. |
-| `video` | `'off'` | Which attempts record a video: `'on'`, `'retain-on-failure'` (record all, keep the ones that did not pass), `'on-first-retry'` (only the first retry records; the cheap CI mode). Also per target (`{ engine, video }`), over the config; `--video [mode]` beats both; a test's own `video` beats all. An engine that cannot record fails a mode that would record with `UNSUPPORTED_ARTIFACT`. Never invalidates the trace cache. |
+| `output` | `'.e2e'` | Results directory: `report.json`, reporter files, `ai-trace.json`, `artifacts/` (cleared when a run starts), `sessions/`, MCP `videos/`. Inside the project root, not the root, not holding a tests glob's directory, never the cache dir; `cache.dir` stays `.e2e/cache` independently. `--output <dir>` for one run. |
+| `artifacts` | none | `{ store }` hands each artifact to a host store; its optional `putLink(link)` gets provider-hosted video links (never a passed `retain-on-failure` attempt's). It no longer chooses what is recorded: a kinds list, `artifacts.kinds`, `artifacts.trace`, and `artifacts.video` are `INVALID_CONFIG` naming `trace` / `video`. Failure screenshots are always captured when the engine can. |
+| `trace` | `'on'`, `'on-first-retry'` in CI | Which attempts record a Playwright trace: `'off'`, `'on'`, `'retain-on-failure'`, `'on-first-retry'`, `'on-all-retries'` (a trace on every attempt is a large share of a run's CPU). Same precedence and capability rule as `video`. With a retry mode and `retries: 0` the run prints a notice that no traces will be recorded. |
+| `video` | `'off'` | Which attempts record a video, the same modes as `trace`: `'retain-on-failure'` records all and keeps the ones that did not pass, `'on-first-retry'` is the cheap CI mode. Also per target (`{ engine, video }`), over the config; `--video [mode]` beats both; a test's own `video` beats all. The config's and the flag's mode skip targets whose engine cannot record (one notice); a target's or a test's mode is required there (`UNSUPPORTED_ARTIFACT`). Neither `trace` nor `video` invalidates the replay cache. |
 | `projectId` | the package name | Report and cache identity. |
 
 ## The app under test
@@ -142,7 +144,7 @@ identity for cache and session keys. `web()` accepts:
 | `viewport` | `{ width, height }`, default 1280x720; `null` follows the browser window (a hosted browser's live view, a headed run). On a headed hosted browser such as Kernel's, use `null` and size the service's screen: there, a fixed size gets a smaller, unmaximized window. |
 | `connect` | `{ cdpEndpoint }` attaches to a remote Chromium over CDP. Adding `reconnectEndpoint` uses a dedicated persistent default context, provisions a fresh browser per attempt, and reconnects only to the original browser and page. |
 | `headers` | Request headers sent to the app's site only (a Vercel `x-vercel-protection-bypass`, ngrok's `ngrok-skip-browser-warning`). Reaches every path onto the page, `agent.act` included; turns the browser HTTP cache off and blocks service workers. |
-| `basicAuth` | `{ username, password }` answering a `401` challenge. |
+| `basicAuth` | `{ username, password }` answering a `401` challenge. `password` may be `secrets.get('name')` for a `secrets` entry: resolved per attempt and redacted like any secret; an undeclared name is `INVALID_CONFIG` at load. |
 | `userAgent` | The `User-Agent` every attempt sends and `navigator.userAgent` reports, for an app that enters a test mode on a marker in it. |
 
 CDP recovery never repeats a dispatched operation. Endpoint resolution, attachment,
@@ -237,7 +239,9 @@ How it behaves:
 To test an app started elsewhere, point `url` at it and start it yourself,
 or read the address from the environment:
 `url: process.env.APP_URL ?? 'http://localhost:3000'`. The runner reads no
-`APP_URL` itself; the config does.
+`APP_URL` itself; the config does. It loads no `.env` file either: put
+`process.loadEnvFile('.env')` at the top of `e2e.config.ts` (workers re-import
+the config, so they see the variables too).
 
 ## Environment variables the runner reads
 

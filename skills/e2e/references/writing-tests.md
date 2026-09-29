@@ -31,7 +31,7 @@ test.describe('todos', { tags: ['todos'] }, () => {
 ```
 
 The agent does the flow; `expect` pins what must be true after each goal,
-and that check is what lets the trace cache replay the step on later runs.
+and that check is what lets the replay cache rerun the step on later runs.
 `screen` actions are for exact interactions and values, like the empty
 submit above or a sign-in form. Files match the config `tests` glob, default
 `tests/**/*.e2e.ts`. Every test starts from clean state: a fresh browser
@@ -73,8 +73,8 @@ wsTest('uses the workspace', async ({ ws }) => {}); // code after use() is teard
 | `session` | unset | Restore state saved by a setup test. |
 | `agentContext` | unset | Extra context for `agent.*` calls in this test or group. |
 | `agent` | the run's agent | Pin the test or group to a configured agent (`agents.<name>`). Innermost wins; `agent.act(..., { agent })` can name another for one call. |
-| `video` | the target's | `'off'`, `'on'`, `'retain-on-failure'`, or `'on-first-retry'`. Innermost wins, over `--video`, the target, and the config. On a serial group the group's value applies. A mode that records on an engine that cannot fails the run with `UNSUPPORTED_ARTIFACT`. |
-| `serial` | `false` | Groups only. Members share one app state, run in order on one worker, and retry as a whole. Inside, per-member `retries`, `video`, `session`, `platforms`, `requires`, and `skip` are errors. |
+| `trace`, `video` | the target's | `'off'`, `'on'`, `'retain-on-failure'`, `'on-first-retry'`, or `'on-all-retries'`. Innermost wins, over `--trace` / `--video`, the target, and the config. On a serial group the group's value applies. A mode that records on an engine that cannot fails the run with `UNSUPPORTED_ARTIFACT`. |
+| `serial` | `false` | Groups only. Members share one app state, run in order on one worker, and retry as a whole. Inside, per-member `retries`, `trace`, `video`, `session`, `platforms`, `requires`, `skip`, and `only` are errors. |
 
 Hook order follows nesting, not position: outer `beforeEach` first, inner
 `afterEach` first. `beforeAll` runs again for every retry and every serial

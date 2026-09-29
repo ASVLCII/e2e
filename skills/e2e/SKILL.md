@@ -1,6 +1,6 @@
 ---
 name: e2e
-description: Set up and write agentic end-to-end tests with e2e, the e2e runner. Covers scaffolding e2e.config.ts, choosing the Playwright browser engine or the agent-device mobile engine, starting the app under test from the config, writing tests that drive flows with agent.act and judge them with agent.assert, agent.waitFor, and agent.extract, pinning exact values and outcomes with screen, app, web, and expect, shaping the agent for the app (context, system prompt, tools, personas), the trace cache that replays passing steps, running with the e2e CLI, and reading .e2e/report.json when a run fails, and bug bashes (parallel explore runs whose findings are proven with repro tests). Use when a project depends on e2e, when asked to add end-to-end, browser, mobile, or agentic UI tests, when asked to bug bash or hunt for bugs in an app, or when an e2e run fails.
+description: Set up and write agentic end-to-end tests with e2e, the e2e runner. Covers scaffolding e2e.config.ts, choosing the Playwright browser engine or the agent-device mobile engine, starting the app under test from the config, writing tests that drive flows with agent.act and judge them with agent.assert, agent.waitFor, and agent.extract, pinning exact values and outcomes with screen, app, web, and expect, shaping the agent for the app (context, system prompt, tools, personas), the replay cache that reruns passing steps, running with the e2e CLI, and reading .e2e/report.json when a run fails, and bug bashes (parallel explore runs whose findings are proven with repro tests). Use when a project depends on e2e, when asked to add end-to-end, browser, mobile, or agentic UI tests, when asked to bug bash or hunt for bugs in an app, or when an e2e run fails.
 ---
 
 # e2e: agentic end-to-end tests in TypeScript
@@ -8,7 +8,7 @@ description: Set up and write agentic end-to-end tests with e2e, the e2e runner.
 e2e runs UI tests with agent goals and exact assertions. `agent.act` drives
 one goal; `agent.assert`, `agent.waitFor`, and `agent.extract` judge the
 screen. Use `screen`, `app`, `web`, and `expect` for exact interactions and
-checks. The trace cache can replay verified actions and check their recorded
+checks. The replay cache can rerun verified actions and check their recorded
 end state without a model call. Agent judgments still run live.
 UI targets use `@e2e-dev/web` for browsers or
 `@e2e-dev/mobile` for iOS simulators and Android emulators. A test that
@@ -68,7 +68,7 @@ one. Without them, the installed CLI prints the same text:
 | --- | --- | --- |
 | `setup` | [references/setup.md](references/setup.md) | Adding e2e to a project, writing `e2e.config.ts`, starting the app from the config, mobile targets |
 | `writing-tests` | [references/writing-tests.md](references/writing-tests.md) | Writing or fixing tests: fixtures, locators, actions, matchers, sign-in sessions, the `web` fixture |
-| `agent` | [references/agent.md](references/agent.md) | Adding `agent.*` steps, picking a model, cost and budgets, the trace cache |
+| `agent` | [references/agent.md](references/agent.md) | Adding `agent.*` steps, picking a model, cost and budgets, the replay cache |
 | `running` | [references/running.md](references/running.md) | CLI flags, reporters, `.e2e/report.json`, exit codes, CI |
 | `explore` | [references/explore.md](references/explore.md) | Exploring an app toward a goal without a test file: `e2e explore`, its budgets, verdict, and `run.explore` |
 | `debugging` | [references/debugging.md](references/debugging.md) | A run failed: error codes and their fixes, `--headed`, `--debug`, `--ai-trace` |
@@ -135,5 +135,6 @@ one. Without them, the installed CLI prints the same text:
   tools for a test API, and named personas under `agents`. When a step
   fails, tighten the goal first, then the context, then the agent. Topic
   `agent` has the loop.
-- `.e2e/` is output (`report.json`, `artifacts/`, `cache/`, `logs/`). Read it,
-  never edit it.
+- `.e2e/` is output (`report.json`, `artifacts/`, `cache/`, `logs/`; the
+  config's `output` moves the report and artifacts, never `cache/` or the
+  app's log). Read it, never edit it.

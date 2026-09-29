@@ -28,7 +28,8 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
    a failed agent step has `turns`.
 4. Artifacts named there live under `.e2e/artifacts/`: `failure/screen.txt`
    and the engine's failure screenshot per failed attempt, a Playwright
-   `trace.zip` per attempt (`npx playwright show-trace <file>`), downloads,
+   `trace.zip` per traced attempt (every attempt locally, the first retry in
+   CI; `npx playwright show-trace <file>`), downloads,
    with `--video` the attempt's recording (`video/video.webm` in a local
    browser, `video/video.mp4` on a device, a provider's own file or link),
    and with `--debug` the full transcript of every agent step.
@@ -64,7 +65,7 @@ jq '.run.results[] | select(.status != "passed") | .attempts[-1]
 | `ONLY_IN_CI` | `test.only` reached CI | Remove it |
 | `BROWSER_INSTALL_FAILED`, `LAUNCH_TIMEOUT` | Browser download or launch failed | `npx playwright install chromium --with-deps`; raise `launchTimeout` on slow machines |
 | `AUTH_CREDENTIAL_UNAVAILABLE` | `credentials.user('x')` for an undeclared name | Add it to `config.credentials` |
-| `SECRET_UNAVAILABLE` | `secrets.get('x')` for an undeclared name | Add it to `config.secrets` or set `E2E_SECRET_X` |
+| `SECRET_UNAVAILABLE` | `secrets.get('x')` in a test for an undeclared name | Add it to `config.secrets` (an `E2E_SECRET_X` variable only overrides a declared one) |
 
 ## Tools
 

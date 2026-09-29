@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { EngineFixtureContext, EngineHandle, OperationContext, SemanticNode } from 'e2e/engine';
 import { mobile, type Device } from '../../src/index.ts';
+import { noSecrets } from '../helpers/secrets.ts';
 
 const enabled = process.env['E2E_AGENT_DEVICE_SIMULATOR'] === '1';
 
@@ -59,7 +60,7 @@ describe.skipIf(!enabled)('agent-device engine on a booted iOS simulator', () =>
       env: {},
       signal: new AbortController().signal,
     });
-    await engine.startAttempt!({ attemptId: 'sim-1', artifactsDir, signal: new AbortController().signal });
+    await engine.startAttempt!({ attemptId: 'sim-1', artifactsDir, signal: new AbortController().signal, resolveSecret: noSecrets });
     // What a test's `app.open()` runs: the engine launches nothing on its own.
     await engine.session!.restart!(operation());
   });
