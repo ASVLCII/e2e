@@ -6,7 +6,7 @@
  * attempt's page; a page about to close (a restart, a context replaced by a
  * state reset) ends its segment first, since Playwright writes nothing for a
  * screencast whose page closed under it, and the next page the attempt opens
- * starts the next segment. Each segment is captured at `web({ video: { size } })`
+ * starts the next segment. Each segment is captured at `web({ screencast: { size } })`
  * when set, else at its page's viewport size when it starts (the window's
  * under `viewport: null`, so a page `web.setViewport` sized is recorded at
  * that size), and carries the instant it began, so a consumer can place step
@@ -18,7 +18,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Page } from 'playwright';
 import { EngineError, type VideoFile, type VideoSegment } from 'e2e/engine';
-import type { WebVideoOptions } from './surface.ts';
+import type { WebScreencastOptions } from './surface.ts';
 import { currentViewport, message } from './support.ts';
 
 /**
@@ -62,7 +62,7 @@ export class VideoRecorder implements AttemptVideo {
 
   constructor(
     private readonly artifactsDir: string,
-    private readonly options: WebVideoOptions = {},
+    private readonly options: WebScreencastOptions = {},
   ) {}
 
   /** True between `arm` and `stop`: a page the attempt opens then starts a segment. */

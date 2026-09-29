@@ -57,7 +57,7 @@ function session(options: {
   viewport?: { width: number; height: number } | null;
 } = {}) {
   return new AttemptSession({
-    artifactsDir: options.artifactsDir ?? tmpdir(), viewport: options.viewport === undefined ? { width: 320, height: 200 } : options.viewport, contextOptions: {}, video: {},
+    artifactsDir: options.artifactsDir ?? tmpdir(), viewport: options.viewport === undefined ? { width: 320, height: 200 } : options.viewport, contextOptions: {}, screencast: {},
     acquire: async () => { throw new Error('persistent attempts never acquire the shared browser'); },
     configure: options.configure ?? (async () => undefined),
     persistent: { provision: options.provision ?? (() => 'provisioned'), reconnect: options.reconnect ?? (() => 'existing'), usedContexts: options.used ?? new Set() },
@@ -132,7 +132,7 @@ describe('AttemptSession', () => {
     const newPage = vi.fn(async () => opened);
     const context = { pages: () => [existing], newPage, close: async () => undefined };
     const owner = new AttemptSession({
-      artifactsDir: tmpdir(), viewport: { width: 320, height: 200 }, contextOptions: {}, video: {},
+      artifactsDir: tmpdir(), viewport: { width: 320, height: 200 }, contextOptions: {}, screencast: {},
       acquire: async () => ({ newContext: async () => context }) as unknown as Browser,
       configure: async () => undefined,
     });

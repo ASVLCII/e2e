@@ -24,7 +24,7 @@ import type {
   SecretProvider,
   SecretPurpose,
   Target,
-  TraceCacheStore,
+  CacheStore,
   TraceArtifactConfig,
   VideoMode,
 } from '../types.ts';
@@ -121,14 +121,14 @@ export interface ResolvedConfig {
 }
 
 /**
- * The resolved trace cache posture. Like executors and model instances, a
+ * The resolved replay cache posture. Like executors and model instances, a
  * custom store never crosses a process boundary: workers re-resolve the
  * config module and construct their own.
  */
 export interface ResolvedCacheConfig {
   readonly mode: CacheMode;
   /** Custom entry store; undefined selects the file store at `dir`. */
-  readonly store: TraceCacheStore | undefined;
+  readonly store: CacheStore | undefined;
   /** Absolute file store directory. */
   readonly dir: string;
   /** A recording that no longer replays fails its step with `REPLAY_STALE` instead of handing off. */
@@ -144,7 +144,7 @@ export interface CliOverrides {
   retries?: number;
   workers?: number;
   reporters?: readonly BuiltinReporter[];
-  /** Trace cache mode override; `--no-cache` maps to `'off'`. */
+  /** Replay cache mode override; `--no-cache` maps to `'off'`. */
   cache?: CacheMode;
   /** `--strict-cache`: turns `cache.strict` on for the run. */
   cacheStrict?: boolean;
@@ -375,7 +375,7 @@ function resolveCacheConfig(
   let mode: CacheMode = 'read-write';
   /** Whether the config named a mode; only a defaulted mode is demoted in CI. */
   let explicit = false;
-  let store: TraceCacheStore | undefined;
+  let store: CacheStore | undefined;
   let dir: string | undefined;
   let strict = false;
   if (typeof value === 'string') {
@@ -399,10 +399,10 @@ function resolveCacheConfig(
     mode = value.mode ?? 'read-write';
     explicit = value.mode !== undefined;
     store = value.store;
-    if (store !== undefined && !isTraceCacheStore(store)) {
+    if (store !== undefined && !isCacheStore(store)) {
       throw new ConfigurationError(
         'INVALID_CONFIG',
-        'cache.store must implement TraceCacheStore: { writable, read(keyHash), write(keyHash, payload) }',
+        'cache.store must implement CacheStore: { writable, read(keyHash), write(keyHash, payload) }',
       );
     }
     if (value.dir !== undefined) {
@@ -608,7 +608,7 @@ function isArtifactStore(value: unknown): value is ArtifactStore {
 }
 
 /** Structural store check, mirroring how executors and models are detected. */
-function isTraceCacheStore(value: unknown): value is TraceCacheStore {
+function isCacheStore(value: unknown): value is CacheStore {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (

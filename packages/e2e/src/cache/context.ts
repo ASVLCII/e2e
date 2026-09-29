@@ -20,7 +20,7 @@ import {
   type CacheTargetIdentity,
   type TraceCacheKind,
 } from './identity.ts';
-import { FileTraceCacheStore, MAX_CACHE_WIRE_BYTES, type TraceCacheStore } from './store.ts';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES, type CacheStore } from './store.ts';
 import type { ActionTrace } from './trace.ts';
 import type { JsonValue } from '../types.ts';
 
@@ -43,7 +43,7 @@ export type StagedTrace = {
 
 export interface AgentCacheContext {
   readonly mode: 'read-only' | 'read-write';
-  readonly store: TraceCacheStore;
+  readonly store: CacheStore;
   /** Test and target a write is recorded for, as `e2e cache ls` prints them. */
   readonly identity: { readonly testId: string; readonly targetId: string };
   /** Whether this attempt may replay; writes are governed by `mode` alone. */
@@ -79,7 +79,7 @@ export interface AgentCacheContext {
  * value read off the screen) would otherwise rewrite an entry a committed
  * cache directory carries, changing nothing a replay reads.
  */
-async function holdsSameFlow(store: TraceCacheStore, keyHash: string, trace: ActionTrace): Promise<boolean> {
+async function holdsSameFlow(store: CacheStore, keyHash: string, trace: ActionTrace): Promise<boolean> {
   const existing = await store.read(keyHash);
   return existing.status === 'hit' && flowOf(existing.entry.payload) === flowOf(trace);
 }
@@ -152,7 +152,7 @@ export function createAgentCacheContext(options: {
   if (mode === 'off') return undefined;
   const store =
     options.cache.store ??
-    new FileTraceCacheStore({
+    new FileCacheStore({
       directory: options.cache.dir,
       maxBytes: MAX_CACHE_WIRE_BYTES,
       writable: mode === 'read-write',

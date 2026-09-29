@@ -36,7 +36,7 @@ import {
   type StepTurn,
   type Target,
   type Unique,
-  type TraceCacheStore,
+  type CacheStore,
   type ExecutorObservation,
   type ValueExpectation,
 } from '../../src/index.ts';
@@ -57,7 +57,10 @@ BLOCKABLE_CODES;
 
 declare const agent: Agent;
 declare const appFixture: App;
-declare const remoteStore: TraceCacheStore;
+declare const remoteStore: CacheStore;
+// @ts-expect-error TraceCacheStore is CacheStore: the store serves the replay cache
+declare const renamedStore: import('../../src/index.ts').TraceCacheStore;
+renamedStore;
 declare const artifactStore: ArtifactStore;
 declare const asyncExpectation: AsyncExpectation;
 declare const screen: Screen;

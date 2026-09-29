@@ -82,7 +82,7 @@ export function hyperdrive(options: { device: string; app: string }): EngineHand
 targets: [{ name: 'phone', engine: hyperdrive({ device: 'iPhone 16', app: 'com.example.app' }) }],
 ```
 
-`version` is required and forms part of the trace cache key. Change it when
+`version` is required and forms part of the replay cache key. Change it when
 engine behavior changes. With `perform`, also declare `actions` to list the
 supported action kinds. `app` describes the app under test; `session`
 provides methods to open or restart it.

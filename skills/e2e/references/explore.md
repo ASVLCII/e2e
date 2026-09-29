@@ -67,7 +67,7 @@ a configured secret is not redacted either.
 | `--headed`, `--reporter`, `--artifacts`, `--debug`, `--ai-trace`, `--video [mode]` | as `run` | Same meaning as for `e2e run`. One attempt, so `--video=on-first-retry` records nothing; put the goal before a bare `--video`. |
 
 Per-step action and model-call budgets default to 40 each; `agent.maxSteps`
-and `agent.maxModelCalls` in the config override them. The trace cache is off
+and `agent.maxModelCalls` in the config override them. The replay cache is off
 and retries are zero for the exploration.
 
 ## Reading the result

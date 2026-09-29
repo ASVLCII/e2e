@@ -103,7 +103,7 @@ export interface E2EConfig {
    */
   agents?: Readonly<Record<string, AgentConfig | StepExecutor>>;
   /**
-   * Trace cache mode or options. Defaults to `read-write` locally and
+   * Replay cache mode or options. Defaults to `read-write` locally and
    * `read-only` in CI. An explicit mode overrides the default;
    * `--no-cache` disables caching for the run.
    */
@@ -201,7 +201,7 @@ export interface EngineAppDeclaration {
    */
   readonly environment?: 'test' | 'staging' | 'production';
   /**
-   * App identity for trace cache and session entries. Defaults to the URL's
+   * App identity for replay cache and session entries. Defaults to the URL's
    * origin and base path. Set a stable value to reuse entries across preview
    * URLs. Without a URL or identity, entries use the target alone. Different
    * apps must have different identities to prevent replay across them.
@@ -475,7 +475,7 @@ of the engine, even under `--video`.
 
 | Recorder | Files under the attempt's artifact directory |
 | --- | --- |
-| Web engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ video })`](/reference/web#options) sets the frame size and quality |
+| Web engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ screencast })`](/reference/web#options) sets the frame size and quality |
 | Mobile engine, agent-device | `video/video.mp4` |
 | A provider's own recording ([`BrowserProvider.record`](/browser#recording-on-the-provider), [`DeviceProvider.record`](/mobile#hosted-devices)) | the file the provider wrote, as `video/<file>`: Kernel's is `video/replay.mp4`. Or a link to a recording the service keeps, recorded with `url` in place of `path`; the runner never downloads it |
 
@@ -695,21 +695,21 @@ See [Secrets that are not passwords](/authentication#secrets-that-are-not-passwo
 
 ## cache
 
-In `read-write` mode the trace cache records an `agent.act()` only after a
+In `read-write` mode the replay cache records an `agent.act()` only after a
 later verification passes, such as a locator assertion or `agent.assert()`.
 `read-only` replays existing entries and writes none; `off` disables both.
 See [Caching agent steps](/cache).
 
 ```ts
 /**
- * Trace cache options. Defaults to files under `.e2e/cache/`.
+ * Replay cache options. Defaults to files under `.e2e/cache/`.
  * A custom store replaces file storage; each worker constructs its own.
  */
 export interface CacheConfig {
   /** Default `read-write`; `read-only` in CI when unset. */
   mode?: CacheMode;
   /** Custom entry store; omit it to use the file store at `dir`. */
-  store?: TraceCacheStore;
+  store?: CacheStore;
   /** File store directory, resolved against the project root. */
   dir?: string;
   /** Fail a step whose recording no longer replays with `REPLAY_STALE`. Default `false`. */

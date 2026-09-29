@@ -8,7 +8,7 @@ npx e2e explore [goal] [options]   # explore the app toward a goal, no test file
 npx e2e list [files...] [options]  # print what run would select, without running
 npx e2e init [--yes]               # scaffold a project, refresh the agent skill
 npx e2e guide [topic]              # print this skill: setup, writing-tests, agent, running, explore, debugging, mcp
-npx e2e cache ls|clear|stats       # read or empty the trace cache
+npx e2e cache ls|clear|stats       # read or empty the replay cache
 npx e2e mcp [--target <name>]      # serve the project to a coding agent over MCP (topic mcp)
 npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the switch
 ```
@@ -32,7 +32,7 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the s
 | `--repeat-each <n>` | Run every selected test n times, each run its own result (`repeat` 0 through n-1). Add `--no-cache`, or the later runs replay the first's recording. The summary's `Repeats` row says how many tests passed every run and lists the runs of each one that did not. |
 | `--reporter <ids>` | `list`, `json`, `junit`, `markdown`, comma-separated. `json` cannot combine with `list`. |
 | `--artifacts <dir>` | Artifact root, default `.e2e/artifacts`. |
-| `--no-cache` | Run with the trace cache off. |
+| `--no-cache` | Run with the replay cache off. |
 | `--strict-cache` | Fail a step whose committed recording no longer replays (`REPLAY_STALE`, exit 2) instead of letting the agent take it over. For CI that replays committed recordings. |
 | `--pass-with-no-tests` | Exit 0 when nothing matches instead of `NO_TESTS`. |
 | `--debug` | Phase timings and an agent step table on stderr; step transcripts saved as artifacts. |
@@ -69,7 +69,7 @@ so `pnpm test:e2e -- --headed` reaches e2e as `run -- --headed` and is
 rejected with exit 2 rather than run headless; write `pnpm test:e2e --headed`
 or `pnpm exec e2e run --headed` instead.
 
-## The trace cache
+## The replay cache
 
 Entries live under `.e2e/cache/`, one file per key, named after the key
 digest. `cache` commands read the same config as `run`, so `--config` and
@@ -88,7 +88,7 @@ recorded flow is stale — `--no-cache` only skips the cache for one run.
 
 - `list` (default): one line per file and target, a `Failed Tests` section
   with each error, its code, the failing line and a code frame, then a
-  summary (`Test Files`, `Tests`, `AI` with tokens, cost, model calls, and the models the steps reported, each with its call count when several answered, `Cache` when the trace cache was on: agent steps `replayed` whole, `handed off` to the model part-way, or `missed`, `Start at`, `Duration`, `Report`); a `Duration` past a minute repeats itself as minutes and seconds (`682.97s (11m 23s)`); setup steps (a first-run browser download, each service and app command) print above the tests and stay out of `Duration` or are split out of it as `(startup …)`, sharing the parenthetical with the minutes (`(11m 23s, startup 43.00s)`).
+  summary (`Test Files`, `Tests`, `AI` with tokens, cost, model calls, and the models the steps reported, each with its call count when several answered, `Cache` when the replay cache was on: agent steps `replayed` whole, `handed off` to the model part-way, or `missed`, `Start at`, `Duration`, `Report`); a `Duration` past a minute repeats itself as minutes and seconds (`682.97s (11m 23s)`); setup steps (a first-run browser download, each service and app command) print above the tests and stay out of `Duration` or are split out of it as `(startup …)`, sharing the parenthetical with the minutes (`(11m 23s, startup 43.00s)`).
 - `.e2e/report.json` is written on every run whatever the reporters:
   `run.status`, `run.exitCode`, `run.errors[]` (run-level failures such as
   `APP_UNREACHABLE`), and `run.results[]`, one per test and target, with
@@ -144,7 +144,7 @@ three times exits at once.
 
 CI mode is on when `CI` is set (and not `0` or `false`). It changes
 `retries` to 1, `workers` to 1, rejects `test.only` with `ONLY_IN_CI`, makes
-the trace cache `read-only`, and ignores `reuseExisting`.
+the replay cache `read-only`, and ignores `reuseExisting`.
 
 ```yaml
 # .github/workflows/e2e.yml

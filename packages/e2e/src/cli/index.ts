@@ -504,7 +504,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--retries <n>', 'retries per failing test (default: from the config)', parseNonNegativeInt)
     .option('--max-failures <n>', 'stop the run once this many tests have failed; the rest are skipped', parsePositiveInt)
     .option('--repeat-each <n>', 'run every selected test this many times, each run its own result (pair with --no-cache to exercise the model each time)', parsePositiveInt)
-    .option('--no-cache', 'run with the trace cache off, whatever the config says')
+    .option('--no-cache', 'run with the replay cache off, whatever the config says')
     .option('--strict-cache', 'fail a step whose recording no longer replays (REPLAY_STALE) instead of handing it to the agent')
     .optionsGroup('Output:')
     .option('--reporter <ids>', `comma-separated reporters: ${BUILTIN_REPORTERS.join(', ')}`, parseReporters)
@@ -747,9 +747,9 @@ function createProgram(version: string, telemetry: Telemetry): Command {
 
   const cacheCommand = program
     .command('cache')
-    .summary('inspect, measure, and clear the trace cache')
+    .summary('inspect, measure, and clear the replay cache')
     .description(
-      'Read the trace cache the runs write under .e2e/cache: what a committed cache holds, how much room it takes, and how to empty it. Reads the same config as e2e run, so cache.dir and --config decide which store is meant.',
+      'Read the replay cache the runs write under .e2e/cache: what a committed cache holds, how much room it takes, and how to empty it. Reads the same config as e2e run, so cache.dir and --config decide which store is meant.',
     )
     .addHelpText(
       'after',

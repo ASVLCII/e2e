@@ -154,7 +154,7 @@ export interface EngineAppDeclaration {
    */
   readonly environment?: 'test' | 'staging' | 'production';
   /**
-   * Stable logical identity of the app under test, keying trace cache and
+   * Stable logical identity of the app under test, keying replay cache and
    * session entries. Defaults to the URL's origin and base path, so an
    * ephemeral per-deploy origin (a PR preview) cold-starts every entry; an
    * explicit identity keys them by what the app *is* instead of where it is

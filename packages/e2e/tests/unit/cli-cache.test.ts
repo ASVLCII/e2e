@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FileTraceCacheStore, MAX_CACHE_WIRE_BYTES } from '../../src/cache/store.ts';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '../../src/cache/store.ts';
 import { main } from '../../src/cli/index.ts';
 import type { ActionTrace, TraceProvenance } from '../../src/cache/trace.ts';
 
@@ -44,7 +44,7 @@ function trace(recordedFor: TraceProvenance | undefined, actions: number): Actio
 }
 
 async function seed(entries: readonly { keyHash: string; trace: ActionTrace }[]): Promise<void> {
-  const store = new FileTraceCacheStore({
+  const store = new FileCacheStore({
     directory: path.join(root, CACHE_DIR),
     maxBytes: MAX_CACHE_WIRE_BYTES,
     writable: true,
@@ -108,7 +108,7 @@ describe('e2e cache ls', () => {
 
   it('reports an empty store instead of failing', async () => {
     await invoke('cache', 'ls');
-    expect(written(stdoutSpy)).toContain('no trace cache entries in');
+    expect(written(stdoutSpy)).toContain('no replay cache entries in');
     expect(process.exitCode).toBe(0);
   });
 
@@ -116,7 +116,7 @@ describe('e2e cache ls', () => {
     mkdirSync(path.join(root, CACHE_DIR), { recursive: true });
     writeFileSync(path.join(root, CACHE_DIR, `${'c'.repeat(64)}.json`), '{ not json', 'utf8');
     await invoke('cache', 'ls');
-    expect(written(stdoutSpy)).toContain('no trace cache entries in');
+    expect(written(stdoutSpy)).toContain('no replay cache entries in');
     expect(written(stderrSpy)).toContain('are not readable trace-1 entries');
   });
 });
@@ -173,7 +173,7 @@ describe('e2e cache clear', () => {
 
   it('has nothing to clear when the store was never written', async () => {
     await invoke('cache', 'clear');
-    expect(written(stdoutSpy)).toContain('no trace cache entries to clear');
+    expect(written(stdoutSpy)).toContain('no replay cache entries to clear');
     expect(process.exitCode).toBe(0);
   });
 });

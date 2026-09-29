@@ -756,7 +756,7 @@ export interface EngineAppDeclaration {
    */
   readonly environment?: 'test' | 'staging' | 'production';
   /**
-   * App identity for trace cache and session entries. Defaults to the URL's
+   * App identity for replay cache and session entries. Defaults to the URL's
    * origin and base path. Set a stable value to reuse entries across preview
    * URLs. Without a URL or identity, entries use the target alone. Different
    * apps must have different identities to prevent replay across them.

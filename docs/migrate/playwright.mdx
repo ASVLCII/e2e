@@ -111,7 +111,7 @@ to do today.
 | --- | --- | --- | --- |
 | `page.getByRole`, `getByLabel`, `getByText`, `getByTestId`, `getByPlaceholder` | the same on `screen` | `screen` | same |
 | `getByRole(role, { name })`, `getByLabel`, `getByPlaceholder`, `getByText` with a string | matches the whole string, case-sensitive; `{ exact: false }` for Playwright's substring match, see [By design](#by-design) | `screen` | by design |
-| `getByRole('img')` | the same; `img` is an alias of `image`, so engines, the trace cache, and reports see `image` | `screen` | same |
+| `getByRole('img')` | the same; `img` is an alias of `image`, so engines, the replay cache, and reports see `image` | `screen` | same |
 | `getByAltText(alt)` | `getByRole('image', { name: alt })` | `screen` | renamed |
 | `getByTitle` | not yet; the node carries no title | `web` | missing |
 | `getByRole(role, { includeHidden })` | a role query never matches a hidden node; `{ visible: true }` on the other queries drops hidden twins | `screen` | by design |

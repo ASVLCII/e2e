@@ -77,7 +77,7 @@ const { summary, cache } = await agent.act('Sign in', {
 ```
 
 The result carries the step's `summary`, the `modelCalls` and `actions` it
-spent, and `cache`: how the [trace cache](/cache) took part
+spent, and `cache`: how the [replay cache](/cache) took part
 (`self-finalized`, `agent-concluded`, or `missed` with a `reason`; absent when
 caching is off).
 
@@ -85,7 +85,7 @@ caching is off).
 
 The built-in agent offers one tool per verb the target's engine declares.
 Every tool takes node ids from the newest observation, returns what changed
-on screen, and is recorded for the [trace cache](/cache) with the node it
+on screen, and is recorded for the [replay cache](/cache) with the node it
 acted on. A verb the engine does not declare is not offered.
 
 | Tool | Engine action | What it does |
@@ -167,7 +167,7 @@ The built-in agent offers these tools while no secret has been filled:
 Coordinates refer to the latest screenshot. The model must take a screenshot
 before using a point tool and should prefer node ids for listed controls.
 The runner checks each point against the tree. A point on a listed control
-uses the same policy checks and [trace cache](/cache) recording as an action
+uses the same policy checks and [replay cache](/cache) recording as an action
 by id.
 
 Once screenshots are in use, the post-action wait also detects pixel changes,
@@ -198,7 +198,7 @@ A secret filled during the step withholds every later screenshot
 the six pixel tools. `tap_at` needs an engine whose `actions` or
 `pointerActions` include `tap`, and `hover_at` one whose include `hover`;
 without the pointer kind the point must land on a listed control. A
-bare-point tap or hover replays from the [trace cache](/cache) only on a
+bare-point tap or hover replays from the [replay cache](/cache) only on a
 viewport of the recorded size, or at the same place inside the listed node
 that contained it. A step that sent pixels records `visionInput: true` and
 `metrics.pixelBytes`.
@@ -393,7 +393,7 @@ export type VisionMode = boolean | 'only';
 export interface ActResult {
   /** The executor's one-line account of the step, or the replay's when the cache finished it. */
   readonly summary: string;
-  /** How the trace cache took part; absent when caching is off for the step. */
+  /** How the replay cache took part; absent when caching is off for the step. */
   readonly cache?: StepCacheInfo;
   /** Model calls the step spent; 0 when a cached replay finished it. */
   readonly modelCalls: number;
@@ -414,7 +414,7 @@ export type AgentParam =
 ```
 
 `Unique` is what `unique()` returns: a value that differs on every run, which
-the trace cache records as a slot and substitutes on replay. See
+the replay cache records as a slot and substitutes on replay. See
 [Cache](/cache).
 
 ## AgentError

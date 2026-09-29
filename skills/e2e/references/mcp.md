@@ -93,7 +93,7 @@ Resources: `e2e://guide` and `e2e://guide/<topic>` hold this skill.
   screen is set up, and `stop_recording` when the part worth watching is
   over; `close_session` saves one still running. Videos are not masked:
   keep secrets off screen while recording.
-- Nothing a session does is recorded as a test or into the trace cache. A
+- Nothing a session does is recorded as a test or into the replay cache. A
   session is for looking and trying; the test is what you write afterwards.
 - A run from the shell and a live session can share the app only if the
   engine's `command` uses `reuseExisting`; otherwise close the session before

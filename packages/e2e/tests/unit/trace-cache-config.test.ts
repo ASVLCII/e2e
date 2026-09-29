@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createAgentCacheContext, flushStagedTraces } from '../../src/cache/context.ts';
 import { buildTraceEntry, readTraceEntry } from '../../src/cache/trace.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
-import type { ActionTrace, E2EConfig, TraceCacheStore } from '../../src/types.ts';
+import type { ActionTrace, E2EConfig, CacheStore } from '../../src/types.ts';
 
 const ROOT = path.resolve('/tmp/e2e-cache-config-tests');
 const BASE_ENV = {} as NodeJS.ProcessEnv;
@@ -25,7 +25,7 @@ const APP = {};
  * the reference pattern a store author should copy — entries framed with
  * `buildTraceEntry` on write and validated with `readTraceEntry` on read.
  */
-function memoryStore(): TraceCacheStore & { entries: Map<string, string> } {
+function memoryStore(): CacheStore & { entries: Map<string, string> } {
   const entries = new Map<string, string>();
   return {
     entries,
@@ -115,13 +115,13 @@ describe('cache config resolution', () => {
       /unknown cache config key "ttl"/,
     );
     expect(() => resolve({ ...APP, cache: { store: { read: true } } as never })).toThrow(
-      /cache.store must implement TraceCacheStore/,
+      /cache.store must implement CacheStore/,
     );
   });
 });
 
 describe('flushStagedTraces', () => {
-  function contextWith(store: TraceCacheStore) {
+  function contextWith(store: CacheStore) {
     const context = createAgentCacheContext({
       cache: { mode: 'read-write', store, dir: '/unused', strict: false },
       projectId: 'p',

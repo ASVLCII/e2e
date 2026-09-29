@@ -10,12 +10,12 @@ import type { StepExecutor } from './agent/executor.ts';
 import type { StepCacheInfo } from './run/steps.ts';
 import type { EngineHandle } from './engine/index.ts';
 import type { KeyModifier, Momentum, ScrollDirection, SelectOption, ViewportPoint } from './engine/contract.ts';
-import type { TraceCacheStore } from './cache/store.ts';
+import type { CacheStore } from './cache/store.ts';
 import type { RunEvent, RunExitCode, RunStatus } from './run/events.ts';
 import type { Report1Document } from './report/build.ts';
 
 export type { KeyModifier, Momentum, ScrollDirection, SelectOption } from './engine/contract.ts';
-export type { CacheReadResult, TraceCacheStore } from './cache/store.ts';
+export type { CacheReadResult, CacheStore } from './cache/store.ts';
 export type { DerivedReason } from './cache/trace.ts';
 export type { StepCacheInfo } from './run/steps.ts';
 export type {
@@ -197,7 +197,7 @@ export interface ActOptions extends AgentOption {
 export interface ActResult {
   /** The executor's one-line account of the step, or the replay's when the cache finished it. */
   readonly summary: string;
-  /** How the trace cache took part; absent when caching is off for the step. */
+  /** How the replay cache took part; absent when caching is off for the step. */
   readonly cache?: StepCacheInfo;
   /** Model calls the step spent; 0 when a cached replay finished it. */
   readonly modelCalls: number;
@@ -312,7 +312,7 @@ export type Role =
 /**
  * Spellings `getByRole` accepts beside the vocabulary and rewrites to a `Role`
  * before the query is built: `img` is the ARIA name of `image`. An alias never
- * reaches an engine, the trace cache, or a report; a `Role` is what they see.
+ * reaches an engine, the replay cache, or a report; a `Role` is what they see.
  */
 export type RoleAlias = 'img';
 
@@ -991,13 +991,13 @@ export interface ModelInstance {
   readonly doGenerate: (...args: never[]) => unknown;
 }
 
-/** Trace cache posture. In CI, `read-write` is forced down to `read-only`. */
+/** Replay cache posture. In CI, `read-write` is forced down to `read-only`. */
 export type CacheMode = 'off' | 'read-only' | 'read-write';
 
 /**
- * Trace cache configuration. The store abstraction is the cloud seam: the
+ * Replay cache configuration. The store abstraction is the cloud seam: the
  * default file store keeps entries under `.e2e/cache/`, and a custom
- * `TraceCacheStore` (Redis, an API, anything implementing read/write over
+ * `CacheStore` (Redis, an API, anything implementing read/write over
  * key digests) replaces it wholesale. Like agents and model instances, a
  * store never crosses a process boundary: workers re-resolve the config
  * module and construct their own.
@@ -1006,7 +1006,7 @@ export interface CacheConfig {
   /** Default `read-write`; `read-only` in CI when unset. */
   mode?: CacheMode;
   /** Custom entry store; omit it to use the file store at `dir`. */
-  store?: TraceCacheStore;
+  store?: CacheStore;
   /** File store directory, resolved against the project root. */
   dir?: string;
   /**
@@ -1059,7 +1059,7 @@ export interface StoredArtifact {
  * an API) receives every artifact as it is produced — not after the run — and
  * returns its own reference, which the report records as the artifact's
  * `ref` beside the local path. The cloud seam for evidence, the way
- * `TraceCacheStore` is for traces. A failed `put` never fails the run: the
+ * `CacheStore` is for the replay cache. A failed `put` never fails the run: the
  * record simply carries no `ref`. Like every live value, a store never
  * crosses a process boundary.
  */
@@ -1248,7 +1248,7 @@ export interface E2EConfig {
    */
   agents?: Readonly<Record<string, AgentConfig | StepExecutor>>;
   /**
-   * The adaptive trace cache. Opt-out: unset means
+   * The adaptive replay cache. Opt-out: unset means
    * `read-write`, and `'off'` disables it, as does the `--no-cache` flag,
    * which wins over the config. A string is shorthand for `{ mode }`. In CI an
    * unset mode is demoted to `read-only`: a committed cache is untrusted

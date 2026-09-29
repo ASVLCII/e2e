@@ -46,9 +46,10 @@ export interface WebOptions extends EngineAppDeclaration {
   /**
    * How the engine's own screencast records an attempt that records video.
    * A browser provider that records (`BrowserProvider.record`) records in
-   * its place, and ignores these.
+   * its place, and ignores these. Which attempts record is the config's
+   * `video`, not an engine option.
    */
-  readonly video?: WebVideoOptions;
+  readonly screencast?: WebScreencastOptions;
   /**
    * Attach to a remote browser over CDP instead of launching locally. Requires
    * the chromium browser (the default). Wired by a hosted-browser engine.
@@ -84,7 +85,7 @@ export interface WebOptions extends EngineAppDeclaration {
 }
 
 /** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
-export interface WebVideoOptions {
+export interface WebScreencastOptions {
   /** Frame size in pixels; default the viewport's, or the window's under `viewport: null`. A smaller size makes a smaller file. */
   readonly size?: ViewportSize;
   /** JPEG quality of each captured frame, 0 through 100; Playwright's default when unset. */
@@ -104,10 +105,11 @@ contract and an example provider. `browser: provider` together with
 
 `headers` and `basicAuth` are how a test reaches a [protected preview](/starting-your-app#protected-previews).
 
-`video` shapes the recording, not which attempts record: that is the
+`screencast` shapes the recording, not which attempts record: that is the
 config's [`video`](/reference/config#video) mode. `size` takes whole pixels,
 each side at least 1, and `quality` an integer from 0 through 100; anything
-else, or another key, is `INVALID_CONFIG` at config load.
+else, or another key, is `INVALID_CONFIG` at config load. The old
+`web({ video })` spelling is `INVALID_CONFIG` naming `screencast`.
 
 ### Recovering a CDP transport
 
@@ -535,7 +537,7 @@ cannot reuse node IDs or publish handles over a newer observation.
 
 ## Exported types
 
-`WebOptions`, `WebVideoOptions`, `WebConnectOptions`, `WebBasicAuth`, `BrowserName`,
+`WebOptions`, `WebScreencastOptions`, `WebConnectOptions`, `WebBasicAuth`, `BrowserName`,
 `BrowserProvider`, `BrowserProviderScope`, `BrowserRequest`, `BrowserLease`,
 `BrowserReleaseContext`, `PlaywrightLiveSurface`, `Web`, `FrameScreen`,
 `WebExpectation`, `WebRoute`, `WebResponse`, `Cookie`, `Dialog`, and

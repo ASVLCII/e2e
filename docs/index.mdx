@@ -44,7 +44,7 @@ mobile engine drives iOS simulators and Android emulators through agent-device. 
 agent and screen APIs, with extra APIs for platform-specific operations.
 You can also [write an engine](/writing-an-engine) for another platform.
 
-Agent steps have time and model-call limits. The [trace cache](/cache)
+Agent steps have time and model-call limits. The [replay cache](/cache)
 can replay verified actions and check their recorded end state without a
 model call. Agent judgments still run live. When replay no longer works,
 the agent can try the goal again.

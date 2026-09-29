@@ -10,7 +10,7 @@ import type { Web } from './web.ts';
 
 export { web, surfaceOf } from './engine.ts';
 export type { PlaywrightLiveSurface } from './engine.ts';
-export type { WebBasicAuth, WebConnectOptions, WebOptions, WebVideoOptions } from './surface.ts';
+export type { WebBasicAuth, WebConnectOptions, WebOptions, WebScreencastOptions } from './surface.ts';
 export type {
   BrowserLease,
   BrowserProvider,

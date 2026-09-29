@@ -9,7 +9,7 @@ import { RefRegistry } from './refs.ts';
 import type { LeaseRecording } from './provider.ts';
 import { ProviderVideo } from './provider-video.ts';
 import { invalidState, translatePwError } from './support.ts';
-import type { WebVideoOptions } from './surface.ts';
+import type { WebScreencastOptions } from './surface.ts';
 import { VideoRecorder, type AttemptVideo } from './video.ts';
 
 export type StorageState = Exclude<NonNullable<BrowserContextOptions['storageState']>, string>;
@@ -19,7 +19,7 @@ interface SessionOptions {
   /** The emulated page size, or `null` to follow the window. */
   readonly viewport: ViewportSize | null;
   /** How the engine's own screencast records, when the provider does not record. */
-  readonly video: WebVideoOptions;
+  readonly screencast: WebScreencastOptions;
   readonly contextOptions: BrowserContextOptions;
   readonly acquire: (signal: AbortSignal) => Promise<Browser>;
   readonly configure: (context: BrowserContext) => Promise<void>;
@@ -63,7 +63,7 @@ export class AttemptSession {
 
   constructor(private readonly options: SessionOptions) {
     this.video = options.record === undefined
-      ? new VideoRecorder(options.artifactsDir, options.video)
+      ? new VideoRecorder(options.artifactsDir, options.screencast)
       : new ProviderVideo(options.record, options.artifactsDir);
   }
 

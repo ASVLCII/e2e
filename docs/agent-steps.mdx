@@ -112,7 +112,7 @@ With a [custom executor](/executors), `agent.assert` uses `runStep` with the
 same budgets as `act` and defaults to `config.timeout`.
 
 Use `expect` for exact checks and keep each `act` focused on one goal.
-The [trace cache](/cache) can replay passing `act` steps without model calls.
+The [replay cache](/cache) can rerun passing `act` steps without model calls.
 
 When the provider supports prompt caching, `--debug` shows the cached share
 of input tokens per step.

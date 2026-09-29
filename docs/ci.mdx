@@ -158,7 +158,7 @@ A failed agent step fails the job like a failed `expect`. Keep the checks
 predictable by giving each `agent.act` one goal and checking its outcome
 with a locator assertion or `agent.assert`.
 
-To reuse verified actions in CI, [share the trace cache](/cache#commit-your-traces).
+To reuse verified actions in CI, [share the replay cache](/cache#commit-your-traces).
 A cache hit avoids a model call for that action step. Agent judgments still
 run live, and a cache miss or hand-off uses the model.
 

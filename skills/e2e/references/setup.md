@@ -117,12 +117,12 @@ export default {
 | `retries` | `0`, `1` in CI | 0 to 10. |
 | `workers` | half the cores, `1` in CI | Test files run in parallel across workers, at most the `workers` the engine declares per target (a device target: one per device). |
 | `reporters` | `['list']` | `list`, `json`, `junit`, `markdown`, and reporter objects (`{ name, onEvent?, onRunFinished? }`) that receive the finished run. `json` excludes `list`; `--reporter` keeps the objects. |
-| `cache` | `'read-write'`, `'read-only'` in CI | The trace cache for `agent.act`; `'off'` disables it. |
+| `cache` | `'read-write'`, `'read-only'` in CI | The replay cache for `agent.act`; `'off'` disables it. |
 | `agents` | `{ default: built-in }` | Agents by name. `default` is what tests run with; `e2e run --agent <name>` runs with another. Each entry is `createAgent(...)`, an options block `{ model, judge, context, maxSteps, maxModelCalls, providerOptions }`, or a custom `StepExecutor`. The built-in agent requires `model` as an AI SDK instance. Custom executors can implement `act` and `assert` without a model; `waitFor` and `extract` still need one. |
 | `credentials` | `{}` | Named `{ username, password }` entries; `password` is a string of at least 6 characters (code points) or a function returning the value. |
 | `secrets` | `{}` | Named values the model never sees (API keys, tokens): a string of at least 6 characters (code points) or a function returning the value. A name cannot also be a credential. |
 | `artifacts` | `['screenshot', 'trace']` | Kinds to keep (`screenshot`, `trace`), or `{ kinds, store, trace }` to hand each artifact to a host store; `trace: { record: 'retries' }` traces retries only (a trace on every attempt is a large share of a run's CPU). Video is not a kind; `kinds: ['video']` and `artifacts.video` are `INVALID_CONFIG`. |
-| `video` | `'off'` | Which attempts record a video: `'on'`, `'retain-on-failure'` (record all, keep the ones that did not pass), `'on-first-retry'` (only the first retry records; the cheap CI mode). Also per target (`{ engine, video }`), over the config; `--video [mode]` beats both; a test's own `video` beats all. An engine that cannot record fails a mode that would record with `UNSUPPORTED_ARTIFACT`. Never invalidates the trace cache. |
+| `video` | `'off'` | Which attempts record a video: `'on'`, `'retain-on-failure'` (record all, keep the ones that did not pass), `'on-first-retry'` (only the first retry records; the cheap CI mode). Also per target (`{ engine, video }`), over the config; `--video [mode]` beats both; a test's own `video` beats all. An engine that cannot record fails a mode that would record with `UNSUPPORTED_ARTIFACT`. Never invalidates the replay cache. |
 | `projectId` | the package name | Report and cache identity. |
 
 ## The app under test

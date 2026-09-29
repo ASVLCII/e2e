@@ -242,11 +242,11 @@ or every test was filtered out.
 | `--agent <names>` | comma-separated or repeated | `default` | Runs unpinned tests once per selected agent. For a test with `{ agent }`, selects the shared names when there is overlap; otherwise keeps the test's selection. An unknown name is `INVALID_CONFIG`. |
 | `--retries <n>` | integer 0-10 | config | Replaces `config.retries`. |
 | `--workers <n>` | integer 1-1024 | config | Replaces `config.workers`. |
-| `--repeat-each <n>` | integer, at least 1 | `1` | Runs every selected test this many times. Each run is a result of its own, with `repeat` 0 through `n - 1` and its own `id`; the list reporter titles the later runs `(repeat #1)`, `(repeat #2)`, and their artifacts go under a `repeat-<n>` directory. Setup tests run once. With the trace cache on, the first run records and the later ones replay, so pair it with `--no-cache` to exercise the model each time. The `list` summary adds a `Repeats` row (`1 of 2 tests passed all 5 runs`) and one line per test that did not pass every run, naming each run that failed; the `markdown` page carries the same tally. |
+| `--repeat-each <n>` | integer, at least 1 | `1` | Runs every selected test this many times. Each run is a result of its own, with `repeat` 0 through `n - 1` and its own `id`; the list reporter titles the later runs `(repeat #1)`, `(repeat #2)`, and their artifacts go under a `repeat-<n>` directory. Setup tests run once. With the replay cache on, the first run records and the later ones replay, so pair it with `--no-cache` to exercise the model each time. The `list` summary adds a `Repeats` row (`1 of 2 tests passed all 5 runs`) and one line per test that did not pass every run, naming each run that failed; the `markdown` page carries the same tally. |
 | `--max-failures <n>` | integer, at least 1 | none | Stops the run once this many tests have failed or timed out. Nothing more is dispatched, the tests running end as `interrupted`, and the tests not started are skipped with cause `failure-limit` and the reason `run stopped after 3 failures (--max-failures 3)`. The exit code is the failures' own, 1, not 130. |
 | `--reporter <ids>` | comma-separated list | config | Replaces the built-in IDs in `config.reporters`: `list`, `json`, `junit`, `markdown`. `json` with `list` is `INVALID_CONFIG`. [Reporter objects](/reference/reporters) in the config keep running. |
 | `--artifacts <dir>` | string | `.e2e/artifacts` | Relocates the report and artifact tree. |
-| `--no-cache` | boolean | `false` | Trace cache off for this run, whatever `config.cache` says. |
+| `--no-cache` | boolean | `false` | Replay cache off for this run, whatever `config.cache` says. |
 | `--strict-cache` | boolean | `false` | Turns on `cache.strict` for this run: a step whose recording exists but no longer replays fails with `REPLAY_STALE` instead of handing off to the agent. See [Fail on a stale recording](/cache#fail-on-a-stale-recording). |
 | `--pass-with-no-tests` | boolean | `false` | Exit 0 instead of `NO_TESTS` when nothing is selected. |
 | `--debug` | boolean | `false` | Phase timings and an agent step table on stderr after the run. |
@@ -382,7 +382,7 @@ The run has one result, under the virtual file `explore`, titled by the goal.
 With `--session`, the report also holds the setup test's result and lists the
 project's other tests as skipped with cause `filtered`, as `run` lists the
 tests of a file no positional named.
-The exploration runs with the trace cache off and zero retries whatever the
+The exploration runs with the replay cache off and zero retries whatever the
 config says. A `--session` setup test runs as it would for `run`, with the
 config's agents, cache, and retries.
 `.e2e/report.json` gains `run.explore`: the goal, the budgets, why the run
@@ -432,7 +432,7 @@ npx e2e list --reporter json
 
 ## e2e cache
 
-Inspect or clear the trace cache. These commands load the discovered config
+Inspect or clear the replay cache. These commands load the discovered config
 or `--config <path>`, honor `cache.dir`, and exit 0 on an empty store. The
 default directory is `.e2e/cache/`.
 

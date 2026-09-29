@@ -93,7 +93,7 @@ straight through, with no conditional spread.
   screenshot that cannot be redacted is not written. No `state` capability: a
   simulator has no portable session snapshot.
 
-## Trace cache
+## Replay cache
 
 The runner caches `agent.act` steps by their location anchor, and a device has
 no address bar. This engine reports one anyway: `<bundle id> / <screen

@@ -4,7 +4,7 @@ import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FileTraceCacheStore, MAX_CACHE_WIRE_BYTES } from '../../src/cache/store.ts';
+import { FileCacheStore, MAX_CACHE_WIRE_BYTES } from '../../src/cache/store.ts';
 import type { ActionTrace } from '../../src/cache/trace.ts';
 
 const KEY = 'a'.repeat(64);
@@ -20,7 +20,7 @@ async function makeStore(options: { maxBytes?: number; writable?: boolean } = {}
   const directory = await mkdtemp(path.join(tmpdir(), 'e2e-trace-cache-'));
   return {
     directory,
-    store: new FileTraceCacheStore({
+    store: new FileCacheStore({
       directory,
       maxBytes: options.maxBytes ?? MAX_CACHE_WIRE_BYTES,
       writable: options.writable ?? true,
@@ -28,7 +28,7 @@ async function makeStore(options: { maxBytes?: number; writable?: boolean } = {}
   };
 }
 
-describe('FileTraceCacheStore', () => {
+describe('FileCacheStore', () => {
   it('round-trips one entry under the key digest', async () => {
     const { directory, store } = await makeStore();
     const written = await store.write(KEY, payload);
@@ -72,7 +72,7 @@ describe('FileTraceCacheStore', () => {
     await store.delete(KEY);
     expect(await readdir(directory)).toEqual([]);
     await store.delete(KEY);
-    const readOnly = new FileTraceCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
+    const readOnly = new FileCacheStore({ directory, maxBytes: MAX_CACHE_WIRE_BYTES, writable: false });
     await store.write(KEY, payload);
     await readOnly.delete(KEY);
     expect(await readdir(directory)).toEqual([`${KEY}.json`]);

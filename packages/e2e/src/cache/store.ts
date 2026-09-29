@@ -30,7 +30,8 @@ export type CacheReadResult =
   | { readonly status: 'miss' }
   | { readonly status: 'invalid'; readonly reason: string; readonly bytes?: number };
 
-export interface TraceCacheStore {
+/** Where the replay cache keeps its entries: the file store by default, or a host's own through `cache.store`. */
+export interface CacheStore {
   readonly writable: boolean;
   read(keyHash: string): Promise<CacheReadResult>;
   /** Persists one trace, returning its size, or undefined when not written. */
@@ -44,20 +45,20 @@ export interface TraceCacheStore {
   delete?(keyHash: string): Promise<void>;
 }
 
-export interface FileTraceCacheStoreOptions {
+export interface FileCacheStoreOptions {
   readonly directory: string;
   /** Entry size cap for tests; production passes the wire ceiling, which clamps it. */
   readonly maxBytes: number;
   readonly writable: boolean;
 }
 
-export class FileTraceCacheStore implements TraceCacheStore {
+export class FileCacheStore implements CacheStore {
   readonly writable: boolean;
 
   private readonly directory: string;
   private readonly maxBytes: number;
 
-  constructor(options: FileTraceCacheStoreOptions) {
+  constructor(options: FileCacheStoreOptions) {
     this.directory = options.directory;
     this.maxBytes = Math.min(options.maxBytes, MAX_CACHE_WIRE_BYTES);
     this.writable = options.writable;

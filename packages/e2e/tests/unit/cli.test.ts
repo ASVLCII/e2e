@@ -545,7 +545,7 @@ describe('e2e --version and --help', () => {
     expect(help).toContain('Usage: e2e <command> [options]');
     expect(help).toMatch(/^ {2}init \[options\] \[directory\] {2,}scaffold/mu);
     expect(help).toMatch(/^ {2}run \[options\] \[files\.\.\.\] {2,}run the tests$/mu);
-    expect(help).toMatch(/^ {2}cache {2,}inspect, measure, and clear the trace cache$/mu);
+    expect(help).toMatch(/^ {2}cache {2,}inspect, measure, and clear the replay cache$/mu);
     expect(help).toMatch(/^ {2}mcp \[options\] {2,}serve the project to a coding agent over MCP$/mu);
     expect(help).toMatch(/^ {2}help \[command\] {2,}show help for a command$/mu);
     expect(help).toMatch(/^ {2}-v, --version {2,}print the version$/mu);

@@ -94,16 +94,16 @@ describe('web({ userAgent })', () => {
   });
 });
 
-describe('web({ video })', () => {
+describe('web({ screencast })', () => {
   it('accepts a whole-pixel size and a 0-100 quality, each optional', () => {
-    expect(() => web({ video: {} })).not.toThrow();
-    expect(() => web({ video: { size: { width: 1920, height: 1080 }, quality: 90 } })).not.toThrow();
-    expect(() => web({ video: { quality: 0 } })).not.toThrow();
+    expect(() => web({ screencast: {} })).not.toThrow();
+    expect(() => web({ screencast: { size: { width: 1920, height: 1080 }, quality: 90 } })).not.toThrow();
+    expect(() => web({ screencast: { quality: 0 } })).not.toThrow();
   });
 
   it('rejects a fractional or empty size, a quality outside 0-100, and an unknown key as INVALID_CONFIG', () => {
-    for (const video of [null, [], 'on', 1, new Date()]) {
-      expect(() => web({ video } as unknown as Parameters<typeof web>[0])).toThrow(/must be a plain object/);
+    for (const screencast of [null, [], 'on', 1, new Date()]) {
+      expect(() => web({ screencast } as unknown as Parameters<typeof web>[0])).toThrow(/must be a plain object/);
     }
     const invalid = [
       { size: {} },
@@ -115,9 +115,17 @@ describe('web({ video })', () => {
       { size: new (class Size { width = 1280; height = 720; })() },
       { mode: 'on' },
     ];
-    for (const video of invalid) {
-      expect(() => web({ video } as unknown as Parameters<typeof web>[0])).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }));
+    for (const screencast of invalid) {
+      expect(() => web({ screencast } as unknown as Parameters<typeof web>[0])).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }));
     }
-    expect(() => web({ video: { mode: 'on' } } as unknown as Parameters<typeof web>[0])).toThrow(/which attempts record is the config's video/);
+    expect(() => web({ screencast: { mode: 'on' } } as unknown as Parameters<typeof web>[0])).toThrow(/which attempts record is the config's video/);
+  });
+
+  it('refuses the old video key, naming screencast', () => {
+    for (const video of [{}, { size: { width: 1280, height: 720 } }, undefined]) {
+      expect(() => web({ video } as unknown as Parameters<typeof web>[0])).toThrow(
+        expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringContaining('web({ video }) was renamed web({ screencast })') }),
+      );
+    }
   });
 });
