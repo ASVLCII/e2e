@@ -3,13 +3,13 @@ title: Project tools
 description: Add tools for test APIs, data setup, and device operations.
 ---
 
-Pass tools to `createAgent` so the agent can call your test API or perform
+Put tools in an agent's `tools` so the agent can call your test API or perform
 other project-specific operations during a goal. Wrap each AI SDK tool with
 `defineTool` to declare whether it changes state and which platforms support it.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent, defineTool } from 'e2e/agent';
+import { defineTool } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { gateway, tool } from 'ai';
 import { z } from 'zod';
@@ -33,7 +33,7 @@ const seedCart = defineTool(
 
 export default {
   targets: [{ engine: web({ url: process.env.APP_URL ?? 'http://localhost:3000' }) }],
-  agents: { default: createAgent({ model: gateway('openai/gpt-6-luna-fast'), tools: { seedCart } }) },
+  agents: { default: { model: gateway('openai/gpt-6-luna-fast'), tools: { seedCart } } },
 } satisfies E2EConfig;
 ```
 
@@ -45,8 +45,11 @@ await agent.act('seed the cart with SKU {sku}, then check out', {
 });
 ```
 
-Built-in tool names are reserved. `createAgent` rejects a project tool with
-a name such as `tap`, `screenshot`, or `complete_step`.
+Built-in tool names are reserved. Loading the config fails with
+`INVALID_CONFIG` for a project tool named like `tap`, `screenshot`, or
+`complete_step`, and for a value `defineTool` did not build. Tools belong to
+the built-in agent: an entry with a custom `executor` cannot also set
+`tools`.
 
 ## Declare what a tool does
 
@@ -108,7 +111,6 @@ overwriting an earlier image.
 
 ```ts
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { mobile } from '@e2e-dev/mobile';
 import { mobileTools } from '@e2e-dev/mobile/tools';
 import { gateway } from 'ai';
@@ -118,10 +120,10 @@ const iphone = mobile({ platform: 'ios', app: 'Settings' });
 export default {
   targets: [{ engine: iphone }],
   agents: {
-    default: createAgent({
+    default: {
       model: gateway('openai/gpt-6-luna-fast'),
       tools: mobileTools(iphone),
-    }),
+    },
   },
 } satisfies E2EConfig;
 ```

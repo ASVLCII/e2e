@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { createAgent } from '../../src/agent/default-agent.ts';
-import type { SdkLanguageModel } from '../../src/agent/ai-sdk.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine } from '../../src/engine/index.ts';
 import { createEngineSession } from '../../src/engine/session.ts';
@@ -42,42 +40,39 @@ function runtime(overrides: Partial<E2EConfig>, agentContext?: string) {
 
 const conclude = [{ toolName: 'complete_step', input: { status: 'passed', summary: 'done' } }];
 
-/** The scripted loop model, typed as the SDK model `createAgent` takes; it is one structurally. */
-const loopModel = (): SdkLanguageModel => installFakeLoopModel(() => conclude) as SdkLanguageModel;
-
-describe('createAgent({ context })', () => {
-  it('reaches the act prompt exactly where agents.<name>.context does', async () => {
-    const model = loopModel();
-    const viaAgent = runtime({
-      agents: { default: createAgent({ model, system: 'Be careful.', context: 'Plans are called tiers.' }) },
-    });
-    await viaAgent.agent.act('open billing');
-    const agentSystem = loopCalls[0]!.system;
-    expect(agentSystem).toContain('Be careful.');
-    expect(agentSystem).toContain('Project context:\nPlans are called tiers.');
-
-    loopModel();
-    const viaConfig = runtime({
-      agents: { default: { executor: createAgent({ system: 'Be careful.' }), model, context: 'Plans are called tiers.' } },
-    });
-    await viaConfig.agent.act('open billing');
-    expect(loopCalls[0]!.system).toBe(agentSystem);
+describe('the built-in agent from its agents entry', () => {
+  it('puts system and context in the act prompt', async () => {
+    const model = installFakeLoopModel(() => conclude);
+    const fixtures = runtime({ agents: { default: { model, system: 'Be careful.', context: 'Plans are called tiers.' } } });
+    await fixtures.agent.act('open billing');
+    const system = loopCalls[0]!.system;
+    expect(system).toContain('Be careful.');
+    expect(system).toContain('Project context:\nPlans are called tiers.');
   });
 
-  it('is joined with the test-level agentContext like the config key', async () => {
-    const model = loopModel();
+  it('joins the context with the test-level agentContext', async () => {
+    const model = installFakeLoopModel(() => conclude);
     const fixtures = runtime(
-      { agents: { default: createAgent({ model, context: 'Plans are called tiers.' }) } },
+      { agents: { default: { model, context: 'Plans are called tiers.' } } },
       'Billing lives under Settings.',
     );
     await fixtures.agent.act('open billing');
     expect(loopCalls[0]!.system).toContain('Project context:\nPlans are called tiers.\nBilling lives under Settings.');
   });
 
-  it('adds no project context when neither side names one', async () => {
-    const model = loopModel();
-    const fixtures = runtime({ agents: { default: createAgent({ model }) } });
+  it('adds no project context or guidance when the entry names none', async () => {
+    const model = installFakeLoopModel(() => conclude);
+    const fixtures = runtime({ agents: { default: { model } } });
     await fixtures.agent.act('open billing');
     expect(loopCalls[0]!.system).not.toContain('Project context:');
+    expect(loopCalls[0]!.system).not.toContain('Be careful.');
+  });
+
+  it("builds each agent from its own entry: another agent's system never leaks in", async () => {
+    const model = installFakeLoopModel(() => conclude);
+    const fixtures = runtime({ agents: { default: { model, system: 'Be careful.' }, ux: { model, system: 'Review the layout.' } } });
+    await fixtures.agent.act('open billing', { agent: 'ux' });
+    expect(loopCalls[0]!.system).toContain('Review the layout.');
+    expect(loopCalls[0]!.system).not.toContain('Be careful.');
   });
 });

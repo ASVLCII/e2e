@@ -1,26 +1,25 @@
 /**
- * The default step executor: the tool-loop
- * chassis plus the grammar toolset, kept deliberately small. Every mutating
+ * The built-in agent: the tool-loop chassis plus the grammar toolset, kept
+ * deliberately small, built from an agents entry's options. Every mutating
  * tool returns what changed on screen; verdicts, budgets, hard stops, loop
  * guards, wind-down, and the transcript come from the chassis
  * (`tool-loop.ts`) unchanged. `createToolLoopExecutor` is the same loop with
  * a caller's own prompt and vocabulary.
  */
 
-import { DEFAULT_AGENT_MARKER } from './agent-brand.ts';
-import type { ToolExecutionOptions, ToolSet } from 'ai';
+import type { Tool, ToolExecutionOptions, ToolSet } from 'ai';
 
-import type { SdkLanguageModel } from './ai-sdk.ts';
+import { BUILT_IN_AGENT } from './agent-brand.ts';
 import { AgentError } from './error.ts';
 import type { ReplayedPrefix, StepExecutor, StepExecutorContext } from './executor.ts';
 import { interactiveNodeCount } from './observation.ts';
-import { createGrammarTools, GRAMMAR_TOOL_NAMES } from './primitives.ts';
+import { createGrammarTools } from './primitives.ts';
 import { ScreenPresenter } from './screen-update.ts';
 import { compactScreenHistory, compactScreenshotHistory } from './transcript-compaction.ts';
 import { createToolLoopExecutor, type ToolLoopHelpers } from './tool-loop.ts';
-import type { DefinedTool } from './tool.ts';
-import { isDefinedTool, toolAppliesTo, withToolContext } from './tool.ts';
+import { toolAppliesTo, withToolContext } from './tool.ts';
 import { boundToolOutput } from './tool-output.ts';
+import type { AgentTool } from '../types.ts';
 
 const BASE_RULES = `You are an autonomous end-to-end testing agent executing exactly one test step against a real application.
 
@@ -48,78 +47,24 @@ function presenterFor(context: StepExecutorContext): ScreenPresenter {
   return presenter;
 }
 
-export interface CreateAgentOptions {
-  /**
-   * AI SDK language model, e.g. `gateway('openai/gpt-6-luna-fast')` from `ai`;
-   * defaults to the config-resolved `agent.model`.
-   */
-  readonly model?: SdkLanguageModel;
-  /**
-   * The model that judges `assert`, `waitFor`, and `extract` for this agent;
-   * defaults to `model`. Naming a second model here keeps the grader apart
-   * from the actor: the judge never sees the act loop's transcript, and with
-   * its own model it does not share the actor's blind spots either.
-   */
-  readonly judge?: SdkLanguageModel;
-  /**
-   * How the acting agent should work, appended to the built-in execution
-   * rules: its persona, its caution, what it verifies before it finishes. Only
-   * the act loop reads it. The judges behind `assert`, `waitFor`, and
-   * `extract` never see it, so nothing here can talk a judge into a verdict.
-   */
-  readonly system?: string;
-  /**
-   * What the app calls things, for every model call this agent makes: the
-   * names of screens and menus, where a feature lives, which button submits a
-   * form. Unlike `system`, the judges see it too, since a judge that does not
-   * know "plans are called tiers" cannot check that a tier was chosen.
-   * Prepended as project context to act turns and judgments, at most
-   * `limits.maxAgentContextBytes`. One value per agent: set it here or on the
-   * agent's options object, and if both are set they must be identical.
-   */
-  readonly context?: string;
-  /** Project tools from `defineTool`, merged with the default toolset. */
-  readonly tools?: Readonly<Record<string, DefinedTool>>;
-  /** Upper bound on model turns per step; defaults to the model-call budget. */
-  readonly maxTurns?: number;
-  /** AI SDK provider options passed to every model call (e.g. a thinking level). */
-  readonly providerOptions?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+/** What the built-in agent is built from: an agents entry's `system` and its validated `tools`. */
+export interface BuiltInAgentOptions {
+  /** Appended to the built-in execution rules; only the act loop reads it. */
+  readonly system?: string | undefined;
+  /** Project tools from `defineTool`, validated by config resolution. */
+  readonly tools?: Readonly<Record<string, AgentTool>>;
 }
 
-/** Cross-realm identity marker for executors `createAgent` built. */
-
-/**
- * The executor `createAgent` returns: the step executor plus the options it
- * was built from, readable so a host that composes another vocabulary on top
- * of a project's (`e2e explore` adds its finding tool to the project's tools)
- * starts from the same tools, guidance, model, and provider options.
- */
-export interface DefaultAgent extends StepExecutor {
-  /** What `createAgent` was given, with the tools validated. */
-  readonly options: CreateAgentOptions;
-  /** The project tools, validated; what a host outside the model loop (`e2e mcp`) serves. */
-  readonly tools: Readonly<Record<string, DefinedTool>>;
-}
-
-/** True when an executor came from `createAgent`, in this or another realm. */
-export function isDefaultAgent(value: unknown): value is DefaultAgent {
-  return typeof value === 'object' && value !== null && DEFAULT_AGENT_MARKER in value;
-}
-
-/** Builds the default AI SDK step executor. */
-export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
-  const userTools = validateUserTools(options.tools);
+/** Builds the built-in AI SDK step executor. */
+export function createBuiltInAgent(options: BuiltInAgentOptions = {}): StepExecutor {
+  const userTools = options.tools ?? {};
   const system = (): string =>
     [BASE_RULES, options.system]
       .filter((part): part is string => part !== undefined && part.trim() !== '')
       .join('\n\n');
-  const executor = createToolLoopExecutor({
-    name: 'e2e-default-agent',
-    version: '2',
-    ...(options.model === undefined ? {} : { model: options.model }),
+  return createToolLoopExecutor({
+    ...BUILT_IN_AGENT,
     system,
-    ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
-    ...(options.providerOptions === undefined ? {} : { providerOptions: options.providerOptions }),
     prepareMessages: (messages) => compactScreenshotHistory(compactScreenHistory(messages)),
     tools: (context, helpers) => ({
       ...guardedTools(helpers, projectTools(context, userTools)),
@@ -163,14 +108,6 @@ export function createAgent(options: CreateAgentOptions = {}): DefaultAgent {
       ];
     },
   });
-  const agent: DefaultAgent = {
-    ...executor,
-    ...(options.judge === undefined ? {} : { judge: options.judge }),
-    options: { ...options, tools: userTools },
-    tools: userTools,
-  };
-  Object.defineProperty(agent, DEFAULT_AGENT_MARKER, { value: true });
-  return agent;
 }
 
 /**
@@ -200,28 +137,6 @@ function formatReplayedPrefix(prefix: ReplayedPrefix): string {
   ].join('\n');
 }
 
-/** Validates `defineTool` values and reserved names once, at construction. */
-function validateUserTools(
-  tools: Readonly<Record<string, DefinedTool>> | undefined,
-): Readonly<Record<string, DefinedTool>> {
-  if (tools === undefined) return {};
-  for (const [name, defined] of Object.entries(tools)) {
-    if (!isDefinedTool(defined)) {
-      throw new AgentError(
-        'POLICY_DENIED',
-        `tool "${name}" was not created with defineTool; undeclared semantics are not trusted`,
-      );
-    }
-    if (name === 'complete_step' || GRAMMAR_TOOL_NAMES.has(name)) {
-      throw new AgentError('POLICY_DENIED', `the ${name} tool name is reserved for the agent's own tools`);
-    }
-    if (defined.tool.execute === undefined) {
-      throw new AgentError('POLICY_DENIED', `tool "${name}" has no execute function`);
-    }
-  }
-  return tools;
-}
-
 /**
  * The project tools that apply to the step's platform, run through the same
  * accounting pipeline as the grammar: every call is recorded, a mutating tool
@@ -233,18 +148,19 @@ function validateUserTools(
  */
 export function projectTools(
   context: StepExecutorContext,
-  tools: Readonly<Record<string, DefinedTool>>,
+  tools: Readonly<Record<string, AgentTool>>,
 ): ToolSet {
   const wrapped: Record<string, ToolSet[string]> = {};
   for (const [name, defined] of Object.entries(tools)) {
     // A tool scoped to other platforms is not offered, so the model never
     // learns a verb the surface cannot honor.
     if (!toolAppliesTo(defined, context.target.platform)) continue;
-    // validateUserTools rejected any tool without execute at construction.
-    const execute = defined.tool.execute!.bind(defined.tool);
+    // Config resolution admitted only defineTool values with an execute function.
+    const tool = defined.tool as Tool;
+    const execute = tool.execute!.bind(tool);
     const mutates = defined.annotations.mutates;
     wrapped[name] = {
-      ...defined.tool,
+      ...tool,
       execute: async (input: never, executionOptions: ToolExecutionOptions<unknown>) => {
         const result: unknown = await context.budgets.runTool({ name, mutates }, async () =>
           execute(input, withToolContext(executionOptions, {

@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { expect, it } from 'vitest';
-import { createAgent } from 'e2e/agent';
 import { buildEngine } from '../../src/engine.ts';
 import { AgentDeviceSurface } from '../../src/surface.ts';
 import { mobileTools } from '../../src/tools.ts';
@@ -46,7 +45,7 @@ it('offers no pixel verbs after a secret fill and captures no pixels', async () 
     const outcome = await run({ cwd: project, quiet: true, env: {}, rawConfig: {
       tests: '*.e2e.ts', targets: [{ name: 'ios', platform: 'ios', engine }], cache: 'off',
       credentials: { audit: { username: 'audit', password: () => 'synthetic-device-secret' } },
-      agents: { default: { executor: createAgent({ tools: mobileTools(engine) }), model } },
+      agents: { default: { tools: mobileTools(engine), model } },
     } });
     expect(outcome.status).toBe('passed');
     // The pack's own tools are offered; the grammar's pixel verbs are not, the viewport being tainted.

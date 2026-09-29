@@ -52,7 +52,7 @@ describe('semantic fallback handoff', () => {
     };
     const { project, outcome } = await runProject({ 'tests/fallback.e2e.ts': SUITE }, {
       appUrl: 'https://fixture.test',
-      config: { tests: 'tests/**/*.e2e.ts', cache: 'read-write', targets: [{ name: 'fixture', engine }], agents: { default: executor } },
+      config: { tests: 'tests/**/*.e2e.ts', cache: 'read-write', targets: [{ name: 'fixture', engine }], agents: { default: { executor } } },
     });
     try {
       expect(outcome.report.run.errors).toEqual([]);
@@ -251,7 +251,7 @@ describe('semantic fallback handoff', () => {
     const { project, outcome } = await runProject({ 'tests/fallback.e2e.ts': SUITE }, {
       appUrl: 'https://fixture.test',
       config: {
-        tests: 'tests/**/*.e2e.ts', targets: [{ name: 'fixture', engine }], agents: { default: executor },
+        tests: 'tests/**/*.e2e.ts', targets: [{ name: 'fixture', engine }], agents: { default: { executor } },
         cache: { mode: 'read-write', store: { writable: true, read: async () => ({ status: 'hit', entry, bytes: 1 }), write: async () => undefined } },
       },
     });
@@ -299,7 +299,7 @@ describe('semantic fallback handoff', () => {
     };
     const { project, outcome } = await runProject({ 'tests/fallback.e2e.ts': SUITE }, {
       appUrl: 'https://fixture.test',
-      config: { tests: 'tests/**/*.e2e.ts', cache: 'read-write', targets: [{ name: 'fixture', engine }], agents: { default: executor } },
+      config: { tests: 'tests/**/*.e2e.ts', cache: 'read-write', targets: [{ name: 'fixture', engine }], agents: { default: { executor } } },
     });
     try {
       expect(outcome.report.run.errors).toEqual([]);

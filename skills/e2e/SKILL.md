@@ -22,7 +22,6 @@ an API key, or a local model. `e2e init` offers these choices. See
 ```ts
 // e2e.config.ts
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
 
@@ -37,10 +36,10 @@ export default {
   ],
   // The model behind every agent.* step: an AI SDK instance; gateway() from 'ai' reads AI_GATEWAY_API_KEY or a Vercel OIDC token.
   agents: {
-    default: createAgent({
+    default: {
       model: gateway('openai/gpt-6-luna-fast'),
       system: 'You are a thorough QA agent. Verify every outcome on screen.',
-    }),
+    },
   },
 } satisfies E2EConfig;
 ```
@@ -131,7 +130,7 @@ one. Without them, the installed CLI prints the same text:
   can be cached and replayed without model calls. If replay fails, the
   runner can return to the live agent.
 - Shape the agent for this app and keep iterating on it: `context` for
-  vocabulary the screens use, `system` on `createAgent` for how it works,
+  vocabulary the screens use, `system` on the agent for how it works,
   tools for a test API, and named personas under `agents`. When a step
   fails, tighten the goal first, then the context, then the agent. Topic
   `agent` has the loop.

@@ -14,7 +14,6 @@ import { installFakeLoopModel, nodeIdFor } from '../helpers/fake-loop-model.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 import { resultByTitle, runProject, type FixtureProject } from '../helpers/run-project.ts';
 import type { RunOutcome } from '../helpers/run-project.ts';
-import { createAgent } from '../../src/agent/default-agent.ts';
 
 const AGENT_SUITE = `import { test, expect } from 'e2e';
 
@@ -421,10 +420,10 @@ describe('agent judgment tier', () => {
   });
 });
 
-describe('createAgent with a judge', () => {
+describe('the built-in agent with a judge', () => {
   const SUITE = `import { test } from 'e2e';
 
-test('the judge judges createAgent assertions', async ({ app, agent }) => {
+test('the judge judges the built-in agent assertions', async ({ app, agent }) => {
   await app.open();
   await agent.assert('the Home heading is visible');
   await agent.assert('the checkout page is visible');
@@ -436,14 +435,13 @@ test('the judge judges createAgent assertions', async ({ app, agent }) => {
 
   beforeAll(async () => {
     app = await startFixtureApp();
-    // `createAgent(...)` is a StepExecutor, but it is the built-in agent, not a
-    // custom brain. Its assertions must reach the judgment tier and the judge,
-    // not its own act loop on the actor model.
+    // The built-in agent's assertions must reach the judgment tier and the
+    // judge, not its own act loop on the actor model.
     const actor = installFakeModel(respond, { modelId: 'actor' });
     const judge = installFakeModel(respond, { modelId: 'judge' });
     const result = await runProject(
       { 'tests/judge.e2e.ts': SUITE },
-      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: createAgent({ model: actor as never, judge: judge as never }) } } },
+      { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', agents: { default: { model: actor, judge } } } },
     );
     outcome = result.outcome;
     project = result.project;
@@ -455,7 +453,7 @@ test('the judge judges createAgent assertions', async ({ app, agent }) => {
   });
 
   it('sends both assertions to the judge as single judgments and fails on the false one', () => {
-    const result = resultByTitle(outcome, 'the judge judges createAgent assertions');
+    const result = resultByTitle(outcome, 'the judge judges the built-in agent assertions');
     expect(result.status).toBe('failed');
     expect(result.attempts.at(-1)!.error?.code).toBe('ASSERTION_FAILED');
     const judged = fakeCalls.filter((call) => call.schemaName === 'agent-judgment-2');

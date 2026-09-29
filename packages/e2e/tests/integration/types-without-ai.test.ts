@@ -43,7 +43,7 @@ const own: StepExecutor = {
     return { status: 'passed', summary: 'done' };
   },
 };
-export default { targets: [{ engine }], agents: { default: own } } satisfies E2EConfig;
+export default { targets: [{ engine }], agents: { default: { executor: own } } } satisfies E2EConfig;
 export { credentials, defineEngine, event, expect, secrets, test };
 `;
 

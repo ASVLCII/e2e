@@ -411,7 +411,7 @@ export interface StepExecutorContext {
   /**
    * Completed prior steps of this attempt (and, in a serial group, of earlier
    * members) serialized for prompt context, oldest first, bounded by
-   * `limits.maxLedgerBytes`; `''` when none.
+   * the runner's 8192-byte ledger limit; `''` when none.
    */
   readonly ledger: string;
   /** Trusted project/test agent context (config `agent.context` + test). */
@@ -483,15 +483,15 @@ export interface StepExecutor {
   readonly cache?: 'inherit' | 'off';
   /**
    * The model this executor brought along, when it has one. Config resolution
-   * reads it as the run's model when `agent.model` is unset, so one
-   * `createAgent({ model })` drives both `act` and the judgment tier;
-   * `INVALID_CONFIG` when both are set and differ.
+   * reads it as the agent's model when the entry's `model` is unset, so one
+   * `createToolLoopExecutor({ model })` drives both `act` and the judgment
+   * tier; `INVALID_CONFIG` when both are set and differ.
    */
   readonly model?: ModelInstance;
   /**
    * The model the judgment tier (`assert`, `waitFor`, `extract`) calls for
    * this executor's agent, when it differs from `model`. Config resolution
-   * reads it as the agent's judge when `agent.judge` is unset;
+   * reads it as the agent's judge when the entry's `judge` is unset;
    * `INVALID_CONFIG` when both are set and differ.
    */
   readonly judge?: ModelInstance;

@@ -114,7 +114,7 @@ describe('trace cache: record then zero-turn replay', () => {
       appUrl: app.url,
       config: {
         tests: 'tests/**/*.e2e.ts',
-        agents: { default: twoTapExecutor(record) },
+        agents: { default: { executor: twoTapExecutor(record) } },
         cache: 'read-write' as const,
       },
     });
@@ -194,7 +194,7 @@ describe('trace cache: divergence hands the step over mid-step', () => {
       appUrl: app.url,
       config: {
         tests: 'tests/**/*.e2e.ts',
-        agents: { default: twoTapExecutor(record) },
+        agents: { default: { executor: twoTapExecutor(record) } },
         cache: 'read-write' as const,
       },
     });
@@ -271,7 +271,7 @@ describe('trace cache: unconfirmed traces are withheld and poisoned entries evic
       appUrl: app.url,
       config: {
         tests: 'tests/**/*.e2e.ts',
-        agents: { default: twoTapExecutor(record) },
+        agents: { default: { executor: twoTapExecutor(record) } },
         cache: 'read-write' as const,
       },
     };
@@ -371,7 +371,7 @@ describe('trace cache: the recorded end state gates self-finalization', () => {
       config: {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
-        agents: { default: saveMarkerExecutor(record, executor) },
+        agents: { default: { executor: saveMarkerExecutor(record, executor) } },
         cache: 'read-write' as const,
       },
     };
@@ -472,7 +472,7 @@ describe('trace cache: only a verification step confirms a write', () => {
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['json'] as const,
-          agents: { default: twoTapExecutor(record) },
+          agents: { default: { executor: twoTapExecutor(record) } },
           cache: 'read-write' as const,
         },
       });
@@ -533,11 +533,13 @@ describe('trace cache: an engine-independent executor is not gated by the cache'
           cache: 'read-write',
           agents: {
             default: {
-              name: 'observation-only-executor',
-              async runStep(context) {
-                await context.observe();
-                executorFinished = true;
-                return { status: 'passed', summary: 'the screen already matches' };
+              executor: {
+                name: 'observation-only-executor',
+                async runStep(context) {
+                  await context.observe();
+                  executorFinished = true;
+                  return { status: 'passed', summary: 'the screen already matches' };
+                },
               },
             },
           },
@@ -563,7 +565,7 @@ describe('trace cache: an engine-independent executor is not gated by the cache'
         config: {
           tests: 'tests/**/*.e2e.ts',
           reporters: ['json'] as const,
-          agents: { default: toolsOnlyExecutor(record) },
+          agents: { default: { executor: toolsOnlyExecutor(record) } },
           cache: 'read-write' as const,
         },
       });
@@ -596,7 +598,7 @@ describe('trace cache: modes that never write', () => {
         appUrl: app.url,
         config: {
           tests: 'tests/**/*.e2e.ts',
-          agents: { default: twoTapExecutor(record) },
+          agents: { default: { executor: twoTapExecutor(record) } },
         },
       });
       expect(outcome.exitCode).toBe(0);
@@ -612,7 +614,7 @@ describe('trace cache: modes that never write', () => {
       appUrl: app.url,
       config: {
         tests: 'tests/**/*.e2e.ts',
-        agents: { default: twoTapExecutor(record) },
+        agents: { default: { executor: twoTapExecutor(record) } },
         cache: 'read-write' as const,
       },
       runOptions: { noCache },
@@ -649,7 +651,7 @@ describe('trace cache: modes that never write', () => {
         appUrl: app.url,
         config: {
           tests: 'tests/**/*.e2e.ts',
-          agents: { default: twoTapExecutor(record) },
+          agents: { default: { executor: twoTapExecutor(record) } },
           cache: 'read-only' as const,
         },
       });
@@ -669,7 +671,7 @@ describe('trace cache: modes that never write', () => {
         appUrl: app.url,
         config: {
           tests: 'tests/**/*.e2e.ts',
-          agents: { default: twoTapExecutor(record) },
+          agents: { default: { executor: twoTapExecutor(record) } },
         },
         runOptions: {
           env: { ...process.env, APP_URL: app.url, CI: '1' },
@@ -690,7 +692,7 @@ describe('trace cache: modes that never write', () => {
         appUrl: app.url,
         config: {
           tests: 'tests/**/*.e2e.ts',
-          agents: { default: twoTapExecutor(record) },
+          agents: { default: { executor: twoTapExecutor(record) } },
           cache: 'read-write' as const,
         },
         runOptions: {
@@ -742,7 +744,7 @@ describe('trace cache: a bare-point tap replays like a coordinate-driven tool', 
       config: {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
-        agents: { default: pinExecutor(record) },
+        agents: { default: { executor: pinExecutor(record) } },
         cache: 'read-write' as const,
       },
     };
@@ -841,7 +843,7 @@ describe('trace cache: a replayed typed value is the flow\'s data on an app that
       config: {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
-        agents: { default: todoExecutor(record) },
+        agents: { default: { executor: todoExecutor(record) } },
         cache: 'read-write' as const,
       },
     };
@@ -956,7 +958,7 @@ describe('trace cache: a composed word that appears on screen is not a run-time 
       config: {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
-        agents: { default: rowWordsExecutor(record) },
+        agents: { default: { executor: rowWordsExecutor(record) } },
         cache: 'read-write' as const,
       },
     };

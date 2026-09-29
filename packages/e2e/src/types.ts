@@ -1131,47 +1131,83 @@ export interface ArtifactsConfig {
  */
 export type ProviderOptions = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 
-/** Agent options for the built-in agent; `agent` also accepts a StepExecutor. */
-export interface AgentConfig {
-  /**
-   * The step executor `agent.act()` dispatches to, alongside the options: a
-   * custom brain keeps `model`, budgets, and `context`. Omitted selects the
-   * built-in agent.
-   */
-  executor?: StepExecutor;
+/**
+ * A project tool as `defineTool` from `e2e/agent` returns it. Typed
+ * structurally so this entrypoint names nothing from the optional `ai` peer;
+ * config resolution accepts only values `defineTool` built.
+ */
+export interface AgentTool {
+  readonly tool: object;
+  readonly annotations: { readonly mutates: boolean; readonly platforms?: readonly string[] };
+}
+
+/** The options every agent takes, whichever brain runs its `act` steps. */
+export interface AgentOptions {
   /** An AI SDK model instance; no implicit default. */
   model?: ModelInstance;
   /**
    * The model that judges `assert`, `waitFor`, and `extract`; defaults to
    * `model`. A judge of its own separates the model that grades a flow from
-   * the one that drove it. Must agree with `createAgent({ judge })` when both
-   * are set.
+   * the one that drove it.
    */
   judge?: ModelInstance;
+  /**
+   * What the app calls things, told to every model call this agent makes,
+   * act turns and judgments alike: the names of screens and menus, where a
+   * feature lives, which button submits a form. At most 16384 bytes.
+   */
+  context?: string;
   /** Committed actions per agent call, 1 through 100; default 25. */
   maxSteps?: number;
   /** Model requests per agent call, 1 through 100; default 25. */
   maxModelCalls?: number;
   /** Deadline of one `assert`, `waitFor`, or `extract` call in milliseconds; default 30000. Raise it for a slow judge; engine operations keep `actionTimeout`. */
-  timeout?: number;
+  judgmentTimeout?: number;
   /** Observation payload ceiling for act turns and judgments, 1024 through 16777216; default 262144. */
   maxObservationBytes?: number;
-  /**
-   * What the app calls things, told to every model call this agent makes,
-   * act turns and judgments alike: the names of screens and menus, where a
-   * feature lives, which button submits a form. At most
-   * `limits.maxAgentContextBytes`. An executor built with its own vocabulary
-   * (`createAgent({ context })`) makes this key redundant; setting a
-   * different value on both is `INVALID_CONFIG`.
-   */
-  context?: string;
+  /** Input tokens per model request, 1 through 1000000; default 64000. A dense screen is cut to fit under it. */
+  maxInputTokens?: number;
   /**
    * Provider options every model call carries, e.g. a reasoning effort.
    * OpenAI and Azure OpenAI calls also carry `store: false` and a prompt
    * cache key unless set here.
    */
   providerOptions?: ProviderOptions;
+  /** Never set: an entry is not itself a `StepExecutor`; a custom brain goes under `executor`. */
+  runStep?: never;
 }
+
+/**
+ * One entry of `agents`: the built-in agent with its options, or a custom
+ * brain under `executor`. Each entry starts from the built-in defaults; no
+ * agent inherits another's values, `default`'s included.
+ */
+export type AgentConfig = AgentOptions &
+  (
+    | {
+        executor?: never;
+        /**
+         * How the acting agent should work, appended to the built-in execution
+         * rules: its persona, its caution, what it verifies before it finishes.
+         * Only the act loop reads it. The judges behind `assert`, `waitFor`,
+         * and `extract` never see it, so nothing here can talk a judge into a
+         * verdict.
+         */
+        system?: string;
+        /** Project tools from `defineTool`, offered beside the built-in toolset. */
+        tools?: Readonly<Record<string, AgentTool>>;
+      }
+    | {
+        /**
+         * A custom brain `agent.act()` dispatches to instead of the built-in
+         * agent. The model, judge, budgets, and context still apply; `system`
+         * and `tools` belong to the built-in agent and are rejected here.
+         */
+        executor: StepExecutor;
+        system?: never;
+        tools?: never;
+      }
+  );
 
 /** The reporters the runner ships, named by id; each is a `Reporter` on the same contract. */
 export type BuiltinReporter = 'list' | 'json' | 'junit' | 'markdown';
@@ -1289,15 +1325,14 @@ export interface E2EConfig {
    */
   reporters?: readonly (BuiltinReporter | Reporter)[];
   /**
-   * The agents by name. Each is either an options block or the agent itself:
-   * `createAgent(...)` from `e2e/agent`, or any hand-rolled
-   * `StepExecutor`. `default` is the one tests run with; `e2e run --agent
-   * <name>` runs them with another. With an agent value, the model is the
-   * one it brought and every other option keeps its default. Agents never
+   * The agents by name, each one plain object: the built-in agent's options,
+   * or `{ executor }` for a custom brain. `default` is the one tests run
+   * with; `e2e run --agent <name>` runs them with another. Every agent starts
+   * from the built-in defaults: none inherits another's values. Agents never
    * cross a process boundary: workers re-resolve the config module and
    * construct their own, exactly like model instances.
    */
-  agents?: Readonly<Record<string, AgentConfig | StepExecutor>>;
+  agents?: Readonly<Record<string, AgentConfig>>;
   /**
    * The adaptive replay cache. Opt-out: unset means
    * `read-write`, and `'off'` disables it, as does the `--no-cache` flag,
@@ -1307,21 +1342,6 @@ export interface E2EConfig {
    * of trust in the cache it restores.
    */
   cache?: CacheMode | CacheConfig;
-  /**
-   * Enforced resource ceilings only. A limit exists here exactly when the
-   * runner has an enforcement site for it; aspirational knobs are not
-   * accepted, so a configured limit is never a silent no-op.
-   */
-  limits?: {
-    /** Trusted agent context, 1024 through 65536; default 16384. */
-    maxAgentContextBytes?: number;
-    /** Prior-step ledger, 1024 through 65536; default 8192. */
-    maxLedgerBytes?: number;
-    /** Events recorded per step, 1 through 10000; default 1000. */
-    maxEventsPerStep?: number;
-    /** Tokens per model request, 1 through 1000000; default 64000. */
-    maxModelTokensPerCall?: number;
-  };
   /**
    * Named accounts. A credential's password is registered as a secret under
    * the credential's name, so the name may not also appear under `secrets`.

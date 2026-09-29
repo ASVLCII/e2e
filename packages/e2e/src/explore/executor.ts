@@ -1,6 +1,6 @@
 /**
- * The explorer: the built-in agent (`createAgent`) with exploration guidance
- * appended to the project's and one tool added to the project's vocabulary,
+ * The explorer: the built-in agent with exploration guidance appended to the
+ * project's and one tool added to the project's vocabulary,
  * `report_finding`. Nothing else changes: budgets, loop guards, wind-down,
  * secrets, origin policy, and the transcript are the harness's, and each
  * exploration step runs as one ordinary `agent.act` step.
@@ -8,10 +8,9 @@
 
 import type { ToolExecutionOptions } from 'ai';
 import { z } from 'zod';
-import { asSdkLanguageModel } from '../agent/ai-sdk.ts';
-import { createAgent, isDefaultAgent, type DefaultAgent } from '../agent/default-agent.ts';
-import type { StepExecutor } from '../agent/executor.ts';
+import type { ResolvedAgentConfig } from '../config/agent.ts';
 import { defineTool, getToolContext, type DefinedTool } from '../agent/tool.ts';
+import type { AgentConfig } from '../types.ts';
 import type { ExploreState } from './state.ts';
 
 export const FINDING_TOOL_NAME = 'report_finding';
@@ -28,33 +27,41 @@ const EXPLORE_RULES = `Exploration mode: this run has no scripted test. Each ste
 
 export interface ExplorerOptions {
   readonly state: ExploreState;
-  /** The executor the agent the exploration runs as resolved to; undefined is the built-in agent. */
-  readonly from: StepExecutor | undefined;
-  /** Told when a hand-rolled executor is replaced. */
+  /** The agents entry the exploration runs as, as configured; undefined is the built-in agent with no options. */
+  readonly entry: AgentConfig | undefined;
+  /** The same entry resolved, whose models a replaced custom executor's own ones are read from. */
+  readonly resolved: ResolvedAgentConfig;
+  /** Told when a custom executor is replaced. */
   readonly notice: (message: string) => void;
 }
 
 /**
- * Builds the explorer. An executor `createAgent` built lends its tools,
- * guidance, model, and provider options; a hand-rolled one has no readable
- * vocabulary and is replaced, with a notice, keeping the model it brought.
+ * The agents entry the exploration runs as: the project's own options, its
+ * guidance and tools included, with the exploration rules and the finding
+ * tool added. A custom executor has no readable vocabulary and is replaced,
+ * with a notice, keeping the models it brought.
  */
-export function createExplorer(options: ExplorerOptions): DefaultAgent {
-  const { from } = options;
-  const base = isDefaultAgent(from) ? from.options : undefined;
-  if (from !== undefined && base === undefined) {
+export function explorerAgent(options: ExplorerOptions): AgentConfig {
+  const entry: AgentConfig = options.entry ?? {};
+  const { executor, system, tools, ...shared } = entry;
+  let models: Pick<AgentConfig, 'model' | 'judge'> = {};
+  if (executor !== undefined) {
+    const { model, judge } = options.resolved;
     options.notice(
-      `the configured agent "${from.name}" is a custom executor; explore runs the built-in agent instead` +
-        (from.model === undefined ? '' : ', with the model that executor brought'),
+      `the configured agent "${executor.name}" is a custom executor; explore runs the built-in agent instead` +
+        (executor.model === undefined ? '' : ', with the model that executor brought'),
     );
+    models = {
+      ...(model === undefined ? {} : { model: model.model }),
+      ...(judge === undefined ? {} : { judge: judge.model }),
+    };
   }
-  const carried = base === undefined && from?.model !== undefined ? { model: asSdkLanguageModel(from.model) } : {};
-  return createAgent({
-    ...base,
-    ...carried,
-    system: [base?.system, EXPLORE_RULES].filter((part): part is string => part !== undefined && part.trim() !== '').join('\n\n'),
-    tools: { ...base?.tools, [FINDING_TOOL_NAME]: createFindingTool(options.state) },
-  });
+  return {
+    ...shared,
+    ...models,
+    system: [system, EXPLORE_RULES].filter((part): part is string => part !== undefined && part.trim() !== '').join('\n\n'),
+    tools: { ...tools, [FINDING_TOOL_NAME]: createFindingTool(options.state) },
+  };
 }
 
 const FINDING_SCHEMA = z.object({

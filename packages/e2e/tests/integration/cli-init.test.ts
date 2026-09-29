@@ -226,7 +226,7 @@ describe('initializing standalone projects', () => {
     await expect(execFileAsync(process.execPath, [CLI, 'run'], { cwd: dir })).rejects.toMatchObject({
       code: 2,
       stdout: expect.stringMatching(
-        /Cannot find package 'e2e' imported from [\s\S]*?e2e is declared in \S+package\.json but is not installed: run pnpm install/,
+        /Cannot find package '@e2e-dev\/web' imported from [\s\S]*?@e2e-dev\/web is declared in \S+package\.json but is not installed: run pnpm install/,
       ),
     });
   });

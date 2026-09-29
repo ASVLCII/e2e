@@ -32,7 +32,7 @@ describe('list reporter output', () => {
           appUrl: 'http://127.0.0.1:4599',
           config: {
             targets: [{ name: 'fake', platform: 'custom', engine: defineEngine({ name: 'fake', version: '1', spiVersion: 1, observe: async () => snapshot([]) }) }],
-            agents: { default: passing },
+            agents: { default: { executor: passing } },
             cache: 'off',
           },
           runOptions: { quiet: false },

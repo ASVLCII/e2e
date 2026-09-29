@@ -26,12 +26,11 @@ a [Vercel OIDC token](#vercel-oidc-instead-of-a-key) without a key.
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
-import { createAgent } from 'e2e/agent';
 import { gateway } from 'ai';
 
 export default {
   targets: [{ engine: web({ url: 'http://localhost:3000' }) }],
-  agents: { default: createAgent({ model: gateway('openai/gpt-6-luna-fast') }) },
+  agents: { default: { model: gateway('openai/gpt-6-luna-fast') } },
 } satisfies E2EConfig;
 ```
   </Tab>
@@ -40,10 +39,9 @@ export default {
 Install `@openrouter/ai-sdk-provider` and set `OPENROUTER_API_KEY`.
 
 ```ts title="Model setup"
-import { createAgent } from 'e2e/agent';
 import { openrouter } from '@openrouter/ai-sdk-provider';
 
-const agent = createAgent({ model: openrouter('openai/gpt-6-luna-fast') });
+const agent = { model: openrouter('openai/gpt-6-luna-fast') };
 ```
 
 Use `agent` as `agents.default` in your config.
@@ -54,10 +52,9 @@ Install the provider's AI SDK package and set its API key. For OpenAI,
 install `@ai-sdk/openai` and set `OPENAI_API_KEY`:
 
 ```ts title="Model setup"
-import { createAgent } from 'e2e/agent';
 import { openai } from '@ai-sdk/openai';
 
-const agent = createAgent({ model: openai('gpt-6-luna') });
+const agent = { model: openai('gpt-6-luna') };
 ```
 
 Use `agent` as `agents.default`. Other AI SDK providers work the same way,
@@ -69,7 +66,6 @@ Install `@ai-sdk/openai-compatible`. Set the endpoint URL and a model ID
 served by that endpoint:
 
 ```ts title="Model setup"
-import { createAgent } from 'e2e/agent';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 const local = createOpenAICompatible({
@@ -78,7 +74,7 @@ const local = createOpenAICompatible({
   // apiKey: process.env.LLM_API_KEY,
 });
 
-const agent = createAgent({ model: local.chatModel('your-model-id') });
+const agent = { model: local.chatModel('your-model-id') };
 ```
 
 Use `agent` as `agents.default`. Add `apiKey` if the server requires one.
@@ -132,8 +128,8 @@ Give agents different names to use different models:
 export default {
   targets: [{ engine: web({ url: 'http://localhost:3000' }) }],
   agents: {
-    default: createAgent({ model: gateway('openai/gpt-6-luna-fast') }),
-    careful: createAgent({ model: gateway('anthropic/claude-sonnet-5') }),
+    default: { model: gateway('openai/gpt-6-luna-fast') },
+    careful: { model: gateway('anthropic/claude-sonnet-5') },
   },
 } satisfies E2EConfig;
 ```
@@ -148,10 +144,10 @@ By default, the same model drives `agent.act` and answers `agent.assert`,
 for those checks:
 
 ```ts title="Agent setup"
-const agent = createAgent({
+const agent = {
   model: gateway('openai/gpt-6-luna-fast'),
   judge: gateway('anthropic/claude-sonnet-5'),
-});
+};
 ```
 
 Judgments use the current screen and the question, without the acting
@@ -162,9 +158,9 @@ To switch a model without editing the config, read your own environment
 variable:
 
 ```ts title="Agent setup"
-const agent = createAgent({
+const agent = {
   model: gateway(process.env.MODEL ?? 'openai/gpt-6-luna-fast'),
-});
+};
 ```
 
 ## Data retention and compliance
@@ -181,10 +177,10 @@ retention need no configuration. To keep stored responses, set `store` in
 `providerOptions`; the key is `azure` for Azure OpenAI:
 
 ```ts title="Agent setup"
-const agent = createAgent({
+const agent = {
   model: openai('gpt-6-luna'),
   providerOptions: { openai: { store: true } },
-});
+};
 ```
 
 **Anthropic under a BAA.** Agent steps use the Messages API with tool use,
@@ -200,14 +196,16 @@ organizations with zero data retention.
 | Problem | Code | Fix |
 | --- | --- | --- |
 | A model is a string instead of an AI SDK instance | `INVALID_CONFIG` | Construct it, for example `gateway('openai/gpt-6-luna-fast')`. |
-| The built-in agent has no model | `MODEL_UNAVAILABLE` | Set `createAgent({ model })` or `agents.<name>.model`. |
+| The built-in agent has no model | `MODEL_UNAVAILABLE` | Set `agents.<name>.model`. |
 | Authentication fails on the first model call | `MODEL_PROVIDER_FAILED` | Check the provider's API key or the linked Vercel project, or run `npx e2e login` for a subscription. |
 | The `ai` package is missing | `MODEL_UNAVAILABLE` | Run `npm install -D ai`. |
 | A step's second turn fails with `Item with id 'rs_…' not found` | `MODEL_PROVIDER_FAILED` | Leave `store` off in `providerOptions`, the default, or call OpenAI directly instead of through a gateway. |
 
-If both `createAgent` and the surrounding agent options set `model`, they
-must name the same provider and model. The same rule applies to `judge`;
-conflicting values produce `INVALID_CONFIG`.
+A custom executor can bring its own `model` or `judge`, as
+`createToolLoopExecutor({ model })` does. If the agents entry sets one too,
+they must name the same provider and model; conflicting values produce
+`INVALID_CONFIG`. Each agent resolves its own model: an entry without one does
+not inherit `default`'s.
 
 <CardGroup cols={2}>
   <Card title="Subscriptions" icon="key" href="/subscriptions">

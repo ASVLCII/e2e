@@ -35,7 +35,7 @@ function requireSurface(engine: EngineHandle): AgentDeviceSurface {
 
 /**
  * Builds the tool pack for one or more agent-device engines, keyed the way
- * `createAgent({ tools })` expects. Pass every device engine a config
+ * an agents entry's `tools` expects. Pass every device engine a config
  * declares: tool names are fixed, so two packs cannot be merged, and each
  * tool is offered only on the platforms those engines drive. A worker runs
  * one attempt at a time, so at execution the pack dispatches to the surface

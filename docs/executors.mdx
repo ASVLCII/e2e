@@ -14,7 +14,10 @@ not enough. There are two options:
    `ai` package installed.
 
 Both receive a deadline, redacted observations, and checked action methods.
-The runner records their verdicts.
+The runner records their verdicts. Either goes under `executor` in an agents
+entry, beside the options that still apply: `model`, `judge`, `context`, and
+the budgets. `system` and `tools` belong to the built-in agent, so an entry
+with `executor` rejects them.
 
 ## Keep the loop, change the vocabulary
 
@@ -33,38 +36,43 @@ const engine = web({ url: 'http://localhost:3000' });
 export default {
   targets: [{ engine }],
   agents: {
-    default: createToolLoopExecutor({
-      name: 'button-agent',
+    default: {
       model: gateway('openai/gpt-6-luna-fast'),
-      system: 'Read the screen before acting. Address buttons by their visible label.',
-      buildPrompt: (ctx) => ctx.step.instruction,
-      tools: (ctx, { guard }) => ({
-        observe: tool({
-          description: 'Read the screen as text',
-          inputSchema: z.object({}),
-          execute: () =>
-            guard(() => ctx.budgets.runTool({ name: 'observe', mutates: false }, async () => {
-              const observation = await ctx.observe();
-              return observation.text;
-            })),
-        }),
-        tap: tool({
-          description: 'Tap a button by its visible label',
-          inputSchema: z.object({ label: z.string() }),
-          execute: ({ label }) =>
-            guard(() => ctx.budgets.runTool({ name: 'tap', mutates: true }, async () => {
-              await surfaceOf(engine)!.page().getByRole('button', { name: label, exact: true }).click({
-                timeout: Math.max(1, ctx.budgets.remainingMs()),
-              });
-              return `Tapped ${label}.`;
-            })),
+      maxModelCalls: 15,
+      executor: createToolLoopExecutor({
+        name: 'button-agent',
+        system: 'Read the screen before acting. Address buttons by their visible label.',
+        buildPrompt: (ctx) => ctx.step.instruction,
+        tools: (ctx, { guard }) => ({
+          observe: tool({
+            description: 'Read the screen as text',
+            inputSchema: z.object({}),
+            execute: () =>
+              guard(() => ctx.budgets.runTool({ name: 'observe', mutates: false }, async () => {
+                const observation = await ctx.observe();
+                return observation.text;
+              })),
+          }),
+          tap: tool({
+            description: 'Tap a button by its visible label',
+            inputSchema: z.object({ label: z.string() }),
+            execute: ({ label }) =>
+              guard(() => ctx.budgets.runTool({ name: 'tap', mutates: true }, async () => {
+                await surfaceOf(engine)!.page().getByRole('button', { name: label, exact: true }).click({
+                  timeout: Math.max(1, ctx.budgets.remainingMs()),
+                });
+                return `Tapped ${label}.`;
+              })),
+          }),
         }),
       }),
-    }),
+    },
   },
 } satisfies E2EConfig;
 ```
 
+The loop reads the entry's `model` unless `createToolLoopExecutor({ model })`
+brings its own, and its model turns per step are the entry's `maxModelCalls`.
 `buildPrompt` returns a string or message history. Use `prepareMessages`
 between turns to shorten the history or return `{ messages, stop }` when
 the step is not progressing.
@@ -111,7 +119,7 @@ const scripted: StepExecutor = {
 
 export default {
   targets: [{ engine: web({ url: 'http://localhost:3000' }) }],
-  agents: { default: scripted },
+  agents: { default: { executor: scripted } },
 } satisfies E2EConfig;
 ```
 
@@ -182,7 +190,7 @@ const own: StepExecutor = {
 
 export default {
   targets: [{ engine }],
-  agents: { default: own },
+  agents: { default: { executor: own } },
 } satisfies E2EConfig;
 ```
 

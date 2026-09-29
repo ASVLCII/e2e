@@ -23,7 +23,6 @@ to the runner.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
-import { createAgent } from 'e2e/agent';
 import { mobile } from '@e2e-dev/mobile';
 import { mobileTools } from '@e2e-dev/mobile/tools';
 import { gateway } from 'ai';
@@ -38,10 +37,10 @@ export default {
   ],
   workers: 1,
   agents: {
-    default: createAgent({
+    default: {
       model: gateway('openai/gpt-5.6-luna'),
       tools: mobileTools(iphone, pixel),
-    }),
+    },
   },
 } satisfies E2EConfig;
 ```
@@ -146,7 +145,7 @@ system alert). It takes at least one engine. Pass every device engine the
 config declares: tool names are fixed, so two packs cannot be merged, and the
 pack dispatches each call to the engine whose attempt is running. Tools are
 scoped to the platforms of those engines, so a suite that mixes web and device
-targets can hand the pack to one `createAgent`.
+targets can hand the pack to one agents entry's `tools`.
 
 ## Secrets
 

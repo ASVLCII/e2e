@@ -10,7 +10,6 @@ import { AttemptBudget } from '../../src/run/budget.ts';
 import { createFixtures } from '../../src/run/fixtures.ts';
 import { StepRecorder } from '../../src/run/steps.ts';
 import { WorkerModels } from '../../src/run/worker-models.ts';
-import { createAgent } from '../../src/agent/default-agent.ts';
 import type { StepExecutor } from '../../src/agent/executor.ts';
 import { defineTool, getToolContext } from '../../src/agent/tool.ts';
 import type { E2EConfig } from '../../src/types.ts';
@@ -358,7 +357,7 @@ describe('model reasoning on step events', () => {
       toolCalls: [{ toolName: 'complete_step', input: { status: 'passed', summary: 'done' } }],
       reasoning: 'The counter already reads 1; nothing left to do.',
     }));
-    const { fixtures, steps } = runtime(empty(), { agents: { default: { executor: createAgent(), model } } });
+    const { fixtures, steps } = runtime(empty(), { agents: { default: { model } } });
     await fixtures.agent.act('check the counter');
     const event = steps.all().flatMap((step) => step.events).find((candidate) => candidate.kind === 'model');
     expect(event?.reasoning).toBe('The counter already reads 1; nothing left to do.');
@@ -378,7 +377,7 @@ describe('model reasoning on step events', () => {
     const model = installFakeLoopModel(() => ({
       toolCalls: [{ toolName: 'complete_step', input: { status: 'passed', summary: 'done' } }],
     }));
-    const { fixtures, steps } = runtime(empty(), { agents: { default: { executor: createAgent(), model } } });
+    const { fixtures, steps } = runtime(empty(), { agents: { default: { model } } });
     await fixtures.agent.act('check the counter');
     const event = steps.all().flatMap((step) => step.events).find((candidate) => candidate.kind === 'model');
     expect(event).toBeDefined();
@@ -392,14 +391,14 @@ describe('project tool dispatch', () => {
     const model = installFakeLoopModel(({ turn }) => turn === 1
       ? [{ toolName: 'mutate', input: {} }, { toolName: 'mutate', input: {} }]
       : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'finished' } }]);
-    const executor = createAgent({ tools: {
+    const tools = {
       mutate: defineTool({ inputSchema: z.object({}), execute: async () => {
         started += 1;
         await new Promise((resolve) => setTimeout(resolve, 5));
         return 'done';
       } }, { mutates: true }),
-    } });
-    const { fixtures, steps } = runtime(empty(), { agents: { default: { executor, model } } });
+    };
+    const { fixtures, steps } = runtime(empty(), { agents: { default: { tools, model } } });
     await expect(fixtures.agent.act('perform one mutation', { maxSteps: 1 })).rejects.toMatchObject({ code: 'STEP_BUDGET_EXHAUSTED' });
     expect(started).toBe(1);
     expect(steps.all()[0]?.metrics?.actionSteps).toBe(1);
@@ -440,23 +439,17 @@ describe('project tool dispatch', () => {
     const model = installFakeLoopModel(({ turn }) => turn === 1
       ? [{ toolName: 'inspect', input: {} }]
       : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'looked' } }]);
-    const executor = createAgent({ tools: {
+    const tools = {
       inspect: defineTool({ inputSchema: z.object({}), execute: async (_input, options) => {
         const observation = await getToolContext(options).observe({ pixels: true });
         path = observation.path;
         return observation.pixelsWithheld;
       } }, { mutates: false }),
-    } });
-    await runtime(engine, { agents: { default: { executor, model } } }).fixtures.agent.act('inspect');
+    };
+    await runtime(engine, { agents: { default: { tools, model } } }).fixtures.agent.act('inspect');
     expect(path).toBe('/settings/general');
   });
 
-  it("rejects a project tool that takes one of the agent's own tool names", () => {
-    const tool = defineTool({ inputSchema: z.object({}), execute: async () => 'shadowed' }, { mutates: false });
-    for (const name of ['screenshot', 'tap', 'observe', 'complete_step']) {
-      expect(() => createAgent({ tools: { [name]: tool } })).toThrow(`the ${name} tool name is reserved`);
-    }
-  });
 });
 
 describe('press key grammar', () => {
@@ -736,7 +729,7 @@ describe('assert evidence under a custom executor', () => {
 
   it('attaches the screenshot the engine delivers after the verdict', async () => {
     const screenshot = vi.fn(async () => 'screenshots/assert.png');
-    const { fixtures, steps, registerArtifact } = runtime(engineWith(screenshot), { agents: { default: judging } });
+    const { fixtures, steps, registerArtifact } = runtime(engineWith(screenshot), { agents: { default: { executor: judging } } });
     await fixtures.agent.assert('the screen holds');
     expect(screenshot).toHaveBeenCalledExactlyOnceWith('assert', expect.objectContaining({ origin: 'agent' }));
     expect(registerArtifact).toHaveBeenCalledExactlyOnceWith('screenshot', 'screenshots/assert.png');
@@ -748,7 +741,7 @@ describe('assert evidence under a custom executor', () => {
     try {
       const screenshot = vi.fn(() => new Promise<never>(() => {}));
       const { fixtures, steps, registerArtifact } = runtime(engineWith(screenshot), {
-        agents: { default: judging },
+        agents: { default: { executor: judging } },
         actionTimeout: 200,
       });
       let settled = false;

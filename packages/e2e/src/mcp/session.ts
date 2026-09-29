@@ -220,7 +220,7 @@ export class SessionHost {
         context: step.context,
         screen,
         session: attempt.session,
-        executor: config.agent.executor,
+        tools: config.agent.tools,
         redact: attempt.agentRuntime.redact,
         recorder,
         locator: new LocatorEngine({

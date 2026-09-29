@@ -33,6 +33,7 @@ import {
   type RunStatus,
   type Screen,
   type Secret,
+  type StepExecutor,
   type StepExecutorContext,
   type StepTurn,
   type StoredArtifactLink,
@@ -43,13 +44,13 @@ import {
   type ValueExpectation,
 } from '../../src/index.ts';
 import type { Engine, EngineAttemptContext, EngineHandle, EngineObserveOptions, EngineSnapshot } from '../../src/engine/index.ts';
-import { createAgent, defineTool, type DefaultAgent } from '../../src/agent/public.ts';
+import { createToolLoopExecutor, defineTool } from '../../src/agent/public.ts';
 import type { Report } from '../../src/index.ts';
 import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/provider';
 import { chatgpt } from '../../src/oauth/chatgpt.ts';
 import { copilot } from '../../src/oauth/copilot.ts';
 import { grok } from '../../src/oauth/grok.ts';
-// @ts-expect-error isDefinedTool left e2e/agent: createAgent checks each tools entry itself
+// @ts-expect-error isDefinedTool left e2e/agent: config loading checks each tools entry itself
 import { isDefinedTool } from '../../src/agent/public.ts';
 // @ts-expect-error BLOCKABLE_CODES left e2e: a blocked verdict carries any code the errors reference marks blocked
 import { BLOCKABLE_CODES } from '../../src/index.ts';
@@ -429,21 +430,24 @@ test('traced', { trace: 'all' }, async () => {});
 test.describe('admin flows', { agent: 'admin' }, () => {});
 await agent.act('approve it', { agent: 'admin' });
 await agent.assert('it is approved', { agent: 'buyer' });
-// createAgent hands back what it was built from, so a host (e2e explore) can compose on it.
+// An agents entry is one plain object: model, how it works, the app's vocabulary, and its tools.
 declare const seedCart: ReturnType<typeof defineTool>;
-const projectAgent: DefaultAgent = createAgent({ tools: { seedCart }, system: 'Be thorough.' });
-projectAgent.options.tools?.seedCart satisfies ReturnType<typeof defineTool> | undefined;
-projectAgent.options.system satisfies string | undefined;
-({ targets, agents: { default: projectAgent } }) satisfies E2EConfig;
-// One complete agent: model, how it works, and the app's vocabulary in one call; the options object needs no second key.
-declare const sdkModel: NonNullable<NonNullable<Parameters<typeof createAgent>[0]>['model']>;
-const completeAgent = createAgent({ model: sdkModel, system: 'Be thorough.', context: 'Plans are called tiers.' });
-completeAgent.options.context satisfies string | undefined;
-({ targets, agents: { default: { executor: completeAgent } } }) satisfies E2EConfig;
-// @ts-expect-error context is one string, as agents.<name>.context is
-createAgent({ model: sdkModel, context: ['Plans are called tiers.'] });
-// @ts-expect-error the options are read-only
-projectAgent.options = {};
+({ targets, agents: { default: { model, judge: model, system: 'Be thorough.', context: 'Plans are called tiers.', tools: { seedCart }, providerOptions: { openai: { reasoningEffort: 'low' } } } } }) satisfies E2EConfig;
+// @ts-expect-error context is one string
+({ targets, agents: { default: { model, context: ['Plans are called tiers.'] } } }) satisfies E2EConfig;
+// A custom brain goes under executor, and keeps the model, judge, context, and budgets.
+declare const brain: StepExecutor;
+({ targets, agents: { default: { executor: brain, model, judge: model, context: 'Plans are called tiers.', maxModelCalls: 10 } } }) satisfies E2EConfig;
+// @ts-expect-error system belongs to the built-in agent; a custom executor brings its own prompt
+({ targets, agents: { default: { executor: brain, system: 'Be thorough.' } } }) satisfies E2EConfig;
+// @ts-expect-error tools belong to the built-in agent; a custom executor brings its own
+({ targets, agents: { default: { executor: brain, tools: { seedCart } } } }) satisfies E2EConfig;
+// @ts-expect-error a bare executor is not an agents entry: pass it as { executor }
+({ targets, agents: { default: brain } }) satisfies E2EConfig;
+// @ts-expect-error maxTurns left createToolLoopExecutor: the agent's maxModelCalls bounds its turns
+createToolLoopExecutor({ name: 'brain', tools: () => ({}), buildPrompt: () => 'go', maxTurns: 3 });
+// @ts-expect-error limits left the config: maxInputTokens is per agent, the rest are fixed by the runner
+({ targets, limits: { maxModelTokensPerCall: 1_000 } }) satisfies E2EConfig;
 
 // The report carries the exploration record only on an explore run; a finding's evidence is one of the attempt's artifacts.
 declare const report: Report;
@@ -471,8 +475,10 @@ copilot('gpt-4.1', {});
 grok('grok-4', {});
 
 // agents.<name>: the judge slot beside model, and every budget in one entry.
-({ targets: [{ engine }], agents: { default: { model, judge: model, timeout: 30_000, maxSteps: 5, maxModelCalls: 10, maxObservationBytes: 1000 } } }) satisfies E2EConfig;
+({ targets: [{ engine }], agents: { default: { model, judge: model, judgmentTimeout: 30_000, maxSteps: 5, maxModelCalls: 10, maxObservationBytes: 1000, maxInputTokens: 32_000 } } }) satisfies E2EConfig;
 // @ts-expect-error the judge is an AI SDK instance like model; a string names no gateway model
 ({ targets: [{ engine }], agents: { default: { model, judge: 'openai/gpt-5.6-luna-fast' } } }) satisfies E2EConfig;
-// @ts-expect-error timeout is milliseconds, not a duration string
-({ targets: [{ engine }], agents: { default: { model, timeout: '30s' } } }) satisfies E2EConfig;
+// @ts-expect-error judgmentTimeout is milliseconds, not a duration string
+({ targets: [{ engine }], agents: { default: { model, judgmentTimeout: '30s' } } }) satisfies E2EConfig;
+// @ts-expect-error timeout is now judgmentTimeout, and maxTurns is maxModelCalls
+({ targets: [{ engine }], agents: { default: { model, timeout: 30_000 } } }) satisfies E2EConfig;

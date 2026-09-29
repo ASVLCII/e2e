@@ -1,6 +1,6 @@
 /**
  * `e2e mcp` with a project that has two targets, a custom engine with fewer
- * verbs, and project tools from `createAgent({ tools })`: the server's tool
+ * verbs, and project tools from `agents.default.tools`: the server's tool
  * list stays the same four, each session's catalog is what its own target
  * can do (the engine's verbs, the project tools for its platform), a project
  * tool named like a built-in is skipped, and a second config in the same
@@ -29,7 +29,7 @@ export const kiosk = createFakeEngine({
 `;
 
 const CONFIG = `import type { E2EConfig } from 'e2e';
-import { createAgent, defineTool, getToolContext } from 'e2e/agent';
+import { defineTool, getToolContext } from 'e2e/agent';
 import { web } from '@e2e-dev/web';
 import { z } from 'zod';
 import { kiosk } from './kiosk.ts';
@@ -39,7 +39,7 @@ export default {
     { name: 'web', platform: 'web', engine: web({ url: process.env.APP_URL! }) },
     { name: 'kiosk', platform: 'kiosk', engine: kiosk.engine },
   ],
-  agents: { default: createAgent({
+  agents: { default: {
     tools: {
       seed_data: defineTool(
         { description: 'Seed a tenant with demo data.', inputSchema: z.object({ tenant: z.string() }), execute: async ({ tenant }: { tenant: string }) => \`Seeded \${tenant}.\` },
@@ -62,7 +62,7 @@ export default {
         { mutates: true, platforms: ['kiosk'] },
       ),
     },
-  }) },
+  } },
 } satisfies E2EConfig;
 `;
 

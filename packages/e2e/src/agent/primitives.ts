@@ -1,5 +1,5 @@
 /**
- * The pieces the tool-loop chassis and `createAgent` are assembled from:
+ * The pieces the tool-loop chassis and the built-in agent are assembled from:
  *
  * - `createGrammarTools` — AI SDK tools over the harness action grammar;
  * - `createVerdictTool` — the `complete_step` tool and the closed blocked-code policy;
@@ -207,43 +207,11 @@ export interface GrammarToolOptions {
   /**
    * Renders screens for the model and remembers what it has seen, so every
    * result after the first reports the changes rather than the whole tree.
-   * Shared with the opening prompt by `createAgent`; a fresh one per step
+   * Shared with the opening prompt by the built-in agent; a fresh one per step
    * otherwise.
    */
   readonly screen?: ScreenPresenter;
 }
-
-/**
- * Every name `createGrammarTools` may hand out. The grammar owns these in the
- * model's vocabulary whatever the engine declares, so a project tool cannot
- * take one: it would be silently shadowed on one engine and live on another.
- */
-export const GRAMMAR_TOOL_NAMES: ReadonlySet<string> = new Set([
-  'observe',
-  'tap',
-  'double_tap',
-  'long_press',
-  'right_click',
-  'hover',
-  'type',
-  'type_secret',
-  'press',
-  'select',
-  'check',
-  'scroll',
-  'scroll_to',
-  'drag',
-  'upload',
-  'navigate',
-  'back',
-  'screenshot',
-  'tap_at',
-  'hover_at',
-  'type_at',
-  'press_at',
-  'select_at',
-  'dismiss_keyboard',
-]);
 
 /**
  * The node verbs, one tool each: the verb that unlocks the tool, the lead

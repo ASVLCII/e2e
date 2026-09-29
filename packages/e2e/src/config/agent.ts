@@ -1,13 +1,14 @@
 /** Agent, model, and resource-limit resolution. */
 
-import { builtInAgentContext } from '../agent/agent-brand.ts';
 import { isStepExecutor, type StepExecutor } from '../agent/executor.ts';
+import { GRAMMAR_TOOL_NAMES } from '../agent/action-names.ts';
+import { isDefinedTool } from '../agent/tool.ts';
 import { boundedInt, positiveInt } from './validate.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { didYouMean } from '../internal/suggest.ts';
 import type {
   AgentConfig,
-  E2EConfig,
+  AgentTool,
   ModelInstance,
   ProviderOptions,
   VisionMode,
@@ -40,27 +41,32 @@ export function modelLabel(model: ResolvedModel): string {
 
 export interface ResolvedAgentConfig {
   /**
-   * The step executor `agent.act()` dispatches to, configured as the `agent`
-   * value itself (`agent: createAgent(...)` or any StepExecutor); undefined
-   * selects the default AI SDK executor at fixture time. Like model
-   * instances, an executor never crosses a process boundary: workers
-   * re-resolve the config module.
+   * The custom brain `agent.act()` dispatches to (`agents.<name>.executor`);
+   * undefined selects the built-in agent, built at fixture time from
+   * `system` and `tools`. Like model instances, an executor never crosses a
+   * process boundary: workers re-resolve the config module.
    */
   readonly executor: StepExecutor | undefined;
   /** Undefined until a model is configured; acquiring `agent` then fails. */
   readonly model: ResolvedModel | undefined;
   /**
-   * The judgment tier's model: `agent.judge` or `createAgent({ judge })` when
-   * one is configured (both set must agree), else `model`. Undefined only
-   * when no model is configured at all, so downstream code has one rule:
-   * judgments call `judge`.
+   * The judgment tier's model: `judge`, or the executor's own judge, when one
+   * is configured (both set must agree), else `model`. Undefined only when no
+   * model is configured at all, so downstream code has one rule: judgments
+   * call `judge`.
    */
   readonly judge: ResolvedModel | undefined;
+  /** The built-in agent's guidance, appended to its execution rules; undefined with a custom executor. */
+  readonly system: string | undefined;
+  /** The built-in agent's project tools, validated; empty with a custom executor. */
+  readonly tools: Readonly<Record<string, AgentTool>>;
   readonly maxSteps: number;
   readonly maxModelCalls: number;
   /** Deadline of one judgment-tier call (`assert`, `waitFor`, `extract`), in milliseconds. */
-  readonly timeout: number;
+  readonly judgmentTimeout: number;
   readonly maxObservationBytes: number;
+  /** Input tokens one model request of this agent may carry; observations are clamped under it. */
+  readonly maxInputTokens: number;
   readonly context: string | undefined;
   /**
    * Provider options sent with every model call, judgments included. This is
@@ -70,6 +76,11 @@ export interface ResolvedAgentConfig {
   readonly providerOptions: ProviderOptions | undefined;
 }
 
+/**
+ * The run's resource ceilings, the report's `limits` block: the per-agent
+ * ones at the largest any configured agent may use, the rest the runner's
+ * fixed internal limits.
+ */
 export interface ResolvedLimits {
   readonly maxAgentContextBytes: number;
   readonly maxLedgerBytes: number;
@@ -78,27 +89,53 @@ export interface ResolvedLimits {
   readonly maxModelTokensPerCall: number;
 }
 
-/** `ResolvedLimits` before the agent-owned observation budget is attached. */
-export type ResolvedBaseLimits = Omit<ResolvedLimits, 'maxObservationBytes'>;
-
-const AGENT_KEYS = new Set([
-  'executor',
+const AGENT_KEYS = [
   'model',
   'judge',
+  'system',
+  'context',
+  'tools',
+  'executor',
   'maxSteps',
   'maxModelCalls',
-  'timeout',
+  'judgmentTimeout',
   'maxObservationBytes',
-  'context',
+  'maxInputTokens',
   'providerOptions',
+] as const;
+
+const AGENT_KEY_SET: ReadonlySet<string> = new Set(AGENT_KEYS);
+
+/** Agent keys this runner used to accept, each mapped to what replaces it. */
+const REMOVED_AGENT_KEYS: ReadonlyMap<string, string> = new Map([
+  ['timeout', 'use judgmentTimeout, the deadline of one assert, waitFor, or extract call'],
+  ['maxTurns', 'use maxModelCalls, the model requests one agent call may make'],
+  ['maxModelTokensPerCall', 'use maxInputTokens'],
+  ['limits', 'set maxInputTokens on the agent; the other limits are fixed by the runner'],
 ]);
 
+/** The keys only the built-in agent reads; a custom executor brings its own. */
+const BUILT_IN_ONLY_KEYS = ['system', 'tools'] as const;
+
+/** The shape an agents entry takes, for messages that point at it. */
+const AGENT_SHAPE = '{ model, judge, system, context, tools, maxSteps, maxModelCalls, ... }';
+
 /**
- * Default observation byte budget, shared with the report's pre-config fallback
- * limits. A quarter mebibyte of tree is already tens of thousands of tokens on
- * every act turn; the per-call token ceiling clamps a dense screen below it.
+ * Default observation byte budget. A quarter mebibyte of tree is already tens
+ * of thousands of tokens on every act turn; the per-call token ceiling clamps
+ * a dense screen below it.
  */
-export const DEFAULT_OBSERVATION_BYTES = 262_144;
+const DEFAULT_OBSERVATION_BYTES = 262_144;
+
+/** Default per-request input token ceiling; `maxInputTokens` moves it per agent. */
+const DEFAULT_INPUT_TOKENS = 64_000;
+
+/** Trusted agent context, config and test context joined, in bytes. */
+const MAX_AGENT_CONTEXT_BYTES = 16_384;
+/** The prior-step ledger an act step reads, in bytes. */
+const MAX_LEDGER_BYTES = 8_192;
+/** Events recorded per step; later ones are dropped. */
+const MAX_EVENTS_PER_STEP = 1_000;
 
 /**
  * Default judgment budget: one observation and one or two model calls. The
@@ -107,82 +144,163 @@ export const DEFAULT_OBSERVATION_BYTES = 262_144;
  */
 const DEFAULT_JUDGMENT_TIMEOUT_MS = 30_000;
 
-/** Hard ceilings mirroring `schema/report-v1.schema.json` `limits`. */
-const LIMIT_BOUNDS = {
-  maxAgentContextBytes: [1_024, 65_536, 16_384],
-  maxLedgerBytes: [1_024, 65_536, 8_192],
-  maxEventsPerStep: [1, 10_000, 1_000],
-  maxModelTokensPerCall: [1, 1_000_000, 64_000],
-} as const satisfies Record<string, readonly [number, number, number]>;
-
-type LimitKey = keyof typeof LIMIT_BOUNDS;
+/** The limits of a run no agent config has shaped: every value at its default. */
+export const DEFAULT_LIMITS: ResolvedLimits = {
+  maxAgentContextBytes: MAX_AGENT_CONTEXT_BYTES,
+  maxLedgerBytes: MAX_LEDGER_BYTES,
+  maxObservationBytes: DEFAULT_OBSERVATION_BYTES,
+  maxEventsPerStep: MAX_EVENTS_PER_STEP,
+  maxModelTokensPerCall: DEFAULT_INPUT_TOKENS,
+};
 
 /**
- * Resolves `config.agent`. `limits` must be resolved first: the context budget
- * is a limits key, and the dependency runs in exactly one direction.
+ * The run's limits over its configured agents. A pinned agent's calls are
+ * bounded by its own values, so the run-level number is the largest any
+ * agent may use: the report must not read lower than what a step could
+ * actually send.
+ */
+export function runLimits(agents: Iterable<ResolvedAgentConfig>): ResolvedLimits {
+  const all = [...agents];
+  if (all.length === 0) return DEFAULT_LIMITS;
+  return {
+    ...DEFAULT_LIMITS,
+    maxObservationBytes: Math.max(...all.map((agent) => agent.maxObservationBytes)),
+    maxModelTokensPerCall: Math.max(...all.map((agent) => agent.maxInputTokens)),
+  };
+}
+
+/**
+ * Resolves one `agents` entry. Every entry starts from the built-in defaults:
+ * nothing is inherited from another agent, `default` included.
  */
 export function resolveAgentConfig(
-  value: E2EConfig['agents'] extends Readonly<Record<string, infer Entry>> | undefined ? Entry | undefined : never,
-  env: NodeJS.ProcessEnv,
-  ci: boolean,
-  limits: ResolvedBaseLimits,
+  value: AgentConfig | undefined,
   /** The config path of this agent in diagnostics: `agents.default`, `agents.ux`. */
   label = 'agents.default',
 ): ResolvedAgentConfig {
-  // Three accepted shapes: the agent itself, an options object, or
-  // an options object carrying `executor` — a custom brain no longer forfeits
-  // the model, budgets, or context.
-  const bare = value !== undefined && isStepExecutor(value) ? value : undefined;
-  const agent = bare === undefined ? (value as AgentConfig | undefined) : undefined;
-  let executor = bare;
-  if (agent !== undefined) {
-    if (typeof agent !== 'object' || agent === null || Array.isArray(agent)) {
+  const agent = checkAgentShape(value, label);
+  let executor: StepExecutor | undefined;
+  if (agent?.executor !== undefined) {
+    executor = checkExecutor(agent.executor, `${label}.executor`);
+    for (const key of BUILT_IN_ONLY_KEYS) {
+      if (agent[key] === undefined) continue;
       throw new ConfigurationError(
         'INVALID_CONFIG',
-        `${label} must be an options object or the agent itself: createAgent(...) or any { name, runStep(context) }`,
+        `${label}.${key} is an option of the built-in agent, and ${label}.executor replaces it: a custom executor brings its own ${key === 'system' ? 'prompt' : 'tools'}; drop ${key} or drop executor`,
       );
-    }
-    for (const key of Object.keys(agent)) {
-      if (!AGENT_KEYS.has(key)) {
-        throw new ConfigurationError(
-          'INVALID_CONFIG',
-          `unknown ${label} key "${key}"${didYouMean(key, [...AGENT_KEYS])}`,
-        );
-      }
-    }
-    if (agent.executor !== undefined) {
-      if (!isStepExecutor(agent.executor)) {
-        throw new ConfigurationError(
-          'INVALID_CONFIG',
-          `${label}.executor must be a StepExecutor: createAgent(...) or any { name, runStep(context) }`,
-        );
-      }
-      executor = agent.executor;
     }
   }
 
   const maxSteps = boundedInt(agent?.maxSteps, `${label}.maxSteps`, 1, 100) ?? 25;
   const maxModelCalls = boundedInt(agent?.maxModelCalls, `${label}.maxModelCalls`, 1, 100) ?? 25;
-  const timeout = positiveInt(agent?.timeout, `${label}.timeout`, 'milliseconds') ?? DEFAULT_JUDGMENT_TIMEOUT_MS;
+  const judgmentTimeout =
+    positiveInt(agent?.judgmentTimeout, `${label}.judgmentTimeout`, 'milliseconds') ?? DEFAULT_JUDGMENT_TIMEOUT_MS;
   const maxObservationBytes =
     boundedInt(agent?.maxObservationBytes, `${label}.maxObservationBytes`, 1_024, 16_777_216) ??
     DEFAULT_OBSERVATION_BYTES;
-
-
-  const context = resolveContext(agent?.context, builtInAgentContext(executor), limits.maxAgentContextBytes, label);
+  const maxInputTokens =
+    boundedInt(agent?.maxInputTokens, `${label}.maxInputTokens`, 1, 1_000_000) ?? DEFAULT_INPUT_TOKENS;
 
   const model = resolveCanonicalModel(agent?.model, executor?.model, label, 'model');
   return {
     executor,
     model,
     judge: resolveCanonicalModel(agent?.judge, executor?.judge, label, 'judge') ?? model,
+    system: resolveSystem(agent?.system, label),
+    tools: resolveTools(agent?.tools, label),
     maxSteps,
     maxModelCalls,
-    timeout,
+    judgmentTimeout,
     maxObservationBytes,
-    context,
+    maxInputTokens,
+    context: validateContext(agent?.context, `${label}.context`),
     providerOptions: resolveProviderOptions(agent?.providerOptions, label),
   };
+}
+
+/**
+ * The entry as a plain options object, or a diagnostic naming the shape it
+ * should have: a bare executor goes under `executor`, and a removed key
+ * names its replacement.
+ */
+function checkAgentShape(value: unknown, label: string): AgentConfig | undefined {
+  if (value === undefined) return undefined;
+  if (isStepExecutor(value)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${label} is a StepExecutor (${JSON.stringify(value.name)}); an agents entry is an options object now, so pass it as ${label}: { executor, model, ... }`,
+    );
+  }
+  if (!isPlainObject(value)) {
+    throw new ConfigurationError('INVALID_CONFIG', `${label} must be an options object: ${label}: ${AGENT_SHAPE}`);
+  }
+  for (const key of Object.keys(value)) {
+    const removed = REMOVED_AGENT_KEYS.get(key);
+    if (removed !== undefined) {
+      throw new ConfigurationError('INVALID_CONFIG', `${label}.${key} was removed; ${removed}`);
+    }
+    if (!AGENT_KEY_SET.has(key)) {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `unknown ${label} key "${key}"${didYouMean(key, AGENT_KEYS)}`,
+      );
+    }
+  }
+  return value as AgentConfig;
+}
+
+/** A custom brain: any `StepExecutor`. */
+function checkExecutor(value: unknown, label: string): StepExecutor {
+  if (!isStepExecutor(value)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${label} must be a StepExecutor: any { name, runStep(context) }, such as createToolLoopExecutor(...) from e2e/agent`,
+    );
+  }
+  return value;
+}
+
+/** The built-in agent's guidance: a string, as JavaScript can pass anything. */
+function resolveSystem(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new ConfigurationError('INVALID_CONFIG', `${label}.system must be a string`);
+  }
+  return value;
+}
+
+const NO_TOOLS: Readonly<Record<string, AgentTool>> = Object.freeze({});
+
+/**
+ * Validates the built-in agent's project tools: each from `defineTool`, with
+ * an execute function, under a name the agent's own tools do not hold. A
+ * shadowed name would be a tool the model never sees on one engine and a
+ * different one on another.
+ */
+function resolveTools(value: unknown, label: string): Readonly<Record<string, AgentTool>> {
+  if (value === undefined) return NO_TOOLS;
+  if (!isPlainObject(value)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${label}.tools must be an object of tools by name, each from defineTool`,
+    );
+  }
+  for (const [name, defined] of Object.entries(value)) {
+    const key = `${label}.tools.${name}`;
+    if (!isDefinedTool(defined)) {
+      throw new ConfigurationError(
+        'INVALID_CONFIG',
+        `${key} was not created with defineTool; undeclared semantics are not trusted`,
+      );
+    }
+    if (name === 'complete_step' || GRAMMAR_TOOL_NAMES.has(name)) {
+      throw new ConfigurationError('INVALID_CONFIG', `${key}: the ${name} tool name is reserved for the agent's own tools`);
+    }
+    if (typeof defined.tool.execute !== 'function') {
+      throw new ConfigurationError('INVALID_CONFIG', `${key} has no execute function`);
+    }
+  }
+  return value as Readonly<Record<string, AgentTool>>;
 }
 
 /**
@@ -213,32 +331,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Resolves the `limits` block. The observation budget is attached by the caller. */
-export function resolveLimits(raw: Pick<E2EConfig, 'limits'>): ResolvedBaseLimits {
-  const limits = raw.limits;
-  if (limits !== undefined) {
-    if (typeof limits !== 'object' || limits === null || Array.isArray(limits)) {
-      throw new ConfigurationError('INVALID_CONFIG', 'limits must be an object');
-    }
-    for (const key of Object.keys(limits)) {
-      if (!(key in LIMIT_BOUNDS)) {
-        throw new ConfigurationError(
-          'INVALID_CONFIG',
-          `unknown limits key "${key}"${didYouMean(key, Object.keys(LIMIT_BOUNDS))}`,
-        );
-      }
-    }
-  }
-
-  const resolved: Record<string, number> = {};
-  for (const key of Object.keys(LIMIT_BOUNDS) as LimitKey[]) {
-    const [min, max, fallback] = LIMIT_BOUNDS[key];
-    resolved[key] = boundedInt(limits?.[key], `limits.${key}`, min, max) ?? fallback;
-  }
-
-  return resolved as unknown as ResolvedBaseLimits;
-}
-
 /** True for the closed judgment `vision` value set, wherever it is supplied. */
 export function isVisionMode(value: unknown): value is VisionMode {
   return typeof value === 'boolean' || value === 'only';
@@ -261,10 +353,10 @@ export function isModelInstance(value: unknown): value is ModelInstance {
 }
 
 /**
- * One model per slot. The model the executor brought (`createAgent({ model })`
- * or `createAgent({ judge })`) is it; without one, the agent's own key. A
- * config key naming a different model than the executor's is rejected: two
- * configured models for one slot would split the run silently.
+ * One model per slot. The model a custom executor brought (its `model` or
+ * `judge`) is it; without one, the agent's own key. A config key naming a
+ * different model than the executor's is rejected: two configured models for
+ * one slot would split the run silently.
  */
 function resolveCanonicalModel(
   configured: ModelInstance | undefined,
@@ -309,41 +401,17 @@ function resolveModel(model: ModelInstance | undefined, label: string): Resolved
   return { provider: model.provider, id: model.modelId, model };
 }
 
-/**
- * One app vocabulary per agent. It may arrive with the built-in agent
- * (`createAgent({ context })`) or on the agent's options object; whichever is
- * set is used. Two different values are rejected rather than joined or
- * overridden, because two vocabularies for one agent would disagree without
- * anyone noticing, and the fix is to write it once.
- */
-function resolveContext(
-  configured: unknown,
-  executorContext: unknown,
-  maxBytes: number,
-  label: string,
-): string | undefined {
-  const key = `${label}.context`;
-  const own = validateContext(executorContext, maxBytes, `the executor's own context`);
-  const explicit = validateContext(configured, maxBytes, key);
-  if (own !== undefined && explicit !== undefined && own !== explicit) {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `${key} and the executor's own context (createAgent({ context })) differ; configure the context in one place`,
-    );
-  }
-  return own ?? explicit;
-}
-
-function validateContext(context: unknown, maxBytes: number, label: string): string | undefined {
+/** The agent's app vocabulary: a string within the trusted context budget. */
+function validateContext(context: unknown, label: string): string | undefined {
   if (context === undefined) return undefined;
   if (typeof context !== 'string') {
     throw new ConfigurationError('INVALID_CONFIG', `${label} must be a string`);
   }
   const bytes = new TextEncoder().encode(context).byteLength;
-  if (bytes > maxBytes) {
+  if (bytes > MAX_AGENT_CONTEXT_BYTES) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      `${label} is ${bytes} bytes; the resolved maximum is ${maxBytes}`,
+      `${label} is ${bytes} bytes; the maximum is ${MAX_AGENT_CONTEXT_BYTES}`,
     );
   }
   return context;

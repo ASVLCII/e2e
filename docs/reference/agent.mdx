@@ -35,9 +35,9 @@ remaining test timeout.
 | Method | Model calls | Action steps | Default timeout |
 | --- | ---: | ---: | --- |
 | `act` | `agents.<name>.maxModelCalls`, 25 | `agents.<name>.maxSteps`, 25 | `config.timeout`, 120000 ms |
-| `waitFor` | `agents.<name>.maxModelCalls`, 25 | 0 | `agents.<name>.timeout`, 30000 ms |
-| `extract` | 2 | 0 | `agents.<name>.timeout`, 30000 ms |
-| `assert` | 2 | 0 | `agents.<name>.timeout`, 30000 ms |
+| `waitFor` | `agents.<name>.maxModelCalls`, 25 | 0 | `agents.<name>.judgmentTimeout`, 30000 ms |
+| `extract` | 2 | 0 | `agents.<name>.judgmentTimeout`, 30000 ms |
+| `assert` | 2 | 0 | `agents.<name>.judgmentTimeout`, 30000 ms |
 
 `actionTimeout` limits engine operations, not model calls. Per-call budgets
 must be positive integers and can only lower the configured limits. All

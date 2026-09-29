@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ENGINE_SPI_VERSION, type EngineSpiVersion } from '../engine/contract.ts';
 import { BLOCKABLE_CODES } from '../agent/executor.ts';
-import { DEFAULT_OBSERVATION_BYTES, resolveLimits } from '../config/agent.ts';
+import { DEFAULT_LIMITS } from '../config/agent.ts';
 import type { ResolvedConfig, ResolvedLimits, ResolvedTarget } from '../config/resolve.ts';
 import type { AgentErrorCode } from '../types.ts';
 import type { ErrorCategory, ErrorDetails, ErrorPhase, HookScope, SerializedError } from '../internal/errors.ts';
@@ -298,8 +298,8 @@ export interface ReportTarget {
 }
 
 /**
- * The report's `limits` block is the resolved limits verbatim; JSON
- * serialization drops the absent cost ceiling.
+ * The report's `limits` block is the run's resolved limits verbatim; a run
+ * that failed before config resolution reports the defaults.
  */
 export type ReportLimits = ResolvedLimits;
 
@@ -582,15 +582,6 @@ function deriveRunStatus(
   }
   return sawFailure ? 'blocked' : status;
 }
-
-/**
- * Fallback limits used when the run failed before config resolution: the
- * resolver's own defaults, so the report never disagrees with the config.
- */
-const DEFAULT_LIMITS: ReportLimits = {
-  ...resolveLimits({}),
-  maxObservationBytes: DEFAULT_OBSERVATION_BYTES,
-};
 
 /** Aggregates observed usage against the resolved limits. */
 function computeUsage(options: {

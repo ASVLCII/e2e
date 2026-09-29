@@ -8,7 +8,8 @@ import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { aiSdk, loadAiSdk } from '../../src/agent/ai-sdk.ts';
-import { createGrammarTools, createVerdictTool, GRAMMAR_TOOL_NAMES } from '../../src/agent/primitives.ts';
+import { GRAMMAR_TOOL_NAMES } from '../../src/agent/action-names.ts';
+import { createGrammarTools, createVerdictTool } from '../../src/agent/primitives.ts';
 import { fakeExecutorContext } from '../helpers/fake-executor-context.ts';
 
 /** An input each tool accepts; a tool added to the grammar without one fails the vocabulary check. */

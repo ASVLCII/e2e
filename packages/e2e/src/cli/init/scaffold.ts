@@ -3,8 +3,6 @@ import { getEnginePreset, type EngineId } from './engines.ts';
 import { dependencyRange } from './versions.ts';
 import { getGatewayPreset, type GatewayId } from './gateways.ts';
 
-const AGENT_IMPORT = "import { createAgent } from 'e2e/agent';";
-
 /** The model choice `init` writes: which gateway, and for an OpenAI-compatible one, where. */
 export interface ScaffoldModel {
   readonly gateway: GatewayId;
@@ -21,10 +19,10 @@ function agentConfig(model: ScaffoldModel): string {
   const preset = getGatewayPreset(model.gateway);
   return `  // ${preset.comment}
   agents: {
-    default: createAgent({
+    default: {
       model: ${preset.model(model.endpoint)},
       system: 'You are a thorough QA agent. Verify every outcome.',
-    }),
+    },
   },`;
 }
 
@@ -34,7 +32,6 @@ export function createScaffold(engineId: EngineId, model: ScaffoldModel | undefi
   const gateway = model === undefined ? undefined : getGatewayPreset(model.gateway);
   const imports = [
     "import type { E2EConfig } from 'e2e';",
-    ...(gateway === undefined ? [] : [AGENT_IMPORT]),
     ...engine.imports,
     ...(gateway === undefined ? [] : [gateway.import]),
   ];

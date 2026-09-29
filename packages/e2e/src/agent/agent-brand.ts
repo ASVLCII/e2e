@@ -1,21 +1,11 @@
 /**
- * The brand `createAgent` stamps on the executors it builds, kept apart from
- * the agent itself so config resolution can recognize a built-in agent
- * without importing the agent module, which imports the config in turn.
+ * The built-in agent's identity, kept apart from the agent itself so the
+ * fixtures can name it without loading the agent's loop.
  */
-
-import type { StepExecutor } from './executor.ts';
-
-export const DEFAULT_AGENT_MARKER: unique symbol = Symbol.for('e2e.default-agent.v1');
 
 /**
- * The app vocabulary a built-in agent was created with (`createAgent({ context })`),
- * as given, so config resolution can reject a value that is not a string.
- * Undefined for any other executor: a custom `StepExecutor` may carry a
- * `context` member of its own, and whatever it holds is not a prompt.
+ * The name and version every built-in agent reports. Cache provenance and
+ * the model policy version record them, so a committed recording stays
+ * valid whatever options an agents entry sets.
  */
-export function builtInAgentContext(executor: StepExecutor | undefined): unknown {
-  if (executor === undefined || !(DEFAULT_AGENT_MARKER in executor)) return undefined;
-  const { options } = executor as { readonly options?: { readonly context?: unknown } };
-  return options?.context;
-}
+export const BUILT_IN_AGENT = { name: 'e2e-default-agent', version: '2' } as const;

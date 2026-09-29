@@ -9,8 +9,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createAgent, defineTool } from '../../src/agent/public.ts';
+import { defineTool } from '../../src/agent/public.ts';
 import type { StepExecutor } from '../../src/agent/executor.ts';
+import type { AgentConfig } from '../../src/types.ts';
 import { explore, type ExploreOptions, type ExploreOutcome } from '../../src/explore/index.ts';
 import { FINDING_TOOL_NAME } from '../../src/explore/executor.ts';
 import type { ModelInstance } from '../../src/types.ts';
@@ -64,7 +65,7 @@ async function runExplore(
   project: FixtureProject,
   app: FixtureApp,
   model: ModelInstance,
-  options: Partial<ExploreOptions> & { projectAgent?: StepExecutor | undefined } = {},
+  options: Partial<ExploreOptions> & { projectAgent?: AgentConfig | undefined } = {},
 ): Promise<ExploreOutcome> {
   const { projectAgent, ...rest } = options;
   const notices: string[] = [];
@@ -190,7 +191,7 @@ describe('e2e explore', () => {
     expect(written.run.explore).toEqual(record);
   }, 120_000);
 
-  it('passes with warnings only, and offers the project tools of a createAgent config', async () => {
+  it('passes with warnings only, and offers the project tools of the agents entry', async () => {
     let plans = 0;
     const seen: string[][] = [];
     const model = installExploreModel({
@@ -212,7 +213,7 @@ describe('e2e explore', () => {
       { mutates: false },
     );
     const outcome = await runExplore(project, app, model, {
-      projectAgent: createAgent({ model: model as never, tools: { ping }, system: 'Project guidance line.' }),
+      projectAgent: { model, tools: { ping }, system: 'Project guidance line.' },
     });
     expect(outcome.exitCode).toBe(0);
     expect(outcome.status).toBe('passed');
@@ -233,7 +234,7 @@ describe('e2e explore', () => {
       runStep: async () => ({ status: 'passed', summary: 'never runs' }),
     };
     const outcome = await runExplore(project, app, model, {
-      projectAgent: { model, executor: custom } as never,
+      projectAgent: { model, executor: custom },
     });
     expect(outcome.status).toBe('blocked');
     expect(outcome.report.run.explore).toMatchObject({ ended: 'finished', steps: [], findings: [] });
@@ -329,7 +330,7 @@ describe('e2e explore', () => {
       cwd: project.dir,
       rawConfig: {
         targets: [{ name: 'web', engine: web({ url: app.url }) }] as never,
-        agents: { default: { model }, ux: createAgent({ model: model as never, tools: { ping } }) },
+        agents: { default: { model }, ux: { model, tools: { ping } } },
       },
       goal: 'Look around',
       agent: 'ux',

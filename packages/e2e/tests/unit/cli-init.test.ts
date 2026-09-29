@@ -99,7 +99,8 @@ describe('e2e init', () => {
       devDependencies: { 'e2e': dependencyRange(runnerVersion), '@e2e-dev/web': '0.x', playwright: '^1', ai: '^7.0.0' },
       scripts: { 'test:e2e': 'e2e run' },
     });
-    expect(read('e2e.config.ts')).toContain('agents: {\n    default: createAgent({');
+    expect(read('e2e.config.ts')).toContain('agents: {\n    default: {\n      model: ');
+    expect(read('e2e.config.ts')).not.toContain('e2e/agent');
     // The default gateway is written out as its own provider's constructor, never implied by the runner.
     expect(read('e2e.config.ts')).toContain("import { gateway } from 'ai';");
     expect(read('e2e.config.ts')).toContain("model: gateway('openai/gpt-6-luna-fast'),");
@@ -206,7 +207,7 @@ describe('e2e init', () => {
     ]);
     expect(manifest.devDependencies.ai).toBe(ai ? '^7.0.0' : undefined);
     expect(manifest.devDependencies['@openrouter/ai-sdk-provider']).toBe(ai ? '^3.0.0' : undefined);
-    expect(read('e2e.config.ts').includes('createAgent')).toBe(ai);
+    expect(read('e2e.config.ts').includes('agents: {')).toBe(ai);
     expect(read('e2e.config.ts').includes("import { openrouter } from '@openrouter/ai-sdk-provider';")).toBe(ai);
     expect(read('e2e.config.ts').includes("model: openrouter('openai/gpt-6-luna-fast'),")).toBe(ai);
     expect(read('e2e.config.ts').includes('// OpenRouter serves the model id and reads OPENROUTER_API_KEY.')).toBe(ai);
@@ -309,7 +310,7 @@ describe('e2e init', () => {
     vi.mocked(clack.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     vi.mocked(spawnSync).mockImplementationOnce(() => {
       expect(JSON.parse(read('package.json')).devDependencies).toHaveProperty('ai', '^7.0.0');
-      expect(read('e2e.config.ts')).toContain('createAgent');
+      expect(read('e2e.config.ts')).toContain('agents: {');
       expect(existsSync(path.join(dir, 'tests/example.e2e.ts'))).toBe(true);
       return spawnResult(0);
     });

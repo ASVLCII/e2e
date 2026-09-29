@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createAgent } from '../../src/agent/default-agent.ts';
 import { isForcedToolChoiceRejected } from '../../src/agent/model/tool-choice.ts';
 import { defineTool } from '../../src/agent/tool.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
@@ -65,7 +64,7 @@ describe('tool loop forced tool choice', () => {
     const model = installFakeLoopModel(
       refusingForcedChoice(({ turn }) => (turn === 2 ? [{ toolName: 'peek', input: {} }] : [conclude])),
     );
-    const { fixtures, steps } = runtime({ agents: { default: { executor: createAgent({ tools: { peek } }), model } } });
+    const { fixtures, steps } = runtime({ agents: { default: { tools: { peek }, model } } });
 
     await fixtures.agent.act('look around');
 
@@ -82,7 +81,7 @@ describe('tool loop forced tool choice', () => {
 
   it('remembers the refusal for later steps on the same model', async () => {
     const model = installFakeLoopModel(refusingForcedChoice(() => [conclude]));
-    const { fixtures } = runtime({ agents: { default: { executor: createAgent(), model } } });
+    const { fixtures } = runtime({ agents: { default: { model } } });
 
     await fixtures.agent.act('first');
     await fixtures.agent.act('second');
@@ -97,7 +96,7 @@ describe('tool loop forced tool choice', () => {
       ),
     );
     const { fixtures, steps } = runtime({
-      agents: { default: { executor: createAgent({ tools: { peek } }), model, maxModelCalls: 4 } },
+      agents: { default: { tools: { peek }, model, maxModelCalls: 4 } },
     });
 
     await fixtures.agent.act('look until told to stop');
@@ -112,7 +111,7 @@ describe('tool loop forced tool choice', () => {
     const model = installFakeLoopModel(
       refusingForcedChoice(({ turn }) => (turn === 2 ? { text: 'I will look around first.' } : [conclude])),
     );
-    const { fixtures, steps } = runtime({ agents: { default: { executor: createAgent(), model } } });
+    const { fixtures, steps } = runtime({ agents: { default: { model } } });
 
     await fixtures.agent.act('do the thing');
 
@@ -127,7 +126,7 @@ describe('tool loop forced tool choice', () => {
 
   it('fails with STEP_NO_CONCLUSION when prose replies use up the turns', async () => {
     const model = installFakeLoopModel(refusingForcedChoice(() => ({ text: 'Thinking about it.' })));
-    const { fixtures } = runtime({ agents: { default: { executor: createAgent(), model, maxModelCalls: 3 } } });
+    const { fixtures } = runtime({ agents: { default: { model, maxModelCalls: 3 } } });
 
     await expect(fixtures.agent.act('do the thing')).rejects.toMatchObject({ code: 'STEP_NO_CONCLUSION' });
     // One refusal, then three prose turns: the budget, not the loop, ends it.
@@ -138,7 +137,7 @@ describe('tool loop forced tool choice', () => {
     const model = installFakeLoopModel(() => {
       throw Object.assign(new Error('Invalid API key provided'), { statusCode: 400 });
     });
-    const { fixtures } = runtime({ agents: { default: { executor: createAgent(), model } } });
+    const { fixtures } = runtime({ agents: { default: { model } } });
 
     await expect(fixtures.agent.act('do the thing')).rejects.toMatchObject({ code: 'MODEL_PROVIDER_FAILED' });
     expect(loopCalls).toHaveLength(1);

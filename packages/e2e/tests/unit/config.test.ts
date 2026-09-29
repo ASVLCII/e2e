@@ -398,8 +398,7 @@ describe('resolveConfig', () => {
     expect(resolve({ artifacts: { store } }).configDigest).toBe(resolve({}).configDigest);
   });
 
-  it('reduces every model instance in an agent entry to its identity, judge and createAgent options included', async () => {
-    const { createAgent } = await import('../../src/agent/default-agent.ts');
+  it('reduces every model instance in an agent entry to its identity, judge and a custom executor\'s own included', () => {
     // A provider client with a cycle: JSON cannot clone it, and its settings
     // must never enter the digest anyway.
     const client: Record<string, unknown> = {};
@@ -421,10 +420,9 @@ describe('resolveConfig', () => {
     expect(withJudge.configDigest).not.toBe(
       resolve({ agents: { default: { model: instance('actor'), judge: instance('other') } } }).configDigest,
     );
-    const asExecutor = resolve({ agents: { default: createAgent({ model: instance('actor'), judge: instance('verifier') }) } });
-    expect(asExecutor.configDigest).toBe(
-      resolve({ agents: { default: createAgent({ model: instance('actor'), judge: instance('verifier') }) } }).configDigest,
-    );
+    const brain = () => ({ name: 'brain', runStep: () => Promise.reject(new Error('not called')), model: instance('actor'), judge: instance('verifier') });
+    const asExecutor = resolve({ agents: { default: { executor: brain() } } });
+    expect(asExecutor.configDigest).toBe(resolve({ agents: { default: { executor: brain() } } }).configDigest);
   });
 
   it('validates numeric bounds', () => {

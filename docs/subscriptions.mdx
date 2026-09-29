@@ -32,10 +32,9 @@ npx e2e login openai
 ```
 
 ```ts title="Model setup"
-import { createAgent } from 'e2e/agent';
 import { chatgpt } from 'e2e/oauth/chatgpt';
 
-const agent = createAgent({ model: chatgpt('gpt-6-luna') });
+const agent = { model: chatgpt('gpt-6-luna') };
 ```
   </Tab>
   <Tab title="GitHub Copilot">
@@ -45,10 +44,9 @@ npx e2e login github-copilot
 ```
 
 ```ts title="Model setup"
-import { createAgent } from 'e2e/agent';
 import { copilot } from 'e2e/oauth/copilot';
 
-const agent = createAgent({ model: copilot('claude-sonnet-5') });
+const agent = { model: copilot('claude-sonnet-5') };
 ```
   </Tab>
   <Tab title="SuperGrok">
@@ -58,10 +56,9 @@ npx e2e login spacexai
 ```
 
 ```ts title="Model setup"
-import { createAgent } from 'e2e/agent';
 import { grok } from 'e2e/oauth/grok';
 
-const agent = createAgent({ model: grok('grok-4') });
+const agent = { model: grok('grok-4') };
 ```
   </Tab>
 </Tabs>

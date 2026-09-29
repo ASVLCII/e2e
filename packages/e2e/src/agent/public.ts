@@ -1,13 +1,14 @@
 /**
- * The `e2e/agent` entrypoint: the builders that assemble a step
- * executor on the AI SDK. `createAgent` is the golden path;
- * `createToolLoopExecutor` is the same loop with a caller's own prompt and
- * tool vocabulary. The socket vocabulary itself, `StepExecutor` and its
+ * The `e2e/agent` entrypoint: what a project builds agents from on the AI
+ * SDK. The built-in agent needs no builder: an agents entry is one plain
+ * object (`agents: { default: { model, system, tools } }`), and `defineTool`
+ * makes its project tools. `createToolLoopExecutor` is the built-in agent's
+ * loop with a caller's own prompt and tool vocabulary, for a custom brain
+ * under `{ executor }`. The socket vocabulary itself, `StepExecutor` and its
  * verdicts, lives on the main `e2e` entrypoint, so a hand-rolled executor
  * needs no import from here (and no AI SDK) at all.
  */
 
-export { createAgent, type CreateAgentOptions, type DefaultAgent } from './default-agent.ts';
 export {
   createToolLoopExecutor,
   type ToolLoopExecutorOptions,

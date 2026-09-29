@@ -1,0 +1,7 @@
+---
+'e2e': minor
+---
+
+Breaking: each `agents` entry is one plain object. The built-in agent takes `model`, `judge`, `system`, `context`, `tools` (from `defineTool`), `maxSteps`, `maxModelCalls`, `judgmentTimeout`, `maxObservationBytes`, `maxInputTokens`, and `providerOptions` in the entry itself: `agents: { default: { model, system, tools } }`. A custom brain goes under `executor`, where `model`, `judge`, `context`, and the budgets still apply and `system` or `tools` fail with `INVALID_CONFIG`. Every entry starts from the built-in defaults; none inherits `default`'s values.
+
+`createAgent()` is removed from `e2e/agent`: write its options as the entry itself. A bare `StepExecutor` as an entry fails naming `{ executor }`. The agent key `timeout` is now `judgmentTimeout`, `maxTurns` is gone from the entry and from `createToolLoopExecutor` (use `maxModelCalls`), and the top-level `limits` key is removed: `maxModelTokensPerCall` is now each agent's `maxInputTokens`, and `maxAgentContextBytes` (16384), `maxLedgerBytes` (8192), and `maxEventsPerStep` (1000) are fixed. Each removed key fails with `INVALID_CONFIG` naming its replacement, and an unknown agent key names the nearest one. The report's `run.limits` block keeps its shape, filled from the largest per-agent values and the fixed ones. Project tools are validated at config load, and `e2e mcp` serves the agent's `tools`. `e2e init` writes the plain object.

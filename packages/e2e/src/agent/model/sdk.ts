@@ -44,7 +44,7 @@ export function createModelAdapter(model: ResolvedModel | undefined): ModelAdapt
   if (model === undefined) {
     throw new AgentError(
       'MODEL_UNAVAILABLE',
-      'the agent fixture requires a model: pass an AI SDK model instance to createAgent({ model }) or set agent.model',
+      "the agent fixture requires a model: set model on the agents entry to an AI SDK model instance, e.g. agents: { default: { model: gateway('openai/gpt-6-luna-fast') } }",
     );
   }
   const adapterVersion = packageVersion(import.meta.url, '../../../package.json', '0.0.0');
@@ -70,7 +70,7 @@ export function createModelAdapter(model: ResolvedModel | undefined): ModelAdapt
       if (inputBound > call.maxInputTokens) {
         throw new AgentError(
           'STEP_BUDGET_EXHAUSTED',
-          `model input upper bound ${inputBound} exceeds limits.maxModelTokensPerCall ${call.maxInputTokens}`,
+          `model input upper bound ${inputBound} exceeds the agent's maxInputTokens ${call.maxInputTokens}`,
         );
       }
       let issue: string | undefined;

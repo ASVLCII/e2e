@@ -111,7 +111,7 @@ describe('named agents', () => {
   });
 
   it('runs with agents.default, and with another agent when the run names it', async () => {
-    const config = { tests: 'tests/**/*.e2e.ts', cache: 'off' as const, agents: { default: signing('house'), ux: signing('ux-review') } };
+    const config = { tests: 'tests/**/*.e2e.ts', cache: 'off' as const, agents: { default: { executor: signing('house') }, ux: { executor: signing('ux-review') } } };
     const started: RunEvent[] = [];
     const byDefault = await runExisting(project, { appUrl: app.url, config, runOptions: { onEvent: (event) => { if (event.type === 'run-started') started.push(event); } } });
     expect(byDefault.status).toBe('passed');
@@ -130,7 +130,7 @@ describe('named agents', () => {
       const config = {
         tests: 'tests/**/*.e2e.ts',
         cache: 'off' as const,
-        agents: { default: signing('house'), buyer: signing('buyer-brain'), admin: signing('admin-brain'), thorough: signing('thorough-brain') },
+        agents: { default: { executor: signing('house') }, buyer: { executor: signing('buyer-brain') }, admin: { executor: signing('admin-brain') }, thorough: { executor: signing('thorough-brain') } },
       };
       const outcome = await runExisting(pinned, { appUrl: app.url, config, runOptions: { agent: 'thorough' } });
       const byTitle = Object.fromEntries(outcome.report.run.results.map((result) => [result.titlePath.at(-1), result]));
@@ -168,7 +168,7 @@ describe('named agents', () => {
       const config = {
         tests: 'tests/**/*.e2e.ts',
         cache: 'off' as const,
-        agents: { default: signing('house'), buyer: signing('buyer-brain'), admin: signing('admin-brain'), thorough: signing('thorough-brain') },
+        agents: { default: { executor: signing('house') }, buyer: { executor: signing('buyer-brain') }, admin: { executor: signing('admin-brain') }, thorough: { executor: signing('thorough-brain') } },
       };
       const summarize = (outcome: Awaited<ReturnType<typeof runExisting>>) =>
         outcome.report.run.results.map((result) => [result.titlePath.at(-1), result.agent, result.status, agentSteps(result)[0]?.explanation]);
@@ -234,7 +234,7 @@ describe('named agents', () => {
     try {
       const outcome = await runExisting(pinned, {
         appUrl: app.url,
-        config: { tests: 'tests/**/*.e2e.ts', agents: { default: signing('house'), buyer: signing('buyer-brain') } },
+        config: { tests: 'tests/**/*.e2e.ts', agents: { default: { executor: signing('house') }, buyer: { executor: signing('buyer-brain') } } },
       });
       expect(outcome.exitCode).toBe(2);
       expect(outcome.report.run.errors[0]?.message).toMatch(/names agent "admin", which agents does not define; configured: default, buyer/);
@@ -247,7 +247,7 @@ describe('named agents', () => {
   it('fails the run before any test when --agent names nothing configured', async () => {
     const outcome = await runExisting(project, {
       appUrl: app.url,
-      config: { tests: 'tests/**/*.e2e.ts', agents: { default: signing('house') } },
+      config: { tests: 'tests/**/*.e2e.ts', agents: { default: { executor: signing('house') } } },
       runOptions: { agent: 'nope' },
     });
     expect(outcome.exitCode).toBe(2);

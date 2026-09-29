@@ -1,11 +1,11 @@
 /**
  * report-1 documents built from run records: the run status (`blocked` needs
- * every failing result blockable and no run-level error), result tags, and
- * the result source made relative to the project root.
+ * every failing result blockable and no run-level error), result tags, the
+ * result source made relative to the project root, and the run limits.
  */
 
 import { describe, expect, it } from 'vitest';
-import type { ResolvedConfig, ResolvedTarget } from '../../src/config/resolve.ts';
+import { resolveConfig, type ResolvedConfig, type ResolvedTarget } from '../../src/config/resolve.ts';
 import type { SerializedError } from '../../src/internal/errors.ts';
 import { uuidv7 } from '../../src/internal/ids.ts';
 import { buildReport, type BuildReportOptions } from '../../src/report/build.ts';
@@ -159,5 +159,38 @@ describe('run status derivation', () => {
     });
     expect(document.run.status).toBe('error');
     expect(document.run.errors.map((error) => error.code)).toEqual(['REPORT_WRITE_FAILED']);
+  });
+});
+
+describe('run limits', () => {
+  it('fills the block from the largest per-agent values and the fixed ones, in the report-1 shape', () => {
+    const config = resolveConfig(
+      {
+        targets: [{ name: 'web', platform: 'web' }],
+        agents: {
+          default: { maxObservationBytes: 4_096, maxInputTokens: 200_000 },
+          ux: { maxObservationBytes: 65_536, maxInputTokens: 8_000 },
+        },
+      },
+      { projectRoot: '/repo/app', env: {}, cli: { agents: ['ux'] } },
+    );
+    const document = build({ config, status: 'passed', exitCode: 0 });
+    expect(document.run.limits).toEqual({
+      maxAgentContextBytes: 16_384,
+      maxLedgerBytes: 8_192,
+      maxObservationBytes: 65_536,
+      maxEventsPerStep: 1_000,
+      maxModelTokensPerCall: 200_000,
+    });
+  });
+
+  it('reports the defaults when the run failed before the config resolved', () => {
+    expect(build({}).run.limits).toEqual({
+      maxAgentContextBytes: 16_384,
+      maxLedgerBytes: 8_192,
+      maxObservationBytes: 262_144,
+      maxEventsPerStep: 1_000,
+      maxModelTokensPerCall: 64_000,
+    });
   });
 });

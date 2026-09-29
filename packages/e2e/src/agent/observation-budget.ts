@@ -35,8 +35,8 @@ const MIN_OBSERVATION_BYTES = 1_024;
 export interface ObservationBudgetLimits {
   /** `agent.maxObservationBytes`: the configured ceiling. */
   readonly maxObservationBytes: number;
-  /** `limits.maxModelTokensPerCall`: the per-call ceiling the adapter pre-flights. */
-  readonly maxModelTokensPerCall: number;
+  /** `agent.maxInputTokens`: the per-call ceiling the adapter pre-flights. */
+  readonly maxInputTokens: number;
 }
 
 export interface ObservationBudgetRequest {
@@ -61,7 +61,7 @@ export function observationByteBudget(
   const overhead = request.fixedBytes + INSTRUCTION_RESERVE + (request.pixels ? PIXEL_RESERVE : 0);
   const withinTokenCeiling = Math.max(
     MIN_OBSERVATION_BYTES,
-    limits.maxModelTokensPerCall - overhead,
+    limits.maxInputTokens - overhead,
   );
   return Math.min(limits.maxObservationBytes, withinTokenCeiling);
 }
