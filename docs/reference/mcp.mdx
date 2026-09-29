@@ -163,8 +163,9 @@ session does is recorded as a test result or into the replay cache; its
 artifacts, such as the trace, land under
 `<output>/artifacts/<target>/sessions/<attempt>/`, its videos under
 `<output>/videos/`. A later `e2e run` clears `<output>/artifacts` but keeps
-the attempts of sessions that may still be open, up to 4 hours old, so a run
-beside a live session leaves its files alone; the videos always stay.
+the attempts of sessions that may still be open (started within the 4 hour
+limit plus an hour for launch and close), so a run beside a live session
+leaves its files alone; the videos always stay.
 
 ## Resources
 

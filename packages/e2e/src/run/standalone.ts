@@ -83,7 +83,6 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   const debug = options.debug ?? new DebugTrace(false);
   const notice = options.notice ?? (() => undefined);
   const runId = uuidv7();
-  const attemptId = uuidv7();
 
   // A session says what it will not record, as a run does at plan time.
   const grade = validateEngine(target);
@@ -112,6 +111,8 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
     throw cause;
   }
 
+  // Minted once the engine and the app are up, so the id's time is close to when the session's clock starts (`clearArtifacts`).
+  const attemptId = uuidv7();
   const layout = outputLayout(config.output);
   const sessionStore = SessionStore.create(runId, layout.sessions);
   const executor = new TargetExecutor({

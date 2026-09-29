@@ -5,7 +5,7 @@
  */
 
 import type { Dirent } from 'node:fs';
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { uuidv7Time } from '../internal/ids.ts';
 
@@ -23,6 +23,13 @@ export const OUTPUT_MARKER = '.e2e-output';
 export const SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 /** How long a session's attempt outlives its step, so a step that hit the TTL is still closed in order. */
 export const SESSION_CLOSE_GRACE_MS = 60 * 1000;
+
+/**
+ * How long after its attempt id was minted an `e2e mcp` session may still be
+ * writing: the TTL and its grace, plus an hour for the launch before the
+ * clock starts and the close after it ends.
+ */
+const SESSION_RETENTION_MS = SESSION_TTL_MS + SESSION_CLOSE_GRACE_MS + 60 * 60 * 1000;
 
 /** The directory under `<artifacts>/<target>/` that holds each `e2e mcp` session attempt's artifacts. */
 export const SESSION_ARTIFACTS = 'sessions';
@@ -80,6 +87,8 @@ export async function claimOutput(output: string, projectRoot: string): Promise<
  * may still be writing: `<target>/sessions/<attempt>/` whose attempt id, a
  * UUIDv7, was minted within the longest a session can live. An older one,
  * or one whose name carries no time, belonged to a session that has ended.
+ * Symlinks are removed, never followed, so a link in the tree cannot reach
+ * files outside it.
  */
 export async function clearArtifacts(artifacts: string, now: number = Date.now()): Promise<void> {
   const remove = (entry: string): Promise<void> => rm(entry, { recursive: true, force: true });
@@ -98,16 +107,16 @@ export async function clearArtifacts(artifacts: string, now: number = Date.now()
       }
       for (const attempt of await entriesOf(entryPath)) {
         const minted = uuidv7Time(attempt.name);
-        if (minted === undefined || now - minted > SESSION_TTL_MS + SESSION_CLOSE_GRACE_MS) await remove(path.join(entryPath, attempt.name));
+        if (minted === undefined || now - minted > SESSION_RETENTION_MS) await remove(path.join(entryPath, attempt.name));
       }
     }
   }
 }
 
-/** Whether `target` is a directory; false when it is anything else or missing. */
+/** Whether `target` is itself a directory, not a symlink to one; false when it is anything else or missing. */
 async function isDirectory(target: string): Promise<boolean> {
   try {
-    return (await stat(target)).isDirectory();
+    return (await lstat(target)).isDirectory();
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw cause;

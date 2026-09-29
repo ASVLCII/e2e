@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { uuidv7 } from '../../src/internal/ids.ts';
-import { claimOutput, clearArtifacts, OUTPUT_MARKER, SESSION_CLOSE_GRACE_MS, SESSION_TTL_MS } from '../../src/run/output.ts';
+import { claimOutput, clearArtifacts, OUTPUT_MARKER, SESSION_TTL_MS } from '../../src/run/output.ts';
 
 let root: string;
 
@@ -26,8 +26,9 @@ function touch(relative: string): string {
 describe('clearArtifacts', () => {
   it("empties the tree and keeps only the attempts of e2e mcp sessions that may still be live", async () => {
     const now = Date.now();
-    const live = uuidv7(now - 60_000);
-    const ended = uuidv7(now - SESSION_TTL_MS - SESSION_CLOSE_GRACE_MS - 1);
+    // Minted before a slow launch, still inside its TTL.
+    const live = uuidv7(now - SESSION_TTL_MS - 10 * 60_000);
+    const ended = uuidv7(now - 2 * SESSION_TTL_MS);
     const kept = touch(`artifacts/web/sessions/${live}/trace/trace-part1.zip`);
     touch(`artifacts/web/sessions/${ended}/trace/trace.zip`);
     touch('artifacts/web/sessions/not-an-attempt/x.png');
@@ -40,6 +41,18 @@ describe('clearArtifacts', () => {
     expect(readdirSync(path.join(root, 'artifacts'))).toEqual(['web']);
     expect(readdirSync(path.join(root, 'artifacts', 'web'))).toEqual(['sessions']);
     expect(readdirSync(path.join(root, 'artifacts', 'web', 'sessions'))).toEqual([live]);
+  });
+
+  it('removes a symlink in the tree without touching what it points at', async () => {
+    const outside = touch('outside/keep.txt');
+    mkdirSync(path.join(root, 'artifacts', 'web'), { recursive: true });
+    symlinkSync(path.join(root, 'outside'), path.join(root, 'artifacts', 'web', 'linked'));
+    symlinkSync(path.join(root, 'outside'), path.join(root, 'artifacts-link'));
+    await clearArtifacts(path.join(root, 'artifacts'));
+    await clearArtifacts(path.join(root, 'artifacts-link'));
+    expect(existsSync(outside)).toBe(true);
+    expect(readdirSync(path.join(root, 'artifacts', 'web'))).toEqual([]);
+    expect(existsSync(path.join(root, 'artifacts-link'))).toBe(false);
   });
 
   it('removes a file where the tree should be', async () => {
