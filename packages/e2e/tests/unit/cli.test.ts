@@ -475,6 +475,13 @@ describe('e2e list', () => {
     expect(written(stderrSpy)).toContain("option '--reporter <id>' argument 'junit' is invalid");
   });
 
+  it('passes --output through, so --last-failed reads the report a run wrote there', async () => {
+    listMock.mockResolvedValue({ pairs });
+    await invoke('list', '--last-failed', '--output', 'results');
+    expect(lastListOptions()).toMatchObject({ files: [], lastFailed: true, output: 'results' });
+    expect(process.exitCode).toBe(0);
+  });
+
   it('splits comma-separated --tag and --target values and rejects an empty one, like run', async () => {
     await invoke('list', '--tag', 'smoke,auth', '--tag', 'smoke', '--target', 'web,webkit');
     expect(lastListOptions()).toMatchObject({ tags: ['smoke', 'auth'], targetIds: ['web', 'webkit'] });
@@ -519,6 +526,7 @@ describe('e2e list', () => {
       '--shard',
       '--pass-with-no-tests',
       '--reporter',
+      '--output',
       '-h',
     ]);
     expect(help).toContain('  $ e2e list --reporter json\n');

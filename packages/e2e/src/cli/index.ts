@@ -719,6 +719,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
         .choices(LIST_REPORTERS)
         .default('list'),
     )
+    .option('--output <dir>', 'results directory --last-failed reads report.json from (default: output in the config, else .e2e)')
     .addHelpText(
       'after',
       [
@@ -730,6 +731,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           'e2e list --grep checkout',
           'e2e list --shard 2/3',
           'e2e list --reporter json',
+          'e2e list --last-failed --output test-results/e2e',
         ]),
         '',
         docsLine('/reference/cli#e2e-list'),
@@ -742,6 +744,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           config?: string;
           target?: string[];
           reporter: ListReporter;
+          output?: string;
         },
         command: Command,
       ) => {
@@ -753,6 +756,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
             configPath: options.config,
             targetIds: options.target,
             ...selectionRunOptions(options),
+            output: options.output,
           }));
         } catch (cause) {
           reportFailure(telemetry, cause);
