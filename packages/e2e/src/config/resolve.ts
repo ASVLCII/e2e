@@ -888,8 +888,9 @@ const AGENT_NAME_PATTERN = TARGET_NAME_PATTERN;
 
 /**
  * Resolves `agents`: every named entry, and `default` even when the config
- * names none (the built-in agent with no model, which fails at its first
- * model call). Each entry resolves on its own, from the built-in defaults.
+ * names none (the built-in agent with no model, which fails when the `agent`
+ * fixture is first acquired). Each entry resolves on its own, from the
+ * built-in defaults.
  * The run's agents are `default` alone unless `--agent` named others; an
  * unknown name is a config error before anything starts.
  */

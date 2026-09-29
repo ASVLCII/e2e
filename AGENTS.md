@@ -359,13 +359,14 @@ trees, on both platforms, without a device.
   The web benchmark's entries are in. The mobile benchmark's iOS entries are
   recorded on a Mac; nobody has recorded on an Android emulator yet, so the
   Android side spends model calls until an emulator recording is committed.
-- No implicit default model. The agent entry's `model` serves `act`; the
-  judgment calls (`assert`, `waitFor`, `extract`) use its `judge` when one is
-  configured, else `model`. A judgment never sees the prior-step ledger or the acting
-  agent's summaries, only the instruction and the current screen. Without a
-  model, the first
-  `agent` acquisition in a run reports one run-level `MODEL_UNAVAILABLE` and
-  stops the run (exit 2). No implicit target either: `targets` is required and
+- No implicit default model. For the built-in agent, the entry's `model`
+  serves `act`; the judgment calls (`assert`, `waitFor`, `extract`) use its
+  `judge` when one is configured, else `model`. A judgment never sees the
+  prior-step ledger or the acting agent's summaries, only the instruction and
+  the current screen. Without a model, the first `agent` acquisition in a run
+  reports one run-level `MODEL_UNAVAILABLE` and stops the run (exit 2). A
+  custom executor handles `act` and `assert` through `runStep` and needs no
+  model; its `waitFor` and `extract` still use the built-in judgments. No implicit target either: `targets` is required and
   each names its engine.
 - Security invariants (fail closed when one cannot be enforced):
   - Secrets never reach model input, digests, logs, reports, or artifacts.
