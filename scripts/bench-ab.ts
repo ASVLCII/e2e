@@ -25,7 +25,10 @@
  *   --no-build          reuse the working tree's current build
  *   --rebuild-base      build the base worktree again
  *
- * Runs go with `CI=1`, so committed trace-cache recordings replay read-only,
+ * The harness sets `e2e run --output` itself, so a forwarded `--output` (or
+ * the removed `--artifacts`) is refused.
+ *
+ * Runs go with `CI=1`, so committed replay-cache recordings replay read-only,
  * `reuseExisting` servers start fresh per run, and no `GITHUB_*` variable is
  * passed, so the GitHub reporter never posts. A step without a recording
  * calls the model, which needs its key in the environment.
@@ -225,6 +228,9 @@ if (!existsSync(path.join(REPO_ROOT, 'apps', suite, 'package.json'))) fail(`no a
 const baseSha = git('merge-base', options.base, 'HEAD');
 const headSha = git('rev-parse', 'HEAD');
 const dirty = git('status', '--porcelain').length > 0;
+// The harness owns where results go, and removes them after each run.
+const resultFlag = forwarded.find((arg) => /^--(output|artifacts)(=|$)/.test(arg));
+if (resultFlag !== undefined) fail(`${resultFlag.split('=')[0]!} is set by bench:ab; leave it out of the e2e run arguments`);
 const runArgs = [
   '--workers', options.workers,
   ...(options.config === undefined ? [] : ['--config', options.config]),
