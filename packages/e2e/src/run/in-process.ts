@@ -11,6 +11,7 @@ import type { Selection, TestTargetPair } from '../collect/select.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
 import { classifyError, ConfigurationError, serializeError } from '../internal/errors.ts';
 import type { DebugTrace } from '../internal/debug.ts';
+import type { InMemoryAttempts } from './execute.ts';
 import type { SessionStore } from './sessions.ts';
 import type { SpawnUnitRunner, UnitRunner, UnitRunnerEvents } from './unit-runner.ts';
 import { pairKey } from './units.ts';
@@ -21,12 +22,14 @@ export interface InProcessRunnerOptions {
   readonly config: ResolvedConfig;
   readonly selection: Selection;
   /**
-   * The registration of tests supplied in memory (`RunOptions.tests`). There
-   * is no file to re-import, so every unit adopts this registration as its
-   * realm; such a run has one unit and no retries, so nothing asks for a
-   * second realm of it.
+   * The tests supplied in memory (`RunOptions.tests`). There is no file to
+   * re-import, so the unit of their virtual file adopts this registration as
+   * its realm; it is one unit with no retries, so nothing asks for a second
+   * realm of it. The units of real files, a setup test the in-memory tests
+   * need, import their file as always. Their attempts run as described by
+   * `InMemoryAttempts`.
    */
-  readonly registration?: ModuleRegistration | undefined;
+  readonly inMemory?: (InMemoryAttempts & { readonly registration: ModuleRegistration }) | undefined;
   readonly runId: string;
   readonly artifactsRoot: string;
   readonly sessionStore: SessionStore;
@@ -135,7 +138,14 @@ class InProcessRunner implements UnitRunner {
       env: this.options.envFor(this.targetName),
       isolated: false,
       debug: this.options.debug,
-      resolvePairs: (unit) => resolveFromSelection(this.options.selection, target, unit, this.options.registration),
+      inMemory: this.options.inMemory,
+      resolvePairs: (unit) =>
+        resolveFromSelection(
+          this.options.selection,
+          target,
+          unit,
+          this.options.inMemory?.file === unit.file ? this.options.inMemory.registration : undefined,
+        ),
     };
   }
 }

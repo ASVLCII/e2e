@@ -22,6 +22,12 @@ import { createProject, type FixtureProject } from '../helpers/run-project.ts';
 import { web } from '@e2e-dev/web';
 import { z } from 'zod';
 
+// The session runs collect the project's own test files, which register
+// through the built package's `e2e` self-reference; the built explore shares
+// that registry. The specifier is non-literal so typechecking needs no build.
+const builtExploreModule = '../../dist/explore/index.js';
+const { explore: exploreBuilt } = (await import(builtExploreModule)) as typeof import('../../src/explore/index.ts');
+
 type PlanAnswer = { decision: 'step'; title: string; instruction: string } | { decision: 'finish'; summary: string };
 
 /**
@@ -393,5 +399,193 @@ describe('e2e explore', () => {
     await expect(
       explore({ cwd: project.dir, rawConfig: { targets: [{ name: 'web', engine: web({ url: app.url }) }] as never, credentials } }),
     ).rejects.toMatchObject({ code: 'INVALID_CONFIG', message: expect.stringContaining('400 account(s) serialize to') });
+  });
+});
+
+describe('e2e explore --session', () => {
+  /**
+   * Three setups, one that saves a marker without any secret, one that has
+   * the project's agent save it, and one that fills a password, and an
+   * ordinary test that must never run under explore.
+   */
+  const files = {
+    'tests/acted.setup.e2e.ts': `import { test } from 'e2e';
+test.setup('has the agent save the marker', { sessions: ['acted'] }, async ({ app, agent, session }) => {
+  await app.open('/storage');
+  await agent.act('Tap Save marker');
+  await session.save('acted');
+});`,
+    'tests/marker.setup.e2e.ts': `import { test } from 'e2e';
+test.setup('saves the marker', { sessions: ['marker'] }, async ({ app, screen, session }) => {
+  await app.open('/storage');
+  await screen.getByRole('button', { name: 'Save marker' }).tap();
+  await session.save('marker');
+});`,
+    'tests/password.setup.e2e.ts': `import { test, credentials } from 'e2e';
+test.setup('fills the password', { sessions: ['signed-in'] }, async ({ app, screen, session }) => {
+  await app.open('/');
+  await screen.getByLabel('Password').fill(credentials.user('ada').password);
+  await session.save('signed-in');
+});`,
+    'tests/other.e2e.ts': `import { test } from 'e2e';
+test('never runs under explore', async () => {
+  throw new Error('an ordinary test ran');
+});`,
+  };
+  let app: FixtureApp;
+  let project: FixtureProject;
+
+  beforeAll(async () => {
+    app = await startFixtureApp();
+    project = createProject(files);
+  });
+
+  afterAll(async () => {
+    project?.cleanup();
+    await app?.close();
+  });
+
+  const exploreWithSession = (model: ModelInstance, session: string): Promise<ExploreOutcome> =>
+    exploreBuilt({
+      cwd: project.dir,
+      rawConfig: {
+        targets: [{ name: 'web', engine: web({ url: app.url }) }] as never,
+        agents: { default: { model } },
+        credentials: { ada: { username: 'ada@example.test', password: 'bookworm' } },
+        actionTimeout: 10_000,
+      },
+      goal: 'Explore the storage page',
+      session,
+      maxSteps: 1,
+      timeoutMs: 180_000,
+    });
+
+  /** The titles of the pairs that ran, sorted: the report also lists the ones selection left out, as skipped. */
+  const ran = (outcome: ExploreOutcome) =>
+    outcome.report.run.results
+      .filter((result) => result.status !== 'skipped')
+      .map((result) => result.titlePath.at(-1))
+      .toSorted();
+
+  it('runs only the setup that saves the session, then explores from it, signed in, with screenshots when no secret was filled', async () => {
+    const planPrompts: string[] = [];
+    let storageScreen = '';
+    const model = installExploreModel({
+      plan: (call) => {
+        planPrompts.push(call.instruction);
+        return planPrompts.length === 1
+          ? { decision: 'step', title: 'Storage', instruction: 'Check the storage marker' }
+          : { decision: 'finish', summary: 'The restored marker is shown.' };
+      },
+      loop: (call) => {
+        if (call.turn === 1) return [{ toolName: 'navigate', input: { url: `${app.url}/storage` } }];
+        if (call.turn === 2) {
+          storageScreen = call.lastToolResult;
+          return [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }];
+        }
+        return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Marker is saved' } }];
+      },
+    });
+    const outcome = await exploreWithSession(model, 'marker');
+
+    expect(outcome.report.run.errors).toEqual([]);
+    assertValidReport(outcome.report);
+    expect(ran(outcome)).toEqual(['Explore the storage page', 'saves the marker']);
+    expect(outcome.report.run.results.find((result) => result.titlePath.at(-1) === 'saves the marker')!.status).toBe('passed');
+    // The restored local storage is what the explorer found on the page.
+    expect(storageScreen).toMatch(/"Marker"[^\n]*saved/);
+    // Restoring leaves no page open, so the exploration still opens the app first.
+    const attempt = outcome.report.run.results.find((result) => result.file === 'explore')!.attempts[0]!;
+    expect(attempt.steps[0]!.api).toBe('app.open');
+    // The planner and the explorer both know they start signed in.
+    expect(planPrompts[0]).toContain('The app starts signed in: the run restored the session "marker"');
+    expect(planPrompts[0]).toContain('work as the signed-in user rather than signing in again');
+    expect(loopCalls[0]!.system).toContain('restored the session "marker"');
+    // No secret was filled on the way, so the finding keeps its screenshot.
+    const finding = outcome.explore.findings[0]!;
+    expect(finding.artifactId).toBeDefined();
+    expect(attempt.artifacts.find((artifact) => artifact.id === finding.artifactId)).toMatchObject({ kind: 'screenshot' });
+  }, 120_000);
+
+  it('keeps the pixels of a session whose setup filled a secret withheld, so its findings carry no screenshot', async () => {
+    const model = installExploreModel({
+      plan: (call) =>
+        call.instruction.includes('(none yet')
+          ? { decision: 'step', title: 'Home', instruction: 'Look at the home page' }
+          : { decision: 'finish', summary: 'One finding without evidence.' },
+      loop: (call) =>
+        call.turn === 1
+          ? [{ toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING }]
+          : [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Looked' } }],
+    });
+    const outcome = await exploreWithSession(model, 'signed-in');
+
+    expect(outcome.report.run.errors).toEqual([]);
+    expect(ran(outcome)).toEqual(['Explore the storage page', 'fills the password']);
+    expect(outcome.explore.findings).toHaveLength(1);
+    expect(outcome.explore.findings[0]!.artifactId).toBeUndefined();
+    expect(JSON.stringify(outcome.report)).not.toContain('bookworm');
+  }, 120_000);
+
+  it('runs an agentic setup as the project agent, not the explorer: its own prompt, tools, and cache, and no findings', async () => {
+    const setupCalls: LoopCall[] = [];
+    const model = installExploreModel({
+      plan: (call) =>
+        call.instruction.includes('(none yet')
+          ? { decision: 'step', title: 'Storage', instruction: 'Look at the storage page' }
+          : { decision: 'finish', summary: 'Looked around the storage page.' },
+      loop: (call) => {
+        if (call.system.includes('Exploration mode')) {
+          return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Looked' } }];
+        }
+        setupCalls.push(call);
+        if (setupCalls.length === 1) {
+          // Offered or not, the setup's model tries to report a finding; only the explorer may record one.
+          return [
+            { toolName: 'tap', input: { target: nodeIdFor(call.prompt, /button "Save marker"/) } },
+            { toolName: FINDING_TOOL_NAME, input: COUNTER_FINDING },
+          ];
+        }
+        return [{ toolName: 'complete_step', input: { status: 'passed', summary: 'Saved the marker' } }];
+      },
+    });
+    const outcome = await exploreWithSession(model, 'acted');
+
+    expect(outcome.report.run.errors).toEqual([]);
+    expect(ran(outcome)).toEqual(['Explore the storage page', 'has the agent save the marker']);
+    const setup = outcome.report.run.results.find((result) => result.titlePath.at(-1) === 'has the agent save the marker')!;
+    expect(setup.status).toBe('passed');
+    expect(setupCalls.length).toBeGreaterThan(0);
+    for (const call of setupCalls) {
+      expect(call.system).not.toContain('Exploration mode');
+      expect(call.system).not.toContain('Exploration goal');
+      expect(call.toolNames).not.toContain(FINDING_TOOL_NAME);
+    }
+    expect(outcome.explore.findings).toEqual([]);
+    // The setup keeps the project's trace cache; the exploration runs without it.
+    const setupAct = setup.attempts[0]!.steps.find((step) => step.api === 'agent.act')!;
+    expect(setupAct.cache).toBeDefined();
+    const exploreAttempt = outcome.report.run.results.find((result) => result.file === 'explore')!.attempts[0]!;
+    expect(exploreAttempt.steps.filter((step) => step.api === 'agent.act').map((step) => step.cache)).toEqual([undefined]);
+  }, 120_000);
+
+  it('fails an unknown session at collection, naming the declared ones, before anything runs', async () => {
+    const model = installExploreModel({
+      plan: () => ({ decision: 'finish', summary: 'never asked' }),
+      loop: () => [{ toolName: 'complete_step', input: { status: 'passed', summary: 'never asked' } }],
+    });
+    const outcome = await exploreWithSession(model, 'markr');
+
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.status).toBe('error');
+    expect(outcome.report.run.results).toEqual([]);
+    expect(outcome.report.run.errors).toEqual([
+      expect.objectContaining({
+        phase: 'collection',
+        code: 'COLLECTION_ERROR',
+        message: expect.stringMatching(/^test "Explore the storage page" in explore consumes session "markr" but no setup test produces it; setup tests declare "acted", "marker", "signed-in"; did you mean "marker"\?$/),
+      }),
+    ]);
+    expect(fakeCalls).toEqual([]);
   });
 });

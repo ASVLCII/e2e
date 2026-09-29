@@ -1,9 +1,9 @@
 /**
  * `e2e explore`: a run whose one test is a goal. The project config is loaded
- * as `run` loads it, the explorer replaces the executor of the agent the run
- * uses, and the exploration body is registered in memory as the run's only
- * test, so the reporters, `report.json`, artifacts, video, the AI trace, and
- * the exit codes are the runner's own. The exploration's progress travels
+ * as `run` loads it, the exploration body is registered in memory as the
+ * run's only test, and within that test alone the explorer replaces the
+ * executor of the agent the run uses, so the reporters, `report.json`,
+ * artifacts, video, the AI trace, and the exit codes are the runner's own. The exploration's progress travels
  * as `explore` run events, which the list reporter renders, and its record
  * rides along as `run.explore`.
  */
@@ -20,7 +20,7 @@ import { run, type RunOutcome } from '../run/runner.ts';
 import type { AgentConfig, BuiltinReporter, E2EConfig, VideoMode } from '../types.ts';
 import { createExploreBody } from './body.ts';
 import { createExplorer } from './executor.ts';
-import type { PlanAccount } from './plan.ts';
+import { signedInContext, type PlanAccount } from './plan.ts';
 import { ExploreState } from './state.ts';
 
 const DEFAULT_GOAL = 'Explore the app and find bugs';
@@ -53,6 +53,13 @@ export interface ExploreOptions {
   readonly target?: string | undefined;
   /** The configured agent (`agents.<name>`) the exploration runs as; default: `agents.default`. */
   readonly agent?: string | undefined;
+  /**
+   * A session a setup test in the config's test files saves (`--session`):
+   * that setup runs first, and the exploration starts from the state it
+   * saved, as a test declaring `{ session }` does. No setup declaring it is
+   * `COLLECTION_ERROR` before any process starts.
+   */
+  readonly session?: string | undefined;
   readonly maxSteps?: number | undefined;
   readonly timeoutMs?: number | undefined;
   readonly headed?: boolean | undefined;
@@ -98,9 +105,8 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
   };
 
   const { raw, projectRoot } = await loadRawConfig(options, cwd);
-  // Nothing replays an exploration, and a retry would explore twice.
-  const rawConfig: E2EConfig = { ...raw, cache: 'off', retries: 0 };
-  const resolved = resolveConfig(rawConfig, { projectRoot, env, cli: options.agent === undefined ? {} : { agents: [options.agent] } });
+  const resolveOptions = { projectRoot, env, cli: options.agent === undefined ? {} : { agents: [options.agent] } };
+  const resolved = resolveConfig(raw, resolveOptions);
   const target = pickTarget(resolved.targets, options.target, notice);
   const accounts = credentialAccounts(resolved.credentials);
   // An exploration runs as exactly one agent: the one named, else `default`.
@@ -109,17 +115,22 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
 
   const state = new ExploreState(goal, budgets);
   const explorer = createExplorer({ state, from: resolved.agent.executor, notice });
+  // The explorer replaces the agent for the exploration alone: a setup test
+  // `--session` pulls in runs as the project's own agents, with its cache and
+  // retries. The exploration pins no retries and runs with the cache off.
+  const explorerAgents = resolveConfig(
+    { ...raw, agents: { ...raw.agents, [agentName]: exploreAgentConfig(raw.agents?.[agentName], explorer) } },
+    resolveOptions,
+  ).agents;
   const outcome = await run({
     cwd: projectRoot,
-    rawConfig: {
-      ...rawConfig,
-      agents: { ...rawConfig.agents, [agentName]: exploreAgentConfig(rawConfig.agents?.[agentName], explorer) },
-    },
+    rawConfig: raw,
     agent: options.agent,
     env,
     tests: {
       file: EXPLORE_FILE,
-      registration: exploreRegistration(state, target.app.base !== undefined, accounts),
+      registration: exploreRegistration(state, { openApp: target.app.base !== undefined, accounts, session: options.session }),
+      agents: explorerAgents,
       explore: state,
     },
     targetIds: [target.name],
@@ -216,9 +227,18 @@ function credentialAccounts(credentials: ReadonlyMap<string, ResolvedCredential>
   return accounts;
 }
 
-/** The one-test registration: the goal is the title, the body is the exploration loop. */
-function exploreRegistration(state: ExploreState, openApp: boolean, accounts: readonly PlanAccount[]): ModuleRegistration {
+/**
+ * The one-test registration: the goal is the title, the body is the
+ * exploration loop. With a session it consumes that session like any test
+ * declaring `{ session }`, so the runner runs the setup that saves it first
+ * and restores it into the exploration's attempt.
+ */
+function exploreRegistration(
+  state: ExploreState,
+  start: { readonly openApp: boolean; readonly accounts: readonly PlanAccount[]; readonly session: string | undefined },
+): ModuleRegistration {
   const title = state.goal;
+  const { session } = start;
   const test: RegisteredTest = {
     kind: 'test',
     title,
@@ -227,11 +247,12 @@ function exploreRegistration(state: ExploreState, openApp: boolean, accounts: re
     options: {
       timeout: state.budgets.timeoutMs + TIMEOUT_GRACE_MS,
       retries: 0,
-      agentContext: `Exploration goal: ${state.goal}`,
+      agentContext: [`Exploration goal: ${state.goal}`, ...(session === undefined ? [] : [signedInContext(session)])].join('\n'),
+      ...(session === undefined ? {} : { session }),
     },
     sessions: [],
     tags: [],
-    fn: createExploreBody({ state, stepTimeoutMs: STEP_TIMEOUT_MS, openApp, accounts }),
+    fn: createExploreBody({ state, stepTimeoutMs: STEP_TIMEOUT_MS, ...start }),
     fixtures: [],
     group: undefined,
     mode: 'normal',
