@@ -24,7 +24,7 @@ import { TargetExecutor, type ClosingRecord } from './execute.ts';
 import { createFixtures } from './fixtures.ts';
 import type { EnginePrepareResult } from '../engine/index.ts';
 import type { ProcessPool } from './process-pool.ts';
-import { PreparedEngines, startDeclaredProcesses, validateEngine, type AppProcesses } from './provision.ts';
+import { PreparedEngines, recordingNotices, startDeclaredProcesses, validateEngine, type AppProcesses } from './provision.ts';
 import { attemptRecording, type AttemptRecording, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
@@ -85,7 +85,9 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   const runId = uuidv7();
   const attemptId = uuidv7();
 
-  validateEngine(target);
+  // A session says what it will not record, as a run does at plan time.
+  const grade = validateEngine(target);
+  for (const message of recordingNotices([{ target, pairs: [] }], new Map([[target.name, grade]]))) notice(target.name, message);
   const recordings = { trace: sessionRecording(target.trace), video: sessionRecording(target.video) };
   // The secret registry is process-wide, as in a run: `credentials.user()` and `secrets.get()`
   // resolve while the attempt is open.

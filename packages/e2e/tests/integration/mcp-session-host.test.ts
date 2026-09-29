@@ -389,6 +389,15 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     for (const mode of ['off', 'on-first-retry', 'on-all-retries', 'retain-on-failure'] as const) expect(await traced(mode)).toEqual([]);
   });
 
+  it('says once that a trace the config asks for is not recorded on an engine that cannot trace', async () => {
+    const session = host(engines().next, { trace: 'on' });
+    await session.open({});
+    await session.close('done');
+    expect(logs.filter((line) => line.includes('records no trace'))).toEqual([
+      'info: kiosk: trace records only on targets whose engine can record it; target "kiosk" (engine fake) records no trace',
+    ]);
+  });
+
   it('lists no recording tools when the engine records no video', async () => {
     const plain = host(engines().next);
     const opened = await plain.open({});
