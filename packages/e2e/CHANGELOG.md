@@ -90,7 +90,7 @@
 
 - [#501](https://github.com/tester-army/e2e/pull/501) [`7d93c08`](https://github.com/tester-army/e2e/commit/7d93c085eb7d7c56c4007b870ff7f8b5c644d3d2) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The agent gets a tool for each action its engine declares beyond tap and type: `hover` and `hover_at`, `double_tap`, `long_press`, `right_click`, `check`, `drag`, `scroll_to`, `upload`, and `back`. Each is offered only when the engine declares the action, records into the trace cache with the node it acted on, and replays zero-turn. `upload` takes project-relative paths and refuses, before the engine sees them, a file outside the project root or one that is hidden or under a hidden directory, as `POLICY_DENIED`. The new tool names are reserved: a project tool named like one is refused at `createAgent`, as `tap` and `scroll` already were.
 
-- [#452](https://github.com/tester-army/e2e/pull/452) [`ee4929d`](https://github.com/tester-army/e2e/commit/ee4929ddb6aa4de9004efd2e9107157103fd3c2f) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The public surface loses exports nothing outside the runner consumed: `BLOCKABLE_CODES`, `RUNTIME_CODES`, `buildTraceEntry`, and `readTraceEntry` from `e2e`, `isDefinedTool` and `toolAppliesTo` from `e2e/agent`, and the `store`, `apiUrl`, and `baseURL` options of `chatgpt()`, `copilot()`, and `grok()`, whose option types are gone with them. A `blocked` verdict still names a code from the table in the agent-steps guide, a custom `CacheStore` still handles entries opaquely, and the constructors take only a model id; a login comes from `e2e login` or `E2E_OAUTH_CREDENTIALS`.
+- [#452](https://github.com/tester-army/e2e/pull/452) [`ee4929d`](https://github.com/tester-army/e2e/commit/ee4929ddb6aa4de9004efd2e9107157103fd3c2f) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The public surface loses exports nothing outside the runner consumed: `BLOCKABLE_CODES`, `RUNTIME_CODES`, `buildTraceEntry`, and `readTraceEntry` from `e2e`, `isDefinedTool` and `toolAppliesTo` from `e2e/agent`, and the `store`, `apiUrl`, and `baseURL` options of `chatgpt()`, `copilot()`, and `grok()`, whose option types are gone with them. A `blocked` verdict still names a code from the table in the agent-steps guide, a custom `TraceCacheStore` still handles entries opaquely, and the constructors take only a model id; a login comes from `e2e login` or `E2E_OAUTH_CREDENTIALS`.
 
 - [#479](https://github.com/tester-army/e2e/pull/479) [`4314f5f`](https://github.com/tester-army/e2e/commit/4314f5f8869b7d7369f1878b9ff23fd07790eb35) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `e2e/engine` exports `resolveExpression`, the reference locator semantics over a semantic tree. It resolves one `LocatorExpression` over `SemanticNode`s in document order: every query kind, `visible`, scopes, `filter`, and `index`, with `text` and `label` answering the innermost match when a container echoes a descendant's text. An engine whose platform tree is the whole truth calls it instead of interpreting expressions itself. A `selector` goes to the platform hook it takes; a `frame` is `FRAME_NOT_FOUND`.
 
@@ -1587,7 +1587,7 @@ failed`. `app.open()` against an address where nothing listens is
   `RunOptions.aiTrace` and `RunOutcome.aiTracePath` expose the same for the
   programmatic runner; `e2e init` ignores the new file.
 
-- [#111](https://github.com/tester-army/e2e/pull/111) [`6e514c0`](https://github.com/tester-army/e2e/commit/6e514c0ce266875921552912f1f304332b408f5a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `ArtifactStore`: the cloud seam for evidence, the way `CacheStore` is for
+- [#111](https://github.com/tester-army/e2e/pull/111) [`6e514c0`](https://github.com/tester-army/e2e/commit/6e514c0ce266875921552912f1f304332b408f5a) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `ArtifactStore`: the cloud seam for evidence, the way `TraceCacheStore` is for
   traces. `artifacts` accepts `{ kinds, store }`; a host-supplied store receives
   every artifact the moment it is complete on disk — bytes, digest, and report
   identity — not after the run, and returns its own reference, recorded on the
@@ -1810,7 +1810,7 @@ select, scroll, navigate, back }`). Every node action is now
   - config `cache`: `'off' | 'read-only' | 'read-write'` or
     `{ mode, store, dir }`. **Opt-out**: unset means `read-write`; CI forces
     read-write down to read-only; `e2e run --no-cache` overrides the config
-    for one run. `store` accepts any `CacheStore` implementation, so a
+    for one run. `store` accepts any `TraceCacheStore` implementation, so a
     shared remote cache can replace the default `.e2e/cache/` file store.
   - `StepExecutorContext.replayedPrefix` (`ReplayedPrefix`,
     `ReplayHandOffReason`): the mid-step hand-off contract for executors.
@@ -1821,7 +1821,7 @@ select, scroll, navigate, back }`). Every node action is now
     assertion, a locator `waitFor`, `agent.assert`, or `agent.waitFor`) — a
     later `agent.act` or the attempt passing on its own confirms nothing — an
     unconfirmed entry is evicted, and interruption touches nothing.
-  - Exported types: `CacheMode`, `CacheConfig`, `CacheStore`,
+  - Exported types: `CacheMode`, `CacheConfig`, `TraceCacheStore`,
     `CacheReadResult`, `ActionTrace`, `RecordedAction`, `TraceEntry`,
     `TraceTargetDescriptor`.
 
@@ -2020,7 +2020,7 @@ select, scroll, navigate, back }`). Every node action is now
   chain cut short by the deadline still classifies as `STEP_TIMEOUT`.
 
 - [#97](https://github.com/tester-army/e2e/pull/97) [`1f98654`](https://github.com/tester-army/e2e/commit/1f9865476924a93bfc70cdebe144a3e8e7c92f74) Thanks [@okwasniewski](https://github.com/okwasniewski)! - `buildTraceEntry` and `readTraceEntry` are exported for custom
-  `CacheStore` implementations: a remote store (Redis, an API) serializes
+  `TraceCacheStore` implementations: a remote store (Redis, an API) serializes
   `buildTraceEntry(payload)` on write and validates read documents with
   `readTraceEntry` — the same trace-1 framing the default file store uses, so
   a remote entry can never be trusted more loosely than a local one.
