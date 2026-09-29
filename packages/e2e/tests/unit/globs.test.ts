@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   compareCodePoints,
   compileGlob,
+  compileGlobList,
   discoverFiles,
   GLOB_SYNTAX,
   literalPrefix,
@@ -38,9 +39,18 @@ describe('glob grammar', () => {
     expect(() => compileGlob('tests/**foo/*.ts')).toThrow();
   });
 
-  it('rejects leading ! exclusions, however the leading segment is spelled', () => {
-    expect(() => compileGlob('!tests/**')).toThrow(/exclusions are unsupported/);
-    expect(() => compileGlob('./!tests/**')).toThrow(/exclusions are unsupported/);
+  it('rejects a "!" in one glob: an exclusion is a list entry that starts with it', () => {
+    expect(() => compileGlob('!tests/**')).toThrow(/written once, at the very start of a tests entry/);
+    expect(() => compileGlob('./!tests/**')).toThrow(/written once, at the very start of a tests entry/);
+  });
+
+  it('splits a glob list into including globs and "!" exclusions', () => {
+    const { include, exclude } = compileGlobList(['tests/**/*.e2e.ts', '!tests/wip/**', '!./tests/slow.e2e.ts']);
+    expect(include.map(literalPrefix)).toEqual([['tests']]);
+    expect(exclude.map(literalPrefix)).toEqual([['tests', 'wip'], ['tests', 'slow.e2e.ts']]);
+    expect(() => compileGlobList(['tests/**', '!'])).toThrow(/"!" excludes nothing/);
+    expect(() => compileGlobList(['!!tests/**'])).toThrow(/written once/);
+    expect(() => compileGlobList(['!tests/{a,b}/**'])).toThrow(/brace expansion is unsupported/);
   });
 
   it('drops a leading ./, a . segment, and a doubled /', () => {

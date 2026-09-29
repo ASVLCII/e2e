@@ -71,6 +71,13 @@ describe('resolveConfig', () => {
       code: 'INVALID_GLOB',
       message: "'**' must be a complete path segment: tests/**foo/*.ts",
     });
+    expect(failure({ tests: ['!tests/wip/**'] })).toMatchObject({
+      code: 'INVALID_CONFIG',
+      message: 'tests has only "!" exclusions, which select nothing; add a glob that selects files, such as ["tests/**/*.e2e.ts", "!tests/wip/**"]',
+    });
+    expect(failure({ tests: '!tests/wip/**' })).toMatchObject({ code: 'INVALID_CONFIG' });
+    expect(failure({ tests: ['tests/**/*.e2e.ts', '!tests/{a,b}/**'] })).toMatchObject({ code: 'INVALID_GLOB' });
+    expect(resolve({ tests: ['tests/**/*.e2e.ts', '!tests/wip/**'] }).tests).toEqual(['tests/**/*.e2e.ts', '!tests/wip/**']);
     expect(resolve({ tests: 'e2e/*.e2e.ts' }).tests).toEqual(['e2e/*.e2e.ts']);
     expect(resolve({ tests: ['tests/**/*.e2e.ts', 'tests/**/*.e2e.ts', 'e2e/*.e2e.ts'] }).tests).toEqual([
       'tests/**/*.e2e.ts',

@@ -43,10 +43,14 @@ working directory and each parent for `e2e.config.ts` or `e2e.config.mts`,
 stopping at the repository root. Both names in one directory is
 `CONFIG_AMBIGUOUS`. The selected file's directory is the project root.
 
-The `tests` globs select files relative to the project root. Discovery visits
-only directories that could match, skips `node_modules`, and ignores
-symlinks. A dot directory is included only when a glob segment explicitly
-starts with a dot.
+The `tests` globs select files relative to the project root. An entry that
+starts with `!` excludes: `tests: ['tests/**/*.e2e.ts', '!tests/wip/**']`
+selects every test file except those under `tests/wip/`. A file is selected
+when an including glob matches it and no exclusion does, whatever the order of
+the list, and a list of only exclusions is `INVALID_CONFIG`. Discovery visits
+only directories that could match, never enters one an exclusion takes whole,
+skips `node_modules`, and ignores symlinks. A dot directory is included only
+when a glob segment explicitly starts with a dot.
 
 Config and test files run as ESM whatever the nearest `package.json` `type`
 says, and so does the TypeScript they import: a helper by path, or a
@@ -62,7 +66,7 @@ export interface E2EConfig {
   projectId?: string;
   /** The surfaces tests run on; required, at least one, each naming its engine. */
   targets: readonly Target[];
-  /** Test file globs relative to the project root (`*`, `?`, and a whole `**` segment); default every `*.e2e.ts` under `tests/`. */
+  /** Test file globs relative to the project root (`*`, `?`, and a whole `**` segment; a leading `!` excludes); default every `*.e2e.ts` under `tests/`. */
   tests?: string | readonly string[];
   /** Test attempt deadline in milliseconds; default 120000. */
   timeout?: number;

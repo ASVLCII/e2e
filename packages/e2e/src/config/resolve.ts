@@ -10,7 +10,7 @@ import { didYouMean } from '../internal/suggest.ts';
 import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
-import { compileGlob } from '../internal/globs.ts';
+import { compileGlobList } from '../internal/globs.ts';
 import { boundedInt, describeValue, positiveInt } from './validate.ts';
 import type {
   ArtifactStore,
@@ -744,7 +744,12 @@ function normalizeTests(tests: unknown): readonly string[] {
         `tests must be a glob or a list of globs relative to the project root, got ${describeValue(glob)} in the list`,
       );
     }
-    compileGlob(glob);
+  }
+  if (compileGlobList(list).include.length === 0) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `tests has only "!" exclusions, which select nothing; add a glob that selects files, such as ["tests/**/*.e2e.ts", ${list.map((glob) => JSON.stringify(glob)).join(', ')}]`,
+    );
   }
   return [...new Set(list)];
 }
