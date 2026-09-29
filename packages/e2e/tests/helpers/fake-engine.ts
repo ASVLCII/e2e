@@ -466,8 +466,8 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
                     const dir = attempts[current]!.artifactsDir;
                     mkdirSync(path.join(dir, 'trace'), { recursive: true });
                     // A real archive, so the runner's trace redaction can read it.
-                    const events = JSON.stringify({ type: 'context-options', attemptId: operation.attemptId });
-                    writeFileSync(path.join(dir, 'trace', 'fake.zip'), writeZip([zipEntry('trace.trace', Buffer.from(events, 'utf8'))]));
+                    const traceEvents = JSON.stringify({ type: 'context-options', attemptId: operation.attemptId });
+                    writeFileSync(path.join(dir, 'trace', 'fake.zip'), writeZip([zipEntry('trace.trace', Buffer.from(traceEvents, 'utf8'))]));
                     return 'trace/fake.zip';
                   },
                 }

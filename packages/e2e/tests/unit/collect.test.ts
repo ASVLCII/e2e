@@ -204,7 +204,7 @@ describe('collect', () => {
     }
   });
 
-  it('collects no file a "!" exclusion names, and never offers one as a look-alike', async () => {
+  it('collects no file that a "!" exclusion names, and never offers one as a look-alike', async () => {
     const projectRoot = mkdtempSync(path.join(tmpdir(), 'e2e-exclude-'));
     try {
       for (const file of ['tests/wip/b.e2e.ts', 'tests/wip/c.test.ts', 'tests/login.test.ts']) {
