@@ -90,6 +90,18 @@ describe('VideoRecorder', () => {
     expect(existsSync(path.join(dir, 'video', 'video.webm'))).toBe(false);
   });
 
+  it('hands the segments that finalized to the stop after one that reported a lost segment', async () => {
+    const video = recorder();
+    const kept = fakePage();
+    const broken = fakePage({ writes: false, stopError: new Error('screencast stop failed') });
+    await video.arm(kept.page);
+    await video.pageClosing();
+    await video.pageOpened(broken.page);
+    await expect(video.stop()).rejects.toThrow('video/video-part2.webm');
+    // A host that retries the stop gets what did finalize, so nothing on disk goes unreported.
+    expect((await video.stop()).map((segment) => segment.path)).toEqual(['video/video.webm']);
+  });
+
   it('stays disarmed when the first segment cannot start', async () => {
     const video = recorder();
     const dead = fakePage({ startError: new Error('screencast unavailable') });
