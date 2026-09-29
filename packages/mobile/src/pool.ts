@@ -216,10 +216,10 @@ export class DevicePool {
   }
 
   /**
-   * Boots every bound device and opens the pinned app on it once, so its
-   * automation runner is up and the slot's session is on the app, which the
-   * returned binding records for the worker: a permission it presets there
-   * needs no open first. A plain foreground open, with none of the engine's
+   * Boots every bound device, starts the iOS automation runner on it, and
+   * opens the pinned app on it once, so the slot's session is on the app,
+   * which the returned binding records for the worker: a permission it
+   * presets there needs no open first. A plain foreground open, with none of the engine's
    * launch options: an app still running from an earlier run keeps its
    * process either way, and a test's `app.open()` relaunches it with them.
    * One slot after another, on purpose: workers
@@ -231,8 +231,11 @@ export class DevicePool {
    * here too: the first attempt could only meet the same runner and fail
    * its first observation with the app blamed, and the message names the
    * recovery, which a wait of up to the runner's recycle window would only
-   * hide. A build `appPath` installs in `init` is not on the device yet, so
-   * that slot boots only, unless a lease says the build is already there.
+   * hide. A runner that did not start leaves the slot unopened: the open
+   * would start it again under a shorter budget, and its timeout resets the
+   * daemon every earlier slot is on. A build `appPath` installs in `init` is
+   * not on the device yet, so that slot boots and starts the runner only,
+   * unless a lease says the build is already there.
    */
   private async warm(bindings: readonly SlotBinding[], info: EnginePrepareInfo): Promise<readonly SlotBinding[]> {
     const warmed: SlotBinding[] = [];
@@ -245,15 +248,16 @@ export class DevicePool {
       this.retain(info.targetName, client);
       info.log(`booting ${label} (${slot + 1} of ${bindings.length})`);
       await runCommand('boot', () => client.devices.boot(where), info.signal, at);
+      const runnerUp = this.options.platform !== 'ios' || (await prepareRunner(client, where, info, at));
       const app = pinnedApp(this.options, binding.installedApp);
-      if (app === undefined) {
+      if (app === undefined || !runnerUp) {
         warmed.push(binding);
         continue;
       }
       // A build the suite installs itself is not on the device yet, so there
-      // is nothing to open: the first attempt installs it and starts the runner.
+      // is nothing to open: the first attempt installs it.
       if (this.options.appPath !== undefined && binding.installedApp === undefined) {
-        info.log(`${label}: ${app} awaits the suite's device.installApp(); the first attempt starts the automation runner`);
+        info.log(`${label}: ${app} awaits the suite's device.installApp()`);
         warmed.push(binding);
         continue;
       }
@@ -262,7 +266,7 @@ export class DevicePool {
         warmed.push({ ...binding, sessionApp: app });
       } catch (cause) {
         if (info.signal.aborted || isRunnerFailure(cause)) throw cause;
-        info.log(`${label}: automation runner not warmed up (${message(cause)}); the first attempt starts it`);
+        info.log(`${label}: ${app} did not open (${message(cause)}); the first attempt opens it`);
         warmed.push(binding);
       }
     }
@@ -274,5 +278,25 @@ export class DevicePool {
     const clients = this.warmed.get(targetName) ?? [];
     clients.push(client);
     this.warmed.set(targetName, clients);
+  }
+}
+
+/**
+ * Starts the slot's iOS automation runner under `prepare ios-runner`, whose
+ * startup budget covers a cold simulator. Left to the first `open`, the
+ * start runs inside that request's 90 s envelope, which a cold runner on a
+ * loaded CI Mac outlasts; a timed-out `open` resets the daemon, ending every
+ * other slot's session with it. A runner that is busy or wedged ends the run
+ * here, like a warm-up open that meets one; any other failure is logged and
+ * left to the first attempt. True when the runner is up.
+ */
+async function prepareRunner(client: AgentDeviceClient, where: DeviceSelection, info: EnginePrepareInfo, at: string): Promise<boolean> {
+  try {
+    await runCommand('prepare ios-runner', () => client.command.prepare({ action: 'ios-runner', ...where }), info.signal, at);
+    return true;
+  } catch (cause) {
+    if (info.signal.aborted || isRunnerFailure(cause)) throw cause;
+    info.log(`${at}: automation runner not prepared (${message(cause)}); the first attempt starts it`);
+    return false;
   }
 }
