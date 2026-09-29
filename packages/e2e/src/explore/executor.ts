@@ -1,9 +1,12 @@
 /**
- * The explorer: the built-in agent (`createAgent`) with exploration guidance
- * appended to the project's and one tool added to the project's vocabulary,
- * `report_finding` (`finding-tool.ts`). Nothing else changes: budgets, loop guards, wind-down,
- * secrets, origin policy, and the transcript are the harness's, and each
- * exploration step runs as one ordinary `agent.act` step.
+ * The explorer: the built-in agent with exploration guidance appended to the
+ * project's and one host tool beside the project's tools, `report_finding`
+ * (`finding-tool.ts`, through `createHostedAgent`). Unlike a project tool it
+ * reads the screen the model holds, and its answer is not cut to a project
+ * tool's size, so a screen it sends back arrives whole. Nothing else
+ * changes: budgets, loop guards, wind-down, secrets, origin policy, and the
+ * transcript are the harness's, and each exploration step runs as one
+ * ordinary `agent.act` step.
  */
 
 import { asSdkLanguageModel } from '../agent/ai-sdk.ts';

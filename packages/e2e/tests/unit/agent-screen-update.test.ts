@@ -78,6 +78,8 @@ describe('ScreenPresenter', () => {
     expect(presenter.differs(held, screen('b3', [...HOME, ' #n7 button "Late arrival"']))).toBe(true);
     // A route change that kept every node is still another screen.
     expect(presenter.differs(held, screen('b3', HOME, { path: '/next' }))).toBe(true);
+    // A truncated look cannot show that what it left out held still.
+    expect(presenter.differs(held, screen('b3', HOME, { truncated: true }))).toBe(true);
     expect(presenter.differs(held, screen('b4', ['[semantic capture unavailable]'], { treeUnavailable: true }))).toBe(true);
     // Comparing presents nothing: the model still holds b1 until an update goes out.
     expect(presenter.held()!.revision).toBe('b1');

@@ -133,11 +133,12 @@ export class ScreenPresenter {
   /**
    * Whether a fresh observation is at another location than a held screen,
    * or lists anything it did not, or no longer lists something it did;
-   * focus alone is no change. A screen with no tree cannot be shown to
-   * match, so it differs.
+   * focus alone is no change. A screen with no tree, or a truncated one,
+   * cannot be shown to match, so it differs, as `render` never calls a
+   * truncated screen unchanged.
    */
   differs(held: ShownScreen, observation: ExecutorObservation): boolean {
-    if (observation.treeUnavailable === true || observation.path !== held.path) return true;
+    if (observation.treeUnavailable === true || observation.truncated || observation.path !== held.path) return true;
     return diffScreens(held, indexScreen(observation)).length > 0;
   }
 
