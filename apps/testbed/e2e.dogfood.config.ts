@@ -42,7 +42,6 @@ const resetExpenses = defineTool(
 );
 
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.testbed-dogfood',
   tests: 'tests-dogfood/**/*.e2e.ts',
   targets: [

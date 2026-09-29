@@ -175,8 +175,12 @@ describe('resolveConfig', () => {
     );
   });
 
-  it('rejects unsupported specVersion values', () => {
-    expect(() => resolve({ specVersion: '0.2' } as never)).toThrow(/specVersion/);
+  it('rejects specVersion, which the runner version replaced', () => {
+    for (const specVersion of ['0.1', '0.2']) {
+      expect(() => resolve({ specVersion } as never)).toThrow(
+        'config key "specVersion" was removed; remove it; the runner version is the format version',
+      );
+    }
   });
 
   it('rejects target keys the contract does not know', () => {

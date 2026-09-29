@@ -80,7 +80,6 @@ export interface ResolvedSecret {
 type ArtifactPolicy = 'best-effort' | 'required';
 
 export interface ResolvedConfig {
-  readonly specVersion: '0.1';
   readonly projectId: string;
   readonly projectRoot: string;
   readonly configPath: string | undefined;
@@ -161,7 +160,6 @@ const TARGET_NAME_PATTERN = /^(?!\.+$)[A-Za-z0-9_.-]+$/;
 const TARGET_KEYS = new Set(['name', 'platform', 'engine', 'video']);
 
 const TOP_LEVEL_KEYS = new Set([
-  'specVersion',
   'projectId',
   'targets',
   'tests',
@@ -187,6 +185,11 @@ const CACHE_MODES = new Set(['off', 'read-only', 'read-write']);
 
 const APP_BELONGS_TO_ENGINE =
   'the app under test is declared by the engine: engine: web({ url }) for a browser, mobile({ platform, app }) for a device';
+
+/** Keys this runner used to accept, each mapped to what replaces it. */
+const REMOVED_TOP_LEVEL_KEYS: ReadonlyMap<string, string> = new Map([
+  ['specVersion', 'remove it; the runner version is the format version'],
+]);
 
 /** Keys from other runners' configs, each mapped to where that fact lives here. */
 const FOREIGN_TOP_LEVEL_KEYS: Readonly<Record<string, string>> = {
@@ -253,18 +256,16 @@ export function resolveConfig(
     throw new ConfigurationError('INVALID_CONFIG', 'config must be an object');
   }
   for (const key of Object.keys(raw)) {
+    const removed = REMOVED_TOP_LEVEL_KEYS.get(key);
+    if (removed !== undefined) {
+      throw new ConfigurationError('INVALID_CONFIG', `config key "${key}" was removed; ${removed}`);
+    }
     if (!TOP_LEVEL_KEYS.has(key)) {
       throw new ConfigurationError(
         'INVALID_CONFIG',
         `unknown config key "${key}"${unknownTopLevelKeyHint(key)}`,
       );
     }
-  }
-  if (raw.specVersion !== undefined && raw.specVersion !== '0.1') {
-    throw new ConfigurationError(
-      'INVALID_CONFIG',
-      `unsupported specVersion ${JSON.stringify(raw.specVersion)}; this runner implements 0.1`,
-    );
   }
 
   const targets = resolveTargets(raw, options.projectRoot, options.ports ?? {}, runVideo(raw, cli));
@@ -306,7 +307,6 @@ export function resolveConfig(
   const cache = resolveCacheConfig(raw, ci, options.projectRoot, cli.cache, cli.cacheStrict === true);
 
   const resolved: ResolvedConfig = {
-    specVersion: '0.1',
     projectId,
     projectRoot: options.projectRoot,
     configPath: options.configPath,

@@ -28,7 +28,6 @@ if (process.env.E2E_DEVTOOLS !== undefined && process.env.E2E_DEVTOOLS !== '') {
  * providers.
  */
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.testbed-agent',
   artifacts: { kinds: ['screenshot'] },
   tests: 'tests-scratch/**/*.e2e.ts',

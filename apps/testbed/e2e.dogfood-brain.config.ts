@@ -76,7 +76,6 @@ const mathBrain: StepExecutor = {
 };
 
 export default {
-  specVersion: '0.1',
   projectId: 'dev.e2e.testbed-dogfood-brain',
   tests: 'tests-dogfood-brain/**/*.e2e.ts',
   targets: [{ name: 'web', engine: web({ url: 'http://127.0.0.1:4312' }) }],

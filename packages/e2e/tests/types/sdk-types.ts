@@ -82,6 +82,8 @@ engineSnapshot.treeUnavailable satisfies true | undefined;
 ({ targets, cache: 'read-write' }) satisfies E2EConfig;
 ({ targets, cache: { mode: 'read-only', store: remoteStore, dir: 'shared-cache' } }) satisfies E2EConfig;
 ({ targets: [{ platform: 'ios' }] }) satisfies E2EConfig;
+// @ts-expect-error specVersion is gone; the runner version is the format version
+({ targets, specVersion: '0.1' }) satisfies E2EConfig;
 // A target inherits its platform from the engine; the resolver rejects one with neither.
 ({ targets: [{ engine }] }) satisfies E2EConfig;
 declare const model: ModelInstance;

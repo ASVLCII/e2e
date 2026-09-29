@@ -20,7 +20,6 @@ import { runProject, type RunOutcome } from '../helpers/run-project.ts';
 
 function fakeConfig(fake: FakeEngineHandle, extra: Partial<E2EConfig> = {}): E2EConfig {
   return {
-    specVersion: '0.1',
     targets: [{ name: 'fake', platform: 'web', engine: fake.engine }],
     artifacts: ['screenshot'],
     actionTimeout: 300,
