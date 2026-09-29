@@ -119,8 +119,8 @@ is resolved on the host when each attempt starts and registered for redaction
 then. It is not a fill and does not disable pixels: the value goes to the
 engine, not into the page. The Playwright trace records the options the
 browser context opened with, the password included, so the runner rewrites
-the trace of such an attempt as it does after a fill, keeping its
-screencast frames.
+the trace of such an attempt as it does after a fill, and drops its
+screencast frames too, since a page can render what the engine was handed.
 
 The redactor matches each registered value character by character, in every
 spelling a serializer gives a character: as is; JSON-escaped once or twice,
@@ -189,7 +189,7 @@ hook; its console output reaches the runner's streams as written.
   cut at its limit partway through a secret, or a selection over part of
   one. Plain trace text that happens to share 8 characters with a value is
   masked too.
-  Screencast frames are dropped, since the viewport is pixel-tainted. Other
+  Screencast frames are dropped, since a frame cannot be rewritten. Other
   image entries cannot be rewritten: one containing the literal secret bytes
   is dropped, an image the app served that merely draws the secret survives.
   A trace the runner cannot rewrite is deleted and the attempt records
@@ -256,7 +256,7 @@ project-relative path you configure.
 | --- | --- | --- |
 | `report.json` | The run record. Errors, reasoning excerpts, and action summaries pass the redactor. | complete |
 | `artifacts/.../*.png` | Screenshots. Secure fields are masked before screenshots are returned or saved as artifacts. | complete |
-| `artifacts/.../trace.zip` | Playwright trace, rewritten after a secret fill, screencast frames dropped, or when an engine option holds a secret, frames kept. | not-required, complete, or deleted |
+| `artifacts/.../trace.zip` | Playwright trace, rewritten after a secret fill or when an engine option holds a secret, screencast frames dropped. | not-required, complete, or deleted |
 | `artifacts/.../*.webm`, `*.mp4` | Video, opt-in through `video` or `--video`; `retain-on-failure` keeps only the attempts that did not pass. | incomplete |
 | `artifacts/.../downloads/*` | Files the app served through a download. Text ones are rewritten after a secret fill; the rest are kept as served. | complete or incomplete |
 | `artifacts/.../failure/screen.txt` | The redacted tree at the moment of failure. | complete |

@@ -721,13 +721,13 @@ export class TargetExecutor implements SerialHost {
         // it. Only a session a secret was filled on, or whose engine holds
         // one in its options (a trace records the options the attempt opened
         // with), can have recorded one: an unmarked trace needs no
-        // rewriting, and a marked one is kept only once rewritten. The
-        // screencast frames go only with the fill's pixel taint.
+        // rewriting, and a marked one is kept only once rewritten, without
+        // its screencast frames.
         const secrecy = sessionSecrecy(session, this.config.secrets);
         let redaction: 'complete' | 'not-required' = 'not-required';
         if (secrecy.taint.value || secrecy.engineHeld.value) {
           try {
-            await redactTraceArchives(artifactSink.dir, archives, secrecy.ledger, { keepFrames: !secrecy.taint.value });
+            await redactTraceArchives(artifactSink.dir, archives, secrecy.ledger);
           } catch (cause) {
             // The trace is gone. The report says why whatever the policy, and
             // a required trace that is missing is a cleanup failure.
