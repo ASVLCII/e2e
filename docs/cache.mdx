@@ -39,17 +39,24 @@ npx e2e run --no-cache
 
 1. Check the starting screen: the same route, whatever the record id, the
    query, or the fragment. Retries always run live.
-2. Find each recorded control and repeat its action. The runner matches
-   controls by their test id first: a control recorded with one is found by
-   it whatever its label reads now, a `Like (0 likes)` button that became
-   `Unlike (1 like)`, and twins sharing an id are told apart by their
-   recorded place, never by their labels. A control without a test id, or
-   whose id is gone, is found by its label, exactly or by shape, so `Reply (0
-   replies)` finds `Reply (1 reply)` and `Bob · now` finds `Bob · 5m`. It
-   waits for missing controls and stops if a match is ambiguous. A control
-   with no name is found by its place among the unnamed controls of its
-   kind. Give controls test ids: a label that carries state changes on every
-   run, an id only when the code does, and then the step simply re-records.
+2. Find each recorded control and repeat its action. The runner tries the
+   strongest identity it recorded first and degrades from there:
+
+   | Rung | Identity | Where it comes from |
+   | --- | --- | --- |
+   | 1 | test id | `data-testid` on web, the accessibility identifier on iOS and Android |
+   | 2 | element id | an authored `id` attribute on web; minted ids (`:r3:`, `input-1739`) are skipped |
+   | 3 | exact label | the accessible name, or the text when there is no name |
+   | 4 | label shape | the label with counts, plurals, and relative times folded: `Reply (0 replies)` finds `Reply (1 reply)`, `Bob · now` finds `Bob · 5m` |
+   | 5 | place | an unnamed control by its index among the unnamed controls of its kind |
+
+   A control found on an id rung is the control whatever its label reads
+   now, a `Like (0 likes)` button that became `Unlike (1 like)`. Twins
+   sharing an id are told apart by their recorded place, never by their
+   labels, and a label rung that finds another number of them hands off
+   instead. It waits for missing controls and stops if a match is ambiguous.
+   Give controls test ids: a label that carries state changes on every run,
+   an id only when the code does, and then the step simply re-records.
 3. Check the final path and controls that appeared during the original step.
    Controls are checked by test id with their label compared by shape, so a
    count that moved on is still the effect; text that changes with the data,

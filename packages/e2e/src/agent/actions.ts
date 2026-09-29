@@ -257,6 +257,21 @@ function describePlaced(
  * Values a secure node holds are never part of it — descriptors carry how a
  * node is named, not what it contains.
  */
+/**
+ * An element id worth relocating by: one a developer wrote, not one a
+ * framework minted per render (`:r3:`, `radix-:r1:`, `input-1739`). A minted
+ * id would change under the recording like a label does, and a wrong id
+ * match acts on the wrong control.
+ */
+function stableElementId(id: string | undefined): string | undefined {
+  if (id === undefined) return undefined;
+  const trimmed = id.trim();
+  if (trimmed === '' || trimmed.length > MAX_TRACE_DESCRIPTOR_CHARS) return undefined;
+  if (!/^[A-Za-z][\w-]*$/.test(trimmed)) return undefined;
+  if (/\d{3,}$/.test(trimmed) || /^(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{12,}$/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
 export function describeTarget(
   node: SemanticNode,
   redact: (text: string) => string,
@@ -270,6 +285,7 @@ export function describeTarget(
   const name = field(node.name);
   const text = field(node.text);
   const testId = field(node.testId);
+  const elementId = stableElementId(node.attributes?.['id']);
   const placeholder = field(node.attributes?.['placeholder']);
   const selector = node.selector === undefined ? undefined : bound(node.selector, MAX_TRACE_DESCRIPTOR_CHARS);
   const inputPurpose =
@@ -279,6 +295,7 @@ export function describeTarget(
     ...(name === undefined ? {} : { name }),
     ...(text === undefined || text === name ? {} : { text }),
     ...(testId === undefined ? {} : { testId }),
+    ...(elementId === undefined ? {} : { elementId }),
     ...(placeholder === undefined ? {} : { placeholder }),
     ...(selector === undefined ? {} : { selector }),
     ...(inputPurpose === undefined ? {} : { inputPurpose }),

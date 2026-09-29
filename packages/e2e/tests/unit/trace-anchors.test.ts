@@ -199,6 +199,12 @@ describe('describeAnchors', () => {
     ]);
   });
 
+  it('prefers a stable container over leaves that are all volatile', () => {
+    const group = node('g', { role: 'group', name: 'Saved items', children: [heading] });
+    const stamp = node('s', { text: 'Posted yesterday' });
+    expect(describeAnchors(nodes([heading]), nodes([heading, group, stamp]), options)).toEqual([{ role: 'group', name: 'Saved items' }]);
+  });
+
   it('is empty when nothing appeared', () => {
     expect(describeAnchors(nodes([heading, emptyMarker]), nodes([heading, emptyMarker]), options)).toEqual([]);
   });

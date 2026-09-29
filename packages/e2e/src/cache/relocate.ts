@@ -56,19 +56,20 @@ export interface DescribedNode {
 }
 
 /**
- * The fields a recorded test id identifies a control by: the id and what the
- * control is, never what it says. A label in many apps carries state
- * (`Like (0 likes)`, a row named after its contents and age); the test id is
- * the app's own stable handle. Twins sharing an id resolve by the recorded
- * position, never by whichever label happens to match now.
+ * The identities a control is relocated by, strongest first: what the app
+ * named it for tests, then the element id its author wrote. Either is the
+ * control's own stable handle, and what it says plays no part: a label in
+ * many apps carries state (`Like (0 likes)`, a row named after its contents
+ * and age). Twins sharing an id resolve by the recorded position, never by
+ * whichever label happens to match now.
  */
-const TEST_ID_FIELDS: readonly DescriptorField[] = ['role', 'testId', 'placeholder', 'inputPurpose'];
+const ID_FIELDS: readonly ('testId' | 'elementId')[] = ['testId', 'elementId'];
 
 /** What a control is apart from any id: the fields a label-matched tier compares verbatim. */
 export const SEMANTIC_ID_FIELDS: readonly DescriptorField[] = ['role', 'placeholder', 'inputPurpose'];
 
 /** Every field a descriptor can carry as identity; an anonymous descriptor must equal a candidate on all of them. */
-const ALL_IDENTITY_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text', 'testId', 'placeholder', 'inputPurpose'];
+const ALL_IDENTITY_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text', 'testId', 'elementId', 'placeholder', 'inputPurpose'];
 
 /** The fields a control is labelled by. Text counts only when no name was recorded: a relabeled button is still the button. */
 export type LabelField = 'name' | 'text';
@@ -82,10 +83,11 @@ const AGE_ALL = new RegExp(AGE.source, 'gi');
 
 /**
  * A label with the state it carries taken out: every run of digits reads `#`,
- * a relative time reads `<age>`, and the plural a count governs is dropped, so
- * `Reply (0 replies)` and `Reply (1 reply)`, or `Bob · now` and `Bob · 2m`,
- * are the same shape. Case and whitespace are folded too. A label that
- * carries no state is its own shape.
+ * a relative time reads `<age>`, and the noun a count governs is reduced to
+ * a stem that its singular and plural share (`reply`/`replies`, `movie`/
+ * `movies`, `like`/`likes`), so `Reply (0 replies)` and `Reply (1 reply)`,
+ * or `Bob · now` and `Bob · 2m`, are the same shape. Case and whitespace
+ * are folded too. A label that carries no state is its own shape.
  */
 export function labelShape(label: string): string {
   return label
@@ -93,16 +95,32 @@ export function labelShape(label: string): string {
     .replace(RELATIVE_TIME_ALL, '<age>')
     .replace(AGE_ALL, '<age>')
     .replace(/\d+/g, '#')
-    .replace(/#(\s+[a-z]+?)ies\b/g, '#$1y')
-    .replace(/#(\s+[a-z]+?)s\b/g, '#$1')
+    .replace(/#(\s+)([a-z]+)\b/g, (_match, space: string, noun: string) => `#${space}${countedStem(noun)}`)
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-/** Whether two optional labels share a shape; both absent counts, one absent does not. */
+/** The stem a counted noun shares with its plural: a trailing `s` dropped, then `ie` and `y` endings folded to `i`. */
+function countedStem(noun: string): string {
+  const singular = noun.length > 3 && noun.endsWith('s') ? noun.slice(0, -1) : noun;
+  return singular.replace(/(?:ie|y)$/, 'i');
+}
+
+/**
+ * Whether a label reads as nothing but state: a bare count or a bare time.
+ * Such a label's shape says only that it is a number, so the number itself
+ * is compared: a counter left at `0` must not pass as the recorded `1`.
+ */
+function isBareState(shape: string): boolean {
+  return /^(?:#|<age>)$/.test(shape);
+}
+
+/** Whether two optional labels share a shape; both absent counts, one absent does not. A bare count compares exactly. */
 function sameShape(recorded: string | undefined, candidate: string | undefined): boolean {
   if (recorded === undefined || candidate === undefined) return recorded === candidate;
-  return labelShape(recorded) === labelShape(candidate);
+  const shape = labelShape(recorded);
+  if (shape !== labelShape(candidate)) return false;
+  return isBareState(shape) ? recorded.trim() === candidate.trim() : true;
 }
 
 /** Whether the candidate's labels read as the recording's on every listed field, by shape; an exact label is its own shape. */
@@ -125,6 +143,7 @@ export function sameLabels(
 export function isAnonymous(descriptor: TraceTargetDescriptor): boolean {
   return (
     descriptor.testId === undefined &&
+    descriptor.elementId === undefined &&
     descriptor.name === undefined &&
     descriptor.text === undefined &&
     descriptor.placeholder === undefined
@@ -140,9 +159,9 @@ export function isRelocatableDescriptor(descriptor: TraceTargetDescriptor): bool
   return isAnonymous(descriptor) ? descriptor.role !== undefined && descriptor.position !== undefined : true;
 }
 
-/** The descriptor without its test id: what is left to match by when the id churned. */
-export function withoutTestId(descriptor: TraceTargetDescriptor): TraceTargetDescriptor {
-  const { testId: _testId, ...semantic } = descriptor;
+/** The descriptor without its ids: what is left to match by when they churned. */
+export function withoutIds(descriptor: TraceTargetDescriptor): TraceTargetDescriptor {
+  const { testId: _testId, elementId: _elementId, ...semantic } = descriptor;
   return semantic;
 }
 
@@ -153,7 +172,7 @@ export function withoutTestId(descriptor: TraceTargetDescriptor): TraceTargetDes
  * identifies keeps it.
  */
 export function identifyingProjection(descriptor: TraceTargetDescriptor): TraceTargetDescriptor {
-  const semantic = withoutTestId(descriptor);
+  const semantic = withoutIds(descriptor);
   return isAnonymous(semantic) ? descriptor : semantic;
 }
 
@@ -235,14 +254,18 @@ export function relocateDescriptor(
  * The ids a descriptor matches in a fresh observation, in document order:
  * the first tier that matches anything decides.
  *
- * 1. With a recorded test id: every node with that id (`TEST_ID_FIELDS`).
- *    One is the control; several are twins the recorded position tells
- *    apart; none means the id churned, and the tiers below take over as if
- *    no id had been recorded.
- * 2. The nodes whose labels equal the recording's exactly.
- * 3. The nodes whose labels share the recording's shape (`labelShape`), so a
+ * 1. With a recorded test id: every node of that kind with that id. One is
+ *    the control; several are twins the recorded position tells apart; none
+ *    means the id churned, and the tiers below take over.
+ * 2. With a recorded element id (a document platform's authored `id`): the
+ *    same, one rung weaker because an id is not written for tests.
+ * 3. The nodes whose labels equal the recording's exactly.
+ * 4. The nodes whose labels share the recording's shape (`labelShape`), so a
  *    control whose label counts or times something is found once the count
  *    moved.
+ *
+ * A position recorded among id twins holds on every rung below: a label tier
+ * that finds another number of controls is looking at a different set.
  *
  * Empty when nothing matches. The recorder uses the same projection to
  * notice, before it writes a target, that the description alone would not
@@ -267,10 +290,16 @@ function matchingIds(
             (candidate) => containerKey(candidate.id, nodes, parents, options.redact) === descriptor.within,
           );
         })();
-  const tiers = matchingTiers(descriptor);
-  for (const tier of tiers) {
+  const twins = descriptor.position?.of;
+  const idRungs = ID_FIELDS.filter((id) => descriptor[id] !== undefined).length;
+  for (const [index, tier] of matchingTiers(descriptor).entries()) {
     const matched = keyed.filter((candidate) => tier(candidate.descriptor));
-    if (matched.length > 0) return matched.map((candidate) => candidate.id);
+    if (matched.length === 0) continue;
+    // A position was counted among the controls an id rung matched. A label
+    // rung that finds another number of them is looking at a different set,
+    // where the recorded index would name an unrelated control.
+    if (idRungs > 0 && index >= idRungs && twins !== undefined && twins > 1 && matched.length !== twins) continue;
+    return matched.map((candidate) => candidate.id);
   }
   return [];
 }
@@ -280,10 +309,12 @@ type MatchTier = (candidate: TraceTargetDescriptor) => boolean;
 
 function matchingTiers(descriptor: TraceTargetDescriptor): readonly MatchTier[] {
   if (isAnonymous(descriptor)) return [(candidate) => fieldsIdentical(descriptor, candidate, ALL_IDENTITY_FIELDS)];
-  const semantic = withoutTestId(descriptor);
+  const semantic = withoutIds(descriptor);
   const labels: readonly LabelField[] = semantic.name === undefined ? ['name', 'text'] : ['name'];
   return [
-    ...(descriptor.testId === undefined ? [] : [(candidate: TraceTargetDescriptor) => fieldsEqual(descriptor, candidate, TEST_ID_FIELDS)]),
+    ...ID_FIELDS.filter((id) => descriptor[id] !== undefined).map(
+      (id) => (candidate: TraceTargetDescriptor) => fieldsEqual(descriptor, candidate, [id, ...SEMANTIC_ID_FIELDS]),
+    ),
     ...(isAnonymous(semantic)
       ? []
       : [

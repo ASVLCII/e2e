@@ -379,9 +379,13 @@ export class StepTraceSession {
    * only if the anchors are already on it, which then needs no second look.
    */
   private async endStateMatches(trace: ActionTrace): Promise<EndStateVerdict> {
-    if (!this.host.traceEligible) return { kind: 'mismatch', missing: [] };
+    const anchors = trace.endAnchors ?? [];
+    // No screen to read: every recorded anchor is unaccounted for.
+    if (!this.host.traceEligible) return { kind: 'mismatch', missing: anchors };
     const arrived = await this.endScreen(trace);
-    if (arrived === undefined) return { kind: 'mismatch', missing: [] };
+    if (arrived === 'unreadable') return { kind: 'mismatch', missing: anchors };
+    // Another screen: the route is what differed, and anchors are not the story.
+    if (arrived === 'elsewhere') return { kind: 'mismatch', missing: [] };
     if (arrived.anchorsSeen) return { kind: 'matched' };
     const missing = await verifyAnchors(this.host, trace.endAnchors ?? [], {
       initial: arrived.screen,
@@ -397,16 +401,18 @@ export class StepTraceSession {
    * verify them again. A route still undecided when the poll runs out is
    * handed on with the anchors unseen: the caller's anchor wait, sized by
    * the recording, is the one that decides it, as for a route that matched.
+   * `unreadable` when no semantic screen could be captured, `elsewhere` when
+   * the app is on another route.
    */
   private async endScreen(
     trace: ActionTrace,
-  ): Promise<{ readonly screen: SemanticScreen; readonly anchorsSeen: boolean } | undefined> {
+  ): Promise<{ readonly screen: SemanticScreen; readonly anchorsSeen: boolean } | 'unreadable' | 'elsewhere'> {
     const startedMs = Date.now();
     const recorded = trace.endPath === undefined ? undefined : routeOf(trace.endPath);
     const anchors = trace.endAnchors ?? [];
     for (let attempt = 0; ; attempt += 1) {
       const observation = await probeScreen(this.host, 'raw');
-      if (observation?.kind !== 'semantic' || !this.host.traceEligible) return undefined;
+      if (observation?.kind !== 'semantic' || !this.host.traceEligible) return 'unreadable';
       if (recorded === undefined || observation.path === undefined) return { screen: observation, anchorsSeen: false };
       const verdict = compareRoutes(recorded, routeOf(observation.path));
       if (verdict === 'same') return { screen: observation, anchorsSeen: false };
@@ -424,7 +430,7 @@ export class StepTraceSession {
         this.host.remainingMs() <= delay ||
         this.host.signal.aborted
       ) {
-        return undecided ? { screen: observation, anchorsSeen: false } : undefined;
+        return undecided ? { screen: observation, anchorsSeen: false } : 'elsewhere';
       }
       await sleep(delay, this.host.signal);
     }

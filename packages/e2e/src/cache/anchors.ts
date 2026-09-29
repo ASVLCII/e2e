@@ -25,7 +25,7 @@ import {
   RELATIVE_TIME,
   sameLabels,
   SEMANTIC_ID_FIELDS,
-  withoutTestId,
+  withoutIds,
   type DescriptorField,
   type DescriptorMatchOptions,
 } from './relocate.ts';
@@ -41,7 +41,7 @@ export type AnchorOptions = DescriptorMatchOptions;
  * step whose save never took. The structural selector is left out — anchors
  * ask whether an effect is visible, never where it sits in the document.
  */
-const ANCHOR_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text', 'testId', 'placeholder', 'inputPurpose'];
+const ANCHOR_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text', 'testId', 'elementId', 'placeholder', 'inputPurpose'];
 
 /**
  * Derives the end anchors of one step: relocatable descriptors present in the
@@ -74,9 +74,11 @@ export function describeAnchors(
     seen.add(key);
     (node.children === undefined || node.children.length === 0 ? leaves : containers).push(descriptor);
   }
-  const all = leaves.length > 0 ? leaves : containers;
-  const stable = all.filter((anchor) => !isVolatileAnchor(anchor));
-  return (stable.length > 0 ? stable : all).toSorted((a, b) => durability(a) - durability(b)).slice(0, MAX_TRACE_ANCHORS);
+  const stable = (anchors: TraceTargetDescriptor[]): TraceTargetDescriptor[] => anchors.filter((anchor) => !isVolatileAnchor(anchor));
+  // Stable leaves, else stable containers, else whatever appeared: a volatile
+  // leaf beside a steady group must not push the group out.
+  const chosen = [stable(leaves), stable(containers), leaves, containers].find((group) => group.length > 0) ?? [];
+  return chosen.toSorted((a, b) => durability(a) - durability(b)).slice(0, MAX_TRACE_ANCHORS);
 }
 
 /**
@@ -87,7 +89,7 @@ export function describeAnchors(
  * ties keep document order.
  */
 function durability(anchor: TraceTargetDescriptor): number {
-  if (anchor.testId !== undefined) return anchor.name !== undefined || anchor.text !== undefined ? 0 : 1;
+  if (anchor.testId !== undefined || anchor.elementId !== undefined) return anchor.name !== undefined || anchor.text !== undefined ? 0 : 1;
   if (anchor.text !== undefined) return 2;
   return 3;
 }
@@ -169,8 +171,9 @@ export function missingAnchors(
  * fields must identify it on their own, as `identifyingProjection` keys it.
  */
 function anchorMatches(anchor: TraceTargetDescriptor, candidate: TraceTargetDescriptor): boolean {
-  const semantic = withoutTestId(anchor);
-  const identified = (anchor.testId !== undefined && candidate.testId === anchor.testId) || !isAnonymous(semantic);
+  const semantic = withoutIds(anchor);
+  const sameId = (anchor.testId !== undefined && candidate.testId === anchor.testId) || (anchor.elementId !== undefined && candidate.elementId === anchor.elementId);
+  const identified = sameId || !isAnonymous(semantic);
   return identified && fieldsEqual(semantic, candidate, SEMANTIC_ID_FIELDS) && sameLabels(anchor, candidate, ['name', 'text']);
 }
 
