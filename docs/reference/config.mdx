@@ -109,7 +109,8 @@ export interface E2EConfig {
   video?: RecordingMode;
   /**
    * The results directory, relative to the project root; default `.e2e`.
-   * `--output <dir>` overrides it for one run.
+   * `--output <dir>` overrides it for one run. An existing directory must
+   * be e2e's: see below.
    */
   output?: string;
   /**
@@ -385,31 +386,45 @@ output: 'test-results/e2e',
 Everything a run writes about itself goes under one directory, `.e2e` by
 default, resolved from the project root. `--output <dir>` on
 [`e2e run`](/reference/cli#e2e-run) and `e2e explore` overrides it for one
-run.
+run, and on `e2e list` names the report `--last-failed` reads.
 
 | Path under the output | What |
 | --- | --- |
-| `report.json` | The canonical report; `--last-failed` reads the one here |
-| `junit.xml`, `summary.md`, `failures/` | The `junit` and `markdown` reporters' files |
+| `report.json` | The canonical report; `--last-failed` reads the one here. Written by every run whose config loaded, one that selected nothing included |
+| `junit.xml`, `summary.md`, `failures/` | The `junit` and `markdown` reporters' files; `failures/` is emptied on every run |
 | `ai-trace.json` | `--ai-trace` |
-| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared when a run starts, so it holds the latest run's evidence and nothing its report no longer names |
+| `artifacts/` | Screenshots, traces, videos, downloads, and logs, one directory per attempt. Cleared when a run with something to run starts, so it holds the latest such run's evidence and nothing its report no longer names; a run that selects nothing (`NO_TESTS`) leaves it as it was |
 | `sessions/` | The run's encrypted `test.setup` sessions, deleted when it ends |
+| `mcp/<target>/<attempt>/` | Each [`e2e mcp`](/reference/mcp) session's artifacts, such as its trace. Nothing clears it, so a run beside a live session never deletes what the session is writing |
 | `videos/<session>/` | [`e2e mcp`](/reference/mcp#recording) session recordings |
-
-An `e2e mcp` session writes its attempt's artifacts under the same
-`artifacts/` and never clears it.
+| `.e2e-output` | The marker a run or a session leaves in an output other than the default `.e2e`, saying the directory is e2e's |
 
 The replay cache is independent: [`cache.dir`](#cache) defaults to
 `.e2e/cache` and resolves from the project root whatever `output` says, so
-moving the results never moves the recordings. Because a run clears and
-owns part of it, the output directory fails the config load with
+moving the results never moves the recordings.
+
+A run deletes and writes over what is in the output directory, so it only
+uses a directory it can tell is its own: one that does not exist yet, the
+default `.e2e`, one that carries the `.e2e-output` marker, one whose
+`report.json` e2e wrote, or one that holds nothing but the names in the
+table above and `cache.dir`. An empty directory counts. Any other existing
+directory, `src` or `node_modules` say, fails the config load with
+`INVALID_CONFIG` naming what is in it; name a new directory, or create
+`.e2e-output` in it if it is e2e's. The output also fails with
 `INVALID_CONFIG`, naming the reason, when it:
 
 - is the project root, or outside it;
 - is `cache.dir` or inside it, or would hold `cache.dir` under `artifacts/`,
-  `sessions/`, or `videos/`;
+  `failures/`, `mcp/`, `sessions/`, or `videos/`;
 - holds a directory a `tests` glob scans (`output: 'tests'` with the default
-  `tests/**/*.e2e.ts`).
+  `tests/**/*.e2e.ts`), or is inside one (`output: 'tests/results'`, or
+  `output: 'results'` with `tests: '**/*.e2e.ts'`), where a file a run
+  writes could be collected as a test. A dot directory such as `.e2e` is
+  outside `**`, and an exclusion such as `'!results/**'` keeps discovery out.
+
+Each check reads the path the filesystem opens: symlinks are resolved first,
+and on a filesystem that ignores case (the macOS and Windows default)
+`TESTS` is `tests`.
 
 `e2e init` writes `.gitignore` entries for the default `.e2e/` paths only.
 With `output` set elsewhere, add that directory to `.gitignore` yourself.

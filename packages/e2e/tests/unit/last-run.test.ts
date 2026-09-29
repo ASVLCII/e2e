@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resultId } from '../../src/internal/ids.ts';
-import { lastFailedIds, readLastRun } from '../../src/run/last-run.ts';
+import { lastFailedIds, lastRunOutcome, readLastRun } from '../../src/run/last-run.ts';
 
 let dir: string;
 
@@ -145,5 +145,23 @@ describe('readLastRun and lastFailedIds', () => {
         message: expect.stringMatching(/^--last-failed needs a report-1 document at .*report\.json, which holds something else; run once without the flag to write one$/u),
       });
     }
+  });
+
+  it('tells how the run ended: its status, the results it carried out, and its error codes once each', async () => {
+    const document = (status: string, results: readonly Record<string, unknown>[], errors: readonly Record<string, unknown>[]) => {
+      const parsed = JSON.parse(report(results, errors)) as { run: Record<string, unknown> };
+      return readLastRun(reportFile(JSON.stringify({ ...parsed, run: { ...parsed.run, status } })));
+    };
+    expect(lastRunOutcome(await document('error', [], [{ code: 'NO_TESTS', phase: 'collection' }]))).toEqual({ status: 'error', ran: 0, errors: ['NO_TESTS'] });
+    const mixed = await document(
+      'error',
+      [
+        { id: 'a', status: 'passed' },
+        { id: 'b', status: 'skipped', skip: { cause: 'explicit', reason: 'later' } },
+        { id: 'c', status: 'passed', selected: false },
+      ],
+      [{ code: 'REPORT_WRITE_FAILED' }, { code: 'REPORT_WRITE_FAILED' }],
+    );
+    expect(lastRunOutcome(mixed)).toEqual({ status: 'error', ran: 1, errors: ['REPORT_WRITE_FAILED'] });
   });
 });

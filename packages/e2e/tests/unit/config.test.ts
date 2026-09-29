@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isCiMode, resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine, type EngineAppDeclaration } from '../../src/engine/index.ts';
 import { secrets } from '../../src/secrets.ts';
@@ -1015,10 +1015,129 @@ describe('resolveConfig', () => {
       expect(refusal({ output: 'e2e', tests: 'e2e/login.e2e.ts' })).toContain('holds e2e,');
     });
 
-    it('accepts an output beside the tests, or inside a glob rooted higher up', () => {
+    it('refuses a cache.dir under any directory the run or a reporter clears or owns', () => {
+      for (const owned of ['artifacts', 'failures', 'mcp', 'sessions', 'videos']) {
+        expect(refusal({ output: 'out', cache: { dir: `out/${owned}` } })).toContain(`would hold cache.dir out/${owned} under ${owned}/`);
+      }
+    });
+
+    it('refuses an output a tests glob scans, unless an exclusion or a dot name keeps discovery out', () => {
+      expect(refusal({ output: 'tests/results' })).toContain('output "tests/results" is scanned by the tests glob "tests/**/*.e2e.ts"');
+      expect(refusal({ output: 'tests/results' })).toContain("add '!tests/results/**' to tests");
+      expect(refusal({ output: 'results', tests: '**/*.e2e.ts' })).toContain("add '!results/**' to tests");
+      expect(resolve({ output: 'tests/results', tests: ['tests/**/*.e2e.ts', '!tests/results/**'] }).output).toBe(path.join(ROOT, 'tests', 'results'));
+      expect(resolve({ output: '.results', tests: '**/*.e2e.ts' }).output).toBe(path.join(ROOT, '.results'));
+      expect(resolve({ output: 'e2e/results', tests: 'e2e/*.e2e.ts' }).output).toBe(path.join(ROOT, 'e2e', 'results'));
+    });
+
+    it('accepts an output beside the tests, excluded from a glob rooted higher up, or named with two leading dots', () => {
       expect(resolve({ output: 'results', tests: ['tests/**/*.e2e.ts', '!results/**'] }).output).toBe(path.join(ROOT, 'results'));
-      expect(resolve({ output: 'results', tests: '**/*.e2e.ts' }).output).toBe(path.join(ROOT, 'results'));
+      expect(resolve({ output: 'results', tests: ['**/*.e2e.ts', '!results/**'] }).output).toBe(path.join(ROOT, 'results'));
       expect(resolve({ output: 'out', cache: { dir: 'out/replays' } }).cache.dir).toBe(path.join(ROOT, 'out', 'replays'));
+      expect(resolve({ output: '..results' }).output).toBe(path.join(ROOT, '..results'));
+    });
+
+    describe('on disk', () => {
+      let root: string;
+      let base: string;
+      /** The message resolving `raw` in `root` throws. */
+      const refusalIn = (raw: Partial<E2EConfig>): string => {
+        try {
+          resolveConfig({ targets: TARGETS, ...raw }, { projectRoot: root, env: BASE_ENV });
+        } catch (error) {
+          expect(error).toMatchObject({ code: 'INVALID_CONFIG' });
+          return (error as Error).message;
+        }
+        throw new Error('resolved');
+      };
+      const outputIn = (raw: Partial<E2EConfig>): string => resolveConfig({ targets: TARGETS, ...raw }, { projectRoot: root, env: BASE_ENV }).output;
+      /** Writes `content` at `relative` under the project root, creating its directories. */
+      const write = (relative: string, content = ''): void => {
+        fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+        fs.writeFileSync(path.join(root, relative), content);
+      };
+      /** Whether the filesystem under the project root ignores case, as macOS and Windows do by default. */
+      const caseInsensitive = (): boolean => fs.existsSync(root.toUpperCase()) && fs.existsSync(root.toLowerCase());
+
+      beforeEach(() => {
+        base = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-output-'));
+        root = path.join(base, 'project');
+        fs.mkdirSync(root);
+      });
+
+      afterEach(() => {
+        fs.rmSync(base, { recursive: true, force: true });
+      });
+
+      it('resolves symlinks before judging where the output is', () => {
+        fs.symlinkSync('.', path.join(root, 'root-link'));
+        expect(refusalIn({ output: 'root-link' })).toContain('output "root-link" is the project root');
+        fs.mkdirSync(path.join(base, 'elsewhere'));
+        fs.symlinkSync(path.join(base, 'elsewhere'), path.join(root, 'out-link'));
+        expect(refusalIn({ output: 'out-link' })).toContain('is outside the project root');
+        expect(refusalIn({ output: 'out-link/not/yet/made' })).toContain('is outside the project root');
+        fs.mkdirSync(path.join(root, 'tests'));
+        fs.symlinkSync('tests', path.join(root, 'tests-link'));
+        expect(refusalIn({ output: 'tests-link' })).toContain('holds tests, where the tests glob');
+        // A symlinked project root still holds its own output.
+        const alias = path.join(base, 'alias');
+        fs.symlinkSync(root, alias);
+        expect(resolveConfig({ targets: TARGETS }, { projectRoot: alias, env: BASE_ENV }).output).toBe(path.join(alias, '.e2e'));
+      });
+
+      it('compares names without case where the filesystem ignores it', () => {
+        if (!caseInsensitive()) return;
+        fs.mkdirSync(path.join(root, 'tests'));
+        expect(refusalIn({ output: 'TESTS' })).toContain('holds tests, where the tests glob');
+        expect(refusalIn({ output: 'TESTS/results' })).toContain('is scanned by the tests glob');
+        fs.mkdirSync(path.join(root, '.e2e', 'cache'), { recursive: true });
+        expect(refusalIn({ output: '.E2E/CACHE' })).toContain('is the cache directory .e2e/cache or inside it');
+        expect(refusalIn({ output: 'Results', cache: { dir: 'results/artifacts' } })).toContain('would hold cache.dir');
+      });
+
+      it('refuses an existing directory it did not write, naming what is in it', () => {
+        write('src/app.ts', 'export {};');
+        write('src/lib/util.ts', 'export {};');
+        const message = refusalIn({ output: 'src' });
+        expect(message).toContain('output "src" holds app.ts, lib, which e2e did not write');
+        expect(message).toContain('name a new or empty directory');
+        expect(message).toContain('.e2e-output');
+        write('node_modules/pkg/index.js');
+        expect(refusalIn({ output: 'node_modules' })).toContain('holds pkg, which e2e did not write');
+        write('package.json', '{}');
+        expect(refusalIn({ output: 'package.json' })).toContain('output "package.json" is a file, not a directory');
+      });
+
+      it('owns a directory that does not exist yet, is empty, holds only what e2e writes there, or carries the marker', () => {
+        expect(outputIn({ output: 'fresh' })).toBe(path.join(root, 'fresh'));
+        fs.mkdirSync(path.join(root, 'empty'));
+        expect(outputIn({ output: 'empty' })).toBe(path.join(root, 'empty'));
+        write('earlier/report.json', '{}');
+        write('earlier/summary.md');
+        write('earlier/artifacts/web/a.png');
+        write('earlier/failures/a.md');
+        expect(outputIn({ output: 'earlier' })).toBe(path.join(root, 'earlier'));
+        // A fresh clone of a project that commits its replay cache inside the output.
+        write('results/cache/entry.json', '{}');
+        expect(outputIn({ output: 'results', cache: { dir: 'results/cache' } })).toBe(path.join(root, 'results'));
+        write('marked/.e2e-output');
+        write('marked/index.html', '<html></html>');
+        expect(outputIn({ output: 'marked' })).toBe(path.join(root, 'marked'));
+        // An output from before the marker, with a custom reporter's file beside the report.
+        write('before/report.json', JSON.stringify({ schemaVersion: 'report-1', run: {} }));
+        write('before/index.html', '<html></html>');
+        expect(outputIn({ output: 'before' })).toBe(path.join(root, 'before'));
+        write('lookalike/report.json', '{"name":"not a report"}');
+        write('lookalike/index.ts', 'export {};');
+        expect(refusalIn({ output: 'lookalike' })).toContain('holds index.ts, which e2e did not write');
+      });
+
+      it('owns the default .e2e whatever an older version left in it', () => {
+        write('.e2e/bugbash/s1/notes.txt');
+        write('.e2e/logs/app.log');
+        expect(outputIn({})).toBe(path.join(root, '.e2e'));
+        expect(outputIn({ output: '.e2e' })).toBe(path.join(root, '.e2e'));
+      });
     });
   });
 

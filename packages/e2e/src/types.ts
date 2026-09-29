@@ -1309,12 +1309,15 @@ export interface E2EConfig {
   /**
    * The directory a run writes its results to, relative to the project root;
    * default `.e2e`. It holds `report.json`, `junit.xml`, `summary.md`,
-   * `ai-trace.json`, `artifacts/` (cleared at the start of every run),
-   * `sessions/`, and the `e2e mcp` session videos under `videos/`.
-   * `--output <dir>` overrides it for one run. It must be inside the project
-   * root and not the root itself, may not hold a test glob's directory, and
-   * is independent of `cache.dir`, which may sit inside it but not under a
-   * directory the run clears.
+   * `ai-trace.json`, `artifacts/` (cleared at the start of every run that
+   * has something to run), `sessions/`, and the `e2e mcp` session files
+   * under `mcp/` and `videos/`. `--output <dir>` overrides it for one run.
+   * It must be inside the project root and not the root itself, may not
+   * hold or sit inside a directory a tests glob scans, and is independent of
+   * `cache.dir`, which may sit inside it but not under a directory the run
+   * clears. An existing directory must be e2e's: the default `.e2e`, one
+   * holding the `.e2e-output` marker a run leaves or a `report.json` e2e
+   * wrote, or one holding nothing but what e2e writes there.
    */
   output?: string;
   /**

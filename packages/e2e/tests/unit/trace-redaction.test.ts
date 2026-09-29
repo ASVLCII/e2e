@@ -342,6 +342,14 @@ describe('redactTraceArchives', () => {
     expect(existsSync(broken)).toBe(false);
   });
 
+  it('rewrites an archive whose name merely starts with two dots, which is inside', async () => {
+    const dir = attemptDir();
+    const dotted = path.join(dir, '..trace.zip');
+    writeFileSync(dotted, traceArchive());
+    await redactTraceArchives(dir, ['..trace.zip'], new SecretLedger([['member', SECRET]]));
+    expect(entriesOf(dotted).get('trace.trace')!.toString()).not.toContain(SECRET);
+  });
+
   it('refuses a path outside the attempt directory without touching anything', async () => {
     const dir = attemptDir();
     const outside = path.join(dir, '..', `e2e-outside-${path.basename(dir)}.zip`);

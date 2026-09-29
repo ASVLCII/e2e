@@ -10,7 +10,8 @@ import { didYouMean } from '../internal/suggest.ts';
 import { isRecordingMode, RECORDING_MODES, type RecordingKind, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
-import { compileGlob, compileGlobList, literalPrefix } from '../internal/globs.ts';
+import { compileGlobList } from '../internal/globs.ts';
+import { resolveOutput } from './output.ts';
 import { boundedInt, describeValue, positiveInt } from './validate.ts';
 import type {
   ArtifactStore,
@@ -414,59 +415,6 @@ function resolveCacheConfig(
     dir: path.resolve(projectRoot, dir ?? path.join('.e2e', 'cache')),
     strict: strict || cliStrict,
   };
-}
-
-/** The directories under the output a run clears or owns, which nothing else may live in. */
-const OUTPUT_OWNED_DIRS = ['artifacts', 'sessions', 'videos'] as const;
-
-/** Whether `inner` is `outer` or a path below it. */
-function isWithin(inner: string, outer: string): boolean {
-  const relative = path.relative(outer, inner);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-/**
- * Resolves the results directory, `--output` over the config's `output`,
- * from the project root. A run clears `<output>/artifacts` and writes over
- * its reports, so the directory must be one it can own: inside the project
- * root and not the root itself, not holding the directory a test glob scans,
- * not the cache directory or inside it, and not wrapping the cache in a
- * directory the run clears or owns.
- */
-function resolveOutput(
-  configured: unknown,
-  flag: string | undefined,
-  projectRoot: string,
-  cacheDir: string,
-  tests: readonly string[],
-): string {
-  const where = flag === undefined ? 'output' : '--output';
-  const value: unknown = flag ?? configured;
-  if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
-    throw new ConfigurationError('INVALID_CONFIG', `${where} must be a non-empty path relative to the project root, got ${describeValue(value)}`);
-  }
-  const output = path.resolve(projectRoot, (value as string | undefined) ?? '.e2e');
-  const refuse = (reason: string): never => {
-    throw new ConfigurationError('INVALID_CONFIG', `${where} ${JSON.stringify(value)} ${reason}`);
-  };
-  if (output === projectRoot) refuse("is the project root; the run clears <output>/artifacts, so name a directory of its own, such as '.e2e'");
-  if (!isWithin(output, projectRoot)) refuse(`is outside the project root ${projectRoot}; name a directory inside it`);
-  if (isWithin(output, cacheDir)) refuse(`is the cache directory ${path.relative(projectRoot, cacheDir)} or inside it; keep results and the replay cache apart`);
-  for (const owned of OUTPUT_OWNED_DIRS) {
-    if (isWithin(cacheDir, path.join(output, owned))) {
-      refuse(`would hold cache.dir ${path.relative(projectRoot, cacheDir)} under ${owned}/, which the run owns; move cache.dir or the output`);
-    }
-  }
-  for (const pattern of tests) {
-    if (pattern.startsWith('!')) continue;
-    const glob = compileGlob(pattern);
-    const names = literalPrefix(glob);
-    const root = path.join(projectRoot, ...(names.length === glob.segments.length ? names.slice(0, -1) : names));
-    if (isWithin(root, output)) {
-      refuse(`holds ${path.relative(projectRoot, root) || '.'}, where the tests glob ${JSON.stringify(pattern)} finds test files; name a directory outside it`);
-    }
-  }
-  return output;
 }
 
 const ARTIFACTS_KEYS = new Set(['store']);

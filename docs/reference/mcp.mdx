@@ -160,9 +160,10 @@ been filled, `screenshot` and the point tools (`tap_at`, `hover_at`,
 `PIXEL_TAINTED` for the rest of the session. Every text a `call` returns, a node `locate` found,
 an action's result, or an error, passes the attempt's secret ledger. Nothing a
 session does is recorded as a test result or into the replay cache; its
-artifacts land under `<output>/artifacts/<target>/sessions/`, its videos under
-`<output>/videos/`. A later `e2e run` clears `<output>/artifacts`; the
-videos stay.
+artifacts, such as the trace, land under `<output>/mcp/<target>/<attempt>/`,
+its videos under `<output>/videos/`. Neither is under the `artifacts/` an
+`e2e run` clears, so a run beside a live session leaves the session's files
+alone, and nothing deletes them.
 
 ## Resources
 

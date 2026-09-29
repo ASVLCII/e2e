@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { collectFromRegistration, type Collection } from '../../src/collect/collect.ts';
 import { collectModule, test } from '../../src/collect/registry.ts';
-import { pairRecording, pairRecordings, repeatEach, resolveOptions, select } from '../../src/collect/select.ts';
+import { pairRecording, pairRecordings, repeatEach, resolveOptions, select, type LastRunOutcome } from '../../src/collect/select.ts';
 import { resolveConfig } from '../../src/config/resolve.ts';
 import { defineEngine } from '../../src/engine/index.ts';
 import { resultId } from '../../src/internal/ids.ts';
@@ -368,6 +368,22 @@ describe('select', () => {
     expect(() => select(col, config(), { lastFailed: new Set() })).toThrow(
       '3 tests were collected but none is runnable: 3 did not fail in the last run, which had no failures; pass --pass-with-no-tests to allow this',
     );
+  });
+
+  it('says how the last run ended when it ran nothing or ended without passing, instead of claiming no failures', async () => {
+    const col = await collection(() => {
+      test('a', noop);
+      test('b', noop);
+    });
+    const noTests = (lastRun: LastRunOutcome) => () => select(col, config(), { lastFailed: new Set(), lastRun });
+    expect(noTests({ status: 'error', ran: 0, errors: ['NO_TESTS'] })).toThrow(
+      '2 did not fail in the last run, which ran no tests (it ended error: NO_TESTS); pass --pass-with-no-tests to allow this',
+    );
+    expect(noTests({ status: 'passed', ran: 0, errors: [] })).toThrow('2 did not fail in the last run, which ran no tests (it ended passed);');
+    expect(noTests({ status: 'error', ran: 2, errors: ['REPORT_WRITE_FAILED'] })).toThrow(
+      '2 did not fail in the last run, which ended error (REPORT_WRITE_FAILED) with no test failed;',
+    );
+    expect(noTests({ status: 'passed', ran: 2, errors: [] })).toThrow('2 did not fail in the last run, which had no failures;');
   });
 
   it('keeps the consumers of a setup the last run did not pass, which brings the setup back', async () => {

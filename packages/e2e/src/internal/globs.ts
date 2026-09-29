@@ -239,15 +239,7 @@ export function discoverFiles(root: string, patterns: readonly string[]): string
         if (include.some((glob, i) => isMatch(glob, next[i]!)) && !exclude.some((glob, i) => isMatch(glob, nextExcluded[i]!))) {
           matched.push(relative);
         }
-      } else if (
-        entry.isDirectory() &&
-        entry.name !== 'node_modules' &&
-        include.some((glob, i) => canMatchBeneath(glob, next[i]!)) &&
-        !(
-          exclude.some((glob, i) => matchesAllBeneath(glob, nextExcluded[i]!)) &&
-          !include.some((glob, i) => reachesDotBeneath(glob, next[i]!))
-        )
-      ) {
+      } else if (entry.isDirectory() && entersDirectory({ include, exclude }, entry.name, next, nextExcluded)) {
         visit(path.join(dir, entry.name), relative, next, nextExcluded);
       }
     }
@@ -259,6 +251,42 @@ export function discoverFiles(root: string, patterns: readonly string[]): string
     exclude.map((glob) => initialStates(glob.segments)),
   );
   return matched.toSorted(compareCodePoints);
+}
+
+/**
+ * Whether discovery enters the directory `name`, given each glob's states
+ * once it has consumed that name: some including glob can still match a file
+ * beneath, and no exclusion takes every file it could. `node_modules` is
+ * never entered.
+ */
+function entersDirectory(
+  { include, exclude }: CompiledGlobList,
+  name: string,
+  states: readonly States[],
+  excluded: readonly States[],
+): boolean {
+  return (
+    name !== 'node_modules' &&
+    include.some((glob, i) => canMatchBeneath(glob, states[i]!)) &&
+    !(exclude.some((glob, i) => matchesAllBeneath(glob, excluded[i]!)) && !include.some((glob, i) => reachesDotBeneath(glob, states[i]!)))
+  );
+}
+
+/**
+ * Whether `discoverFiles` over `patterns` reads the directory at
+ * `relativeDir` (`/`-separated, below the root): it enters every directory on
+ * the way, so a file written there could be discovered.
+ */
+export function scansDirectory(patterns: readonly string[], relativeDir: string): boolean {
+  const list = compileGlobList(patterns);
+  let states: readonly States[] = list.include.map((glob) => initialStates(glob.segments));
+  let excluded: readonly States[] = list.exclude.map((glob) => initialStates(glob.segments));
+  for (const part of relativeDir.split('/')) {
+    states = list.include.map((glob, i) => advance(glob.segments, states[i]!, part));
+    excluded = list.exclude.map((glob, i) => advance(glob.segments, excluded[i]!, part));
+    if (!entersDirectory(list, part, states, excluded)) return false;
+  }
+  return true;
 }
 
 /** Sorts strings by Unicode code point, the order collection is defined in. */

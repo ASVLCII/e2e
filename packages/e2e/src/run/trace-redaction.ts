@@ -11,6 +11,7 @@ import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { writeFileAtomic } from '../internal/atomic-write.ts';
 import { errorMessage, InfrastructureError } from '../internal/errors.ts';
+import { isWithin } from '../internal/paths.ts';
 import type { SecretLedger } from '../internal/redact.ts';
 import { inflateEntry, readZip, writeZip, zipEntry, type ZipEntry } from '../internal/zip.ts';
 
@@ -32,7 +33,7 @@ export async function redactTraceArchives(
 ): Promise<void> {
   const root = path.resolve(dir);
   const archives = paths.map((relative) => path.resolve(root, relative));
-  const outside = archives.find((absolute) => !isInside(root, absolute));
+  const outside = archives.find((absolute) => absolute === root || !isWithin(absolute, root));
   if (outside !== undefined) {
     throw new InfrastructureError(
       'TRACE_WITHHELD',
@@ -49,11 +50,6 @@ export async function redactTraceArchives(
       { cause },
     );
   }
-}
-
-function isInside(root: string, absolute: string): boolean {
-  const relative = path.relative(root, absolute);
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 /**

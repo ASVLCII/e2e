@@ -28,7 +28,7 @@ import { PreparedEngines, recordingNotices, startDeclaredProcesses, validateEngi
 import { attemptRecording, type AttemptRecording, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
-import { outputLayout } from './output.ts';
+import { claimOutput, outputLayout } from './output.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
 import { WorkerModels } from './worker-models.ts';
 
@@ -99,6 +99,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   const finishEngines = (onFailure: (cause: unknown) => void): Promise<void> =>
     engines.finish({ runId, env: options.env, timeoutMs: config.cleanupTimeout, notice, onFailure });
   try {
+    await claimOutput(config.output, config.projectRoot);
     // One worker on one target: one slot to provision.
     prepared = await engines.prepare(target, 1, { runId, projectRoot: config.projectRoot, env: options.env, signal, notice });
     const hooks = { ci: config.ci, notice: (message: string) => notice('app', message) };
@@ -117,7 +118,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
     config,
     target,
     runId,
-    artifactsRoot: layout.artifacts,
+    artifactsRoot: layout.sessionArtifacts,
     sessionStore,
     headed: options.headed,
     workerSlot: 0,
@@ -136,9 +137,10 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
     ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
   });
   let session: TargetSession | undefined;
+  // Outside the tree a run clears: an `e2e run` beside a live session must not delete what the session is still writing.
   const artifacts = createAttemptArtifacts({
-    artifactsRoot: layout.artifacts,
-    segments: [target.name, 'sessions', attemptId],
+    artifactsRoot: layout.sessionArtifacts,
+    segments: [target.name, attemptId],
     attemptId,
     currentStepId: () => steps.currentStepId,
     ...(config.artifactStore === undefined ? {} : { store: config.artifactStore }),

@@ -3,6 +3,7 @@
 import { readFile } from 'node:fs/promises';
 import { ConfigurationError, errorMessage } from '../internal/errors.ts';
 import { resultId } from '../internal/ids.ts';
+import type { LastRunOutcome } from '../collect/select.ts';
 import type { Report1Document } from '../report/build.ts';
 
 type ReportResult = Report1Document['run']['results'][number];
@@ -96,6 +97,20 @@ export function lastFailedIds(document: Report1Document): ReadonlySet<string> {
   const rerun = (result: ReportResult): boolean =>
     didNotPass(result) || (result.selected !== false && hookFailures.some((error) => inHookScope(result, error)));
   return new Set(document.run.results.filter(rerun).map((result) => resultId(result.testId, result.targetId, result.agent)));
+}
+
+/**
+ * How the report's run ended, for the message when `--last-failed` finds
+ * nothing to run again: its status, how many results it carried out, and
+ * its run-level error codes.
+ */
+export function lastRunOutcome(document: Report1Document): LastRunOutcome {
+  const { status, results, errors } = document.run;
+  return {
+    status: typeof status === 'string' ? status : 'unknown',
+    ran: results.filter((result) => result.selected !== false && result.status !== 'skipped').length,
+    errors: [...new Set(errors.flatMap((error) => (typeof error.code === 'string' ? [error.code] : [])))],
+  };
 }
 
 /**

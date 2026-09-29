@@ -40,8 +40,8 @@ import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
 import { runUnits } from './scheduler.ts';
 import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
-import { outputLayout } from './output.ts';
-import { lastFailedIds, readLastRun } from './last-run.ts';
+import { claimOutput, outputLayout } from './output.ts';
+import { lastFailedIds, lastRunOutcome, readLastRun } from './last-run.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setSecretRegistry } from '../secrets.ts';
 import { withAbort } from '../internal/time.ts';
@@ -540,6 +540,12 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     return finish();
   }
   const config = loaded.config;
+  try {
+    await claimOutput(config.output, config.projectRoot);
+  } catch (cause) {
+    recordFailure(cause, 'config');
+    return finish();
+  }
   vcs = await detectVcs(config.projectRoot, env);
 
   setSecretRegistry(config);
@@ -565,15 +571,6 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // A run cancelled before it began collects nothing: the interrupt alone
     // decides the outcome.
     if (interrupted.aborted) return;
-
-    // Every run starts from an empty artifact tree, so what is there once it
-    // ends is this run's evidence and nothing a report no longer names.
-    try {
-      await rm(outputLayout(config.output).artifacts, { recursive: true, force: true });
-    } catch (cause) {
-      recordFailure(cause, 'collection');
-      return;
-    }
 
     // Which targets the run is for, settled before anything is collected,
     // downloaded, or started: an unknown --target is a collection failure.
@@ -632,6 +629,17 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       return;
     }
     const { collection, selection } = planned;
+    // A run with something to run starts from an empty artifact tree, so what
+    // is there once it ends is this run's evidence and nothing a report no
+    // longer names. A run that selected nothing leaves the last one's alone.
+    if (!interrupted.aborted && selection.pairs.some((pair) => pair.disposition === 'run')) {
+      try {
+        await rm(outputLayout(config.output).artifacts, { recursive: true, force: true });
+      } catch (cause) {
+        recordFailure(cause, 'collection');
+        return;
+      }
+    }
     if (!interrupted.aborted) {
       for (const skipped of collection.uncollected) {
         const why = options.tests === undefined ? 'which no positional selected' : 'collected only for its setup tests';
@@ -930,7 +938,7 @@ async function selectionInputs(options: ListOptions, config: ResolvedConfig): Pr
   const lastRun =
     options.lastFailed === true ? await readLastRun(outputLayout(config.output).report) : undefined;
   const filters: SelectionFilters = {
-    ...(lastRun !== undefined ? { lastFailed: lastFailedIds(lastRun) } : {}),
+    ...(lastRun !== undefined ? { lastFailed: lastFailedIds(lastRun), lastRun: lastRunOutcome(lastRun) } : {}),
     ...(options.shard !== undefined ? { shard: options.shard } : {}),
     ...(options.tags !== undefined ? { tags: options.tags } : {}),
     ...(options.tagMode !== undefined ? { tagMode: options.tagMode } : {}),

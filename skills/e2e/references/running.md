@@ -23,7 +23,7 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the s
 | `--tag <tags>` | Tag filter, comma-separated or repeated: any of the tags, or every one with `--tag-mode all`. An empty `--target`, `--tag`, or `--agent` value is a usage error, exit 2. |
 | `--exclude-tag <tags>` | Leave out tests carrying any of these tags, whatever else selected them. |
 | `--grep <pattern>`, `--grep-invert <pattern>` | Keep, or leave out, tests whose title matches a regular expression: the describe titles and the test title joined by spaces (`checkout pays`), not the file or the tags. Bare pattern, or `'/pattern/i'` for flags; repeat for alternatives. |
-| `--last-failed` | Only the tests the previous run did not pass, read from `<output>/report.json`, and every test in the scope of a failed `beforeAll` or `afterAll`. No report is `NO_LAST_RUN`, exit 2: run once without the flag first. |
+| `--last-failed` | Only the tests the previous run did not pass, read from `<output>/report.json`, and every test in the scope of a failed `beforeAll` or `afterAll`. No report is `NO_LAST_RUN`, exit 2: run once without the flag first. After a run that selected nothing, the `NO_TESTS` message says the last run ran no tests. |
 | `--shard <index/total>` | One contiguous slice of the selected tests (`--shard 2/3`), cut after every other filter; serial groups stay together and each shard brings its own setup tests. Same command per CI job with a different index. |
 | `--headed` | Visible browser or simulator when the engine supports it. |
 | `--agent <names>` | Run unpinned tests as other configured agents (`agents.<name>`), comma-separated or repeated; several names run each such test once per agent. Default is `agents.default`. |
@@ -31,7 +31,7 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the s
 | `--max-failures <n>` | Stop once this many tests failed: the rest are skipped with cause `failure-limit`, running tests end as `interrupted`, exit 1. |
 | `--repeat-each <n>` | Run every selected test n times, each run its own result (`repeat` 0 through n-1). Add `--no-cache`, or the later runs replay the first's recording. The summary's `Repeats` row says how many tests passed every run and lists the runs of each one that did not. |
 | `--reporter <ids>` | `list`, `json`, `junit`, `markdown`, comma-separated. `json` cannot combine with `list`. |
-| `--output <dir>` | Results directory for this run, over the config's `output` (default `.e2e`): `report.json`, `junit.xml`, `summary.md`, `ai-trace.json`, `artifacts/` (cleared when a run starts), `sessions/`. `--artifacts` is gone: `--artifacts out/artifacts` is `--output out`. |
+| `--output <dir>` | Results directory for this run, over the config's `output` (default `.e2e`): `report.json`, `junit.xml`, `summary.md`, `ai-trace.json`, `artifacts/` (cleared when a run with something to run starts; a `NO_TESTS` run leaves it), `sessions/`. An existing directory e2e did not write (`--output src`) is `INVALID_CONFIG`: name a new one. `--artifacts` is gone: `--artifacts out/artifacts` is `--output out`. |
 | `--no-cache` | Run with the replay cache off. |
 | `--strict-cache` | Fail a step whose committed recording no longer replays (`REPLAY_STALE`, exit 2) instead of letting the agent take it over. For CI that replays committed recordings. |
 | `--pass-with-no-tests` | Exit 0 when nothing matches instead of `NO_TESTS`. |
@@ -57,6 +57,7 @@ CI=1 npx e2e run            # reproduce the CI defaults locally
 `--last-failed`, `--shard`, `--pass-with-no-tests`) and prints one line per
 test-target pair, `file › title [target] #tag`, then exits without starting the
 app, an engine, or a worker. `--reporter json` prints `{ "pairs": [...] }`.
+`--output <dir>` names where `--last-failed` reads `report.json`, as for `run`.
 Use it to check a filter before a run.
 
 ```bash

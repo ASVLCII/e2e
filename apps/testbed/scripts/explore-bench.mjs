@@ -5,8 +5,8 @@
  *   AI_GATEWAY_API_KEY=... node scripts/explore-bench.mjs \
  *     --models openai/gpt-6-luna-fast,google/gemini-3.6-flash --steps 8 --timeout 600000 --repeats 3 --concurrency 6
  *
- * Each run writes under .e2e/explore-bench/<label>/ (report.json, artifacts,
- * cli.log); the matrix and the per-bug hits land in summary.json and on
+ * Each run writes under .e2e/explore-bench/<label>/ (report.json, artifacts)
+ * and logs to .e2e/explore-bench/<label>.log, outside the output e2e owns; the matrix and the per-bug hits land in summary.json and on
  * stdout. A finding counts for a defect when its text matches the defect's
  * patterns; findings that match nothing are listed as "other" for a human to
  * judge: a real unplanted defect, or a false positive.
@@ -102,7 +102,7 @@ async function execute(run) {
       app.stdout.once('data', () => resolve());
       app.once('exit', (code) => reject(new Error(`bug garden exited with ${code} before listening`)));
     });
-    const log = createWriteStream(path.join(dir, 'cli.log'));
+    const log = createWriteStream(path.join(OUT, `${run.label}.log`));
     const cli = spawn(
       process.execPath,
       [CLI, 'explore', goal, '--config', 'e2e.explore.config.ts', '--max-steps', steps, '--timeout', timeout, '--output', dir, '--debug'],

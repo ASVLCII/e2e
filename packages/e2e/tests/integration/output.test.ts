@@ -1,11 +1,12 @@
 /**
  * `output` and `--output`: every result a run writes lands under one
- * directory, the artifact tree is cleared when a run starts, `--last-failed`
- * reads the report there, and a store's `putLink` receives the recordings a
- * hosted service keeps.
+ * directory, the artifact tree is cleared when a run with something to run
+ * starts, never under a live `e2e mcp` session, `--last-failed` reads the
+ * report there, and a store's `putLink` receives the recordings a hosted
+ * service keeps.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeEngine, FAKE_APP_URL } from '../helpers/fake-engine.ts';
@@ -13,6 +14,11 @@ import { engineConfig } from '../helpers/fixture-config.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 import { createProject, resultByTitle, runExisting, runProject } from '../helpers/run-project.ts';
 import type { StoredArtifact, StoredArtifactLink } from '../../src/index.ts';
+
+const sessionModule = new URL('../../dist/mcp/session.js', import.meta.url).href;
+const { SessionHost } = (await import(sessionModule)) as typeof import('../../src/mcp/session.ts');
+const resolveModule = new URL('../../dist/config/resolve.js', import.meta.url).href;
+const { resolveConfig } = (await import(resolveModule)) as typeof import('../../src/config/resolve.ts');
 
 const PASSING_TEST = `import { test } from 'e2e';
 
@@ -99,6 +105,67 @@ describe('output', () => {
         expect(elsewhere.report.run.errors.map((error) => error.code)).toEqual(['NO_LAST_RUN']);
         expect(rerun.reportPath).toBe(path.join(project.dir, 'results', 'report.json'));
       } finally {
+        project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'leaves the artifacts alone when a run selects nothing, and --last-failed then says the last run ran no tests',
+    async () => {
+      const project = createProject({ 'tests/pass.e2e.ts': PASSING_TEST, 'tests/fail.e2e.ts': FAILING_TEST });
+      try {
+        const config = engineConfig(createFakeEngine({ artifacts: true }).engine, { output: 'results' });
+        const first = await runExisting(project, { appUrl: FAKE_APP_URL, config });
+        const screenshot = resultByTitle(first, 'fails on purpose').attempts[0]!.artifacts.find((artifact) => artifact.kind === 'screenshot')!;
+        const evidence = path.join(project.dir, 'results', 'artifacts', screenshot.path!);
+        expect(existsSync(evidence)).toBe(true);
+
+        const typo = await runExisting(project, { appUrl: FAKE_APP_URL, config, runOptions: { grep: [/no such title/] } });
+        expect(typo.report.run.errors.map((error) => error.code)).toEqual(['NO_TESTS']);
+        expect(existsSync(evidence)).toBe(true);
+        expect(JSON.parse(readFileSync(path.join(project.dir, 'results', 'report.json'), 'utf8')).run.status).toBe('error');
+
+        const rerun = await runExisting(project, { appUrl: FAKE_APP_URL, config, runOptions: { lastFailed: true } });
+        expect(rerun.report.run.errors[0]).toMatchObject({
+          code: 'NO_TESTS',
+          message: expect.stringContaining('2 did not fail in the last run, which ran no tests (it ended error: NO_TESTS)'),
+        });
+      } finally {
+        project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'never clears the artifacts of a live e2e mcp session on the same output',
+    async () => {
+      const project = createProject({ 'tests/pass.e2e.ts': PASSING_TEST });
+      const fake = createFakeEngine();
+      const host = new SessionHost({
+        loadConfig: async () => {
+          const configPath = path.join(project.dir, 'e2e.config.ts');
+          return { ...resolveConfig(engineConfig(fake.engine) as never, { projectRoot: project.dir, env: {}, configPath }), configPath };
+        },
+        env: {},
+        headed: false,
+        log: () => undefined,
+      });
+      try {
+        await host.open({});
+        const sessionDir = fake.attempts[0]!.artifactsDir;
+        expect(path.relative(path.join(project.dir, '.e2e', 'artifacts'), sessionDir).startsWith('..')).toBe(true);
+        const part = path.join(sessionDir, 'trace', 'trace-part1.zip');
+        mkdirSync(path.dirname(part), { recursive: true });
+        writeFileSync(part, 'a trace part the session wrote');
+
+        const outcome = await runExisting(project, { appUrl: FAKE_APP_URL, config: engineConfig(createFakeEngine({ artifacts: true }).engine) });
+        expect(outcome.status).toBe('passed');
+        expect(existsSync(part)).toBe(true);
+      } finally {
+        await host.close('done');
         project.cleanup();
       }
     },

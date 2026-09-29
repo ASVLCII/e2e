@@ -105,9 +105,21 @@ export interface SelectionFilters {
    * is selected.
    */
   readonly lastFailed?: ReadonlySet<string>;
+  /** How the run `lastFailed` was read from ended, so an empty set is told as what it is: no failures, or nothing run. */
+  readonly lastRun?: LastRunOutcome;
   /** The one shard of the selection to run, once every other filter applied (`--shard`). */
   readonly shard?: Shard;
   readonly targetIds?: readonly string[];
+}
+
+/** How the run `--last-failed` read its report from ended. */
+export interface LastRunOutcome {
+  /** The report's `run.status`. */
+  readonly status: string;
+  /** The results it carried out, neither skipped nor left out by a filter. */
+  readonly ran: number;
+  /** The codes of its run-level errors, once each. */
+  readonly errors: readonly string[];
 }
 
 /**
@@ -472,7 +484,7 @@ function describeNoTests(
     [FILTERED_REASON.grepInvert, grepInvert === undefined ? undefined : `have titles matching ${grepInvert.join(', ')}`],
     [
       FILTERED_REASON.lastFailed,
-      filters.lastFailed === undefined ? undefined : `${FILTERED_REASON.lastFailed}${filters.lastFailed.size === 0 ? ', which had no failures' : ''}`,
+      filters.lastFailed === undefined ? undefined : `${FILTERED_REASON.lastFailed}${filters.lastFailed.size === 0 ? `, ${describeLastRun(filters.lastRun)}` : ''}`,
     ],
     [FILTERED_REASON.shard, filters.shard === undefined ? undefined : describeShard(filters.shard, pairs)],
   ]);
@@ -501,6 +513,20 @@ function describeNoTests(
   }
   const summary = [...reasons].map(([reason, ids]) => `${ids.size} ${reason}`).join(', ');
   return `${tests.length} tests were collected but none is runnable: ${summary}`;
+}
+
+/**
+ * What a last run that left `--last-failed` nothing to select was: one with
+ * no failures, or one that ran nothing or ended without passing, named with
+ * its status and error codes, since "no failures" would be a claim about
+ * tests it never ran.
+ */
+function describeLastRun(lastRun: LastRunOutcome | undefined): string {
+  if (lastRun === undefined) return 'which had no failures';
+  const codes = lastRun.errors.join(', ');
+  if (lastRun.ran === 0) return `which ran no tests (it ended ${lastRun.status}${codes === '' ? '' : `: ${codes}`})`;
+  if (lastRun.status !== 'passed') return `which ended ${lastRun.status}${codes === '' ? '' : ` (${codes})`} with no test failed`;
+  return 'which had no failures';
 }
 
 /**
