@@ -59,9 +59,10 @@ describe('report_finding', () => {
   });
 
   it('still holds back a changed screen when the wait itself spent the time the wait needed', async () => {
-    // 7 s at the report: room for the wait and the recording; after the wait, room for the confirmation only.
-    const deadline = Date.now() + 7_000;
-    const { state, run } = reportOnLoading({ remainingMs: () => deadline - Date.now() });
+    // Read once before the wait and once after it: room for the wait and the
+    // recording at the report, room for the confirmation alone after the wait.
+    const readings = [7_000, 5_500];
+    const { state, run } = reportOnLoading({ remainingMs: () => readings.shift() ?? 5_500 });
     expect(String(await run())).toMatch(/^Not recorded/);
     expect(state.findings).toEqual([]);
   });
