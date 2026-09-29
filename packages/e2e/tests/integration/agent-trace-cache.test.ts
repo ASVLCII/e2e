@@ -411,15 +411,18 @@ describe('trace cache: the recorded end state gates self-finalization', () => {
     expect(outcome.exitCode).toBe(0);
     const record = records.at(-1)!;
     expect(record.calls).toBe(1);
+    // The hand-off names the anchor the screen lacked, to the agent and in the report alike.
     expect(record.prefixes[0]).toMatchObject({
       stopReason: 'end-mismatch',
       replayedActions: ['tap button "Save marker"'],
       totalActions: 1,
+      missingAnchors: ['status "Marker"'],
     });
     const step = resultByTitle(outcome, 'saves the marker').attempts.at(-1)!.steps.find((s) => s.api === 'agent.act')!;
     expect(step.cache).toEqual({
       mode: 'agent-concluded',
       reason: 'end-mismatch',
+      missingAnchors: ['status "Marker"'],
       replayedActions: 1,
       totalActions: 1,
     });
