@@ -18,7 +18,7 @@ import { ConfigurationError } from '../internal/errors.ts';
 import type { ReportExplore } from '../report/build.ts';
 import { labelSegment } from '../run/artifacts.ts';
 import { run, type RunOutcome } from '../run/runner.ts';
-import type { AgentConfig, BuiltinReporter, E2EConfig, VideoMode } from '../types.ts';
+import type { AgentConfig, BuiltinReporter, E2EConfig, RecordingMode } from '../types.ts';
 import { createExploreBody } from './body.ts';
 import { createExplorer } from './executor.ts';
 import { signedInContext, type PlanAccount } from './plan.ts';
@@ -68,8 +68,10 @@ export interface ExploreOptions {
   readonly artifactsDir?: string | undefined;
   readonly debug?: boolean | undefined;
   readonly aiTrace?: boolean | undefined;
-  /** Which attempts record a video, `--video [mode]`; the exploration is one attempt, so `on-first-retry` records nothing. */
-  readonly video?: VideoMode | undefined;
+  /** Which attempts record a trace, `--trace [mode]`; the exploration is one attempt, so a retry mode records nothing. */
+  readonly trace?: RecordingMode | undefined;
+  /** Which attempts record a video, `--video [mode]`; the exploration is one attempt, so a retry mode records nothing. */
+  readonly video?: RecordingMode | undefined;
   readonly interruptSignal?: AbortSignal | undefined;
   readonly forceSignal?: AbortSignal | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
@@ -140,6 +142,7 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
     artifactsDir: options.artifactsDir,
     debug: options.debug,
     aiTrace: options.aiTrace,
+    trace: options.trace,
     video: options.video,
     interruptSignal: options.interruptSignal,
     forceSignal: options.forceSignal,

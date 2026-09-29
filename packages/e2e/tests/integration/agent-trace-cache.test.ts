@@ -531,7 +531,6 @@ describe('trace cache: an engine-independent executor is not gated by the cache'
         config: {
           targets: [{ name: 'toy', platform: 'web', engine }],
           cache: 'read-write',
-          artifacts: [],
           agents: {
             default: {
               name: 'observation-only-executor',

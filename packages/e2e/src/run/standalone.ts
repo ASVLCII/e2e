@@ -26,7 +26,7 @@ import { createFixtures } from './fixtures.ts';
 import type { EnginePrepareResult } from '../engine/index.ts';
 import type { ProcessPool } from './process-pool.ts';
 import { PreparedEngines, startDeclaredProcesses, validateEngine, type AppProcesses } from './provision.ts';
-import { attemptVideo } from './video.ts';
+import { attemptRecording, type AttemptRecording, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -87,9 +87,8 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   const runId = uuidv7();
   const attemptId = uuidv7();
 
-  validateEngine(target, config);
-  // No test and no retry loop: the one attempt records what the target's mode says a first attempt does.
-  const video = attemptVideo(target.video, 0);
+  validateEngine(target);
+  const recordings = { trace: sessionRecording(target.trace), video: sessionRecording(target.video) };
   // The secret registry is process-wide, as in a run: `credentials.user()` and `secrets.get()`
   // resolve while the attempt is open.
   const releaseRegistry = holdSecretRegistry(config);
@@ -162,7 +161,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   };
 
   try {
-    session = await executor.launchSession({ session: undefined, video, attemptIndex: 0 }, attemptId, artifacts.dir, signal);
+    session = await executor.launchSession({ session: undefined, recordings }, attemptId, artifacts.dir, signal);
   } catch (cause) {
     await executor.dispose();
     await teardownProcesses();
@@ -213,7 +212,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
         attemptEnd.abort();
         const record: ClosingRecord = { status: 'passed', cleanup: 'complete' };
         try {
-          await executor.closeSession(session, { attemptId, video }, record, artifacts.sink, cleanupErrors);
+          await executor.closeSession(session, { attemptId, recordings }, record, artifacts.sink, cleanupErrors);
           await executor.dispose();
           cleanupErrors.push(...executor.collectedRunErrors().map((runError) => runError.error));
           await artifacts.settle();
@@ -226,4 +225,15 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
       return closing;
     },
   };
+}
+
+/**
+ * What the standalone attempt records of one kind: what the mode says a first
+ * attempt does, since there is no retry loop. The attempt always closes as
+ * passed, so a recording kept only on failure would be made and deleted, and
+ * is not made at all.
+ */
+function sessionRecording(recording: ResolvedRecording): AttemptRecording | undefined {
+  const planned = attemptRecording(recording, 0);
+  return planned?.keep === 'on-failure' ? undefined : planned;
 }

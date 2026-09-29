@@ -110,7 +110,8 @@ describe('trace secrecy', () => {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
         cache: 'read-write' as const,
-        artifacts: { kinds: ['screenshot', 'trace'], store },
+        trace: 'on',
+        artifacts: { store },
         credentials: { member: { username: 'ada', password: SECRET } },
         agents: {
           default: {

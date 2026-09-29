@@ -608,11 +608,19 @@ export interface TestOptions {
    */
   agent?: string | readonly string[];
   /**
-   * Which of the test's attempts record a video, in place of the run's:
-   * the same modes as the config's `video`. Innermost wins; inside a serial
-   * group the group's value applies, since the group records as one unit.
+   * Which of the test's attempts record a trace, in place of the run's: the
+   * same modes as the config's `trace`. Innermost wins, over `--trace` too;
+   * inside a serial group the group's value applies, since the group records
+   * as one unit. A mode set here is required of the target's engine.
    */
-  video?: VideoMode;
+  trace?: RecordingMode;
+  /**
+   * Which of the test's attempts record a video, in place of the run's:
+   * the same modes as the config's `video`. Innermost wins, over `--video`
+   * too; inside a serial group the group's value applies, since the group
+   * records as one unit. A mode set here is required of the target's engine.
+   */
+  video?: RecordingMode;
 }
 
 export interface DescribeOptions extends Omit<TestOptions, 'only'> {
@@ -958,18 +966,31 @@ export interface Target {
   platform?: string;
   /** The engine driving the surface: `web(...)`, `mobile(...)`, or any `defineEngine` handle. */
   engine?: EngineHandle;
-  /** Which attempts on this target record a video, in place of the config's `video`; `--video` and a test's own `video` win over it. */
-  video?: VideoMode;
+  /**
+   * Which attempts on this target record a trace, in place of the config's
+   * `trace`; `--trace` and a test's own `trace` win over it. A mode set here
+   * is required of the engine: one that cannot trace fails the run with
+   * `UNSUPPORTED_ARTIFACT`.
+   */
+  trace?: RecordingMode;
+  /**
+   * Which attempts on this target record a video, in place of the config's
+   * `video`; `--video` and a test's own `video` win over it. A mode set here
+   * is required of the engine: one that cannot record fails the run with
+   * `UNSUPPORTED_ARTIFACT`.
+   */
+  video?: RecordingMode;
 }
 
 /**
- * Which attempts record a video, and which recordings are kept. `off`: none.
- * `on`: every attempt, every recording kept. `retain-on-failure`: every
- * attempt records, only the recordings of attempts that did not pass are
- * kept. `on-first-retry`: only the first retry records, so a test that passes
- * first time costs nothing and a flaky one leaves a recording of the retry.
+ * Which attempts record a trace or a video, and which recordings are kept.
+ * `off`: none. `on`: every attempt, every recording kept.
+ * `retain-on-failure`: every attempt records, only the recordings of attempts
+ * that did not pass are kept. `on-first-retry`: only the first retry records,
+ * so a test that passes first time costs nothing and a flaky one leaves a
+ * recording of the retry. `on-all-retries`: every attempt after the first.
  */
-export type VideoMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
+export type RecordingMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry' | 'on-all-retries';
 
 /**
  * A live AI SDK language model instance: `gateway('openai/gpt-6-luna-fast')`
@@ -1067,28 +1088,14 @@ export interface ArtifactStore {
   put(artifact: StoredArtifact): Promise<{ readonly ref: string }>;
 }
 
-/** Artifact kinds a config may ask for. Video has its own `video` option. */
-export type ConfiguredArtifactKind = 'trace' | 'screenshot';
-
-/** Options of the `trace` artifact. */
-export interface TraceArtifactConfig {
-  /**
-   * Which attempts record a trace: every attempt (`all`, the default), or
-   * only retries (`retries`), like Playwright's `on-all-retries`. Under
-   * `retries` a first attempt runs without the recording's cost, so a
-   * failure the runner does not retry and an `e2e mcp` session record none.
-   */
-  record?: 'all' | 'retries';
-}
-
-/** Artifact configuration: which kinds to capture, and where they go. */
+/**
+ * Where artifacts go. What is recorded is not configured here: `trace` and
+ * `video` choose the recordings, and a failure's screenshot and screen text
+ * are captured whenever the engine can.
+ */
 export interface ArtifactsConfig {
-  /** Kinds to capture; defaults to screenshot and trace. */
-  kinds?: readonly ConfiguredArtifactKind[];
   /** Host store every produced artifact is handed to; omit it to keep files local only. */
   store?: ArtifactStore;
-  /** Options of the `trace` kind; ignored unless `trace` is among the kinds. */
-  trace?: TraceArtifactConfig;
 }
 
 /**
@@ -1223,13 +1230,20 @@ export interface E2EConfig {
   retries?: number;
   /** Parallel workers, 1 through 1024; default 1 in CI, else half the cores. An engine may cap it lower. */
   workers?: number;
-  /** Artifact kinds, or `{ kinds, store, trace }` to also hand every artifact to a host store. */
-  artifacts?: readonly ConfiguredArtifactKind[] | ArtifactsConfig;
+  /** `{ store }` hands every artifact to a host store as it is produced. */
+  artifacts?: ArtifactsConfig;
+  /**
+   * Which attempts record a trace; default `on`, `on-first-retry` in CI. A
+   * target's `trace` wins over it, `--trace [mode]` over both, and a test's
+   * own `trace` over all. Applies to the targets whose engine can trace.
+   */
+  trace?: RecordingMode;
   /**
    * Which attempts record a video; default `off`. A target's `video` wins
    * over it, `--video [mode]` over both, and a test's own `video` over all.
+   * Applies to the targets whose engine can record.
    */
-  video?: VideoMode;
+  video?: RecordingMode;
   /**
    * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
    * `markdown` writes `.e2e/summary.md`, `json` prints the report and

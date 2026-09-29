@@ -193,10 +193,12 @@ export class SessionHost {
     let step: InteractiveStep | undefined;
     try {
       attempt = await openStandaloneAttempt({
-        // A session records only between start_recording and stop_recording:
-        // the configured video mode is for runs, and would record everything.
+        // A session records video only between start_recording and
+        // stop_recording: the configured video mode is for runs, and would
+        // record everything. The trace keeps the target's mode: a session is
+        // one attempt that closes as passed, so it traces under `on` only.
         config,
-        target: { ...target, video: 'off' },
+        target: { ...target, video: { mode: 'off', source: 'default' } },
         headed: this.options.headed,
         env: this.options.env,
         signal: abort.signal,

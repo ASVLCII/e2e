@@ -138,6 +138,8 @@ export interface FakeEngineBehavior {
   video?: boolean;
   /** Links `stopVideo` reports before its file, as `video/mp4` segments starting with it. */
   videoLinks?: readonly string[];
+  /** Declares tracing on top of screenshots: `stopTrace` writes one small `trace/fake.zip` into the attempt directory. */
+  trace?: boolean;
   /** Throw to fail state restore after startAttempt succeeded. */
   onRestore?(state: EngineState): void | Promise<void>;
   /** Contributes a `gadget` fixture exercising every fixture-context facility. */
@@ -417,7 +419,7 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
           },
         }
       : {}),
-    ...(behavior.artifacts === true || behavior.video === true
+    ...(behavior.artifacts === true || behavior.video === true || behavior.trace === true
       ? {
           artifacts: {
             async screenshot(label, operation) {
@@ -450,6 +452,20 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
                     videoStartedAt = undefined;
                     const links = (behavior.videoLinks ?? []).map((url) => ({ url, mediaType: 'video/mp4', startedAt }));
                     return [...links, { path: 'video/fake.webm', startedAt }];
+                  },
+                }
+              : {}),
+            ...(behavior.trace === true
+              ? {
+                  async startTrace(operation) {
+                    record('artifacts.startTrace', operation);
+                  },
+                  async stopTrace(operation) {
+                    record('artifacts.stopTrace', operation);
+                    const dir = attempts[current]!.artifactsDir;
+                    mkdirSync(path.join(dir, 'trace'), { recursive: true });
+                    writeFileSync(path.join(dir, 'trace', 'fake.zip'), Buffer.from(operation.attemptId, 'utf8'));
+                    return 'trace/fake.zip';
                   },
                 }
               : {}),

@@ -12,8 +12,8 @@ import { list, run, type ListedPair, type RunOptions, type RunOutcome } from '..
 import { explore, STEP_BOUNDS, TIMEOUT_BOUNDS } from '../explore/index.ts';
 import { BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { bounded } from '../report/format.ts';
-import type { BuiltinReporter, VideoMode } from '../types.ts';
-import { isVideoMode, VIDEO_MODES } from '../internal/video-modes.ts';
+import type { BuiltinReporter, RecordingMode } from '../types.ts';
+import { isRecordingMode, RECORDING_MODES } from '../internal/recording-modes.ts';
 import { runsFromCheckout } from '../telemetry/checkout.ts';
 import { initCompletedEvent, runCompletedEvent, USAGE_ERROR_CODE } from '../telemetry/events.ts';
 import { Telemetry } from '../telemetry/telemetry.ts';
@@ -149,21 +149,23 @@ function parseReporters(value: string): Reporter[] {
 }
 
 /**
- * `--video [mode]`: a bare flag is `on`. An optional value is greedy, so a
- * test file after the flag would be read as the mode; one that is not a mode
- * is refused with the way to write it.
+ * The parser of `--trace [mode]` or `--video [mode]`: a bare flag is `on`.
+ * An optional value is greedy, so a test file after the flag would be read
+ * as the mode; one that is not a mode is refused with the way to write it.
  */
-function parseVideoMode(value: string): VideoMode {
-  if (!isVideoMode(value)) {
-    throw new InvalidArgumentError(
-      `expected a mode (${VIDEO_MODES.join(', ')}), got "${value}"; write --video=<mode>, or put test files before --video`,
-    );
-  }
-  return value;
+function parseRecordingMode(flag: '--trace' | '--video'): (value: string) => RecordingMode {
+  return (value) => {
+    if (!isRecordingMode(value)) {
+      throw new InvalidArgumentError(
+        `expected a mode (${RECORDING_MODES.join(', ')}), got "${value}"; write ${flag}=<mode>, or put test files before ${flag}`,
+      );
+    }
+    return value;
+  };
 }
 
-/** The mode `--video [mode]` parsed to: `on` for the bare flag, undefined when it was not given. */
-function videoOption(value: VideoMode | true | undefined): VideoMode | undefined {
+/** The mode `--trace [mode]` or `--video [mode]` parsed to: `on` for the bare flag, undefined when it was not given. */
+function recordingOption(value: RecordingMode | true | undefined): RecordingMode | undefined {
   return value === true ? 'on' : value;
 }
 
@@ -511,7 +513,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--artifacts <dir>', 'artifact root (default: .e2e/artifacts)')
     .option('--debug', 'print phase timings and the agent step table to stderr')
     .option('--ai-trace', 'record every model call to .e2e/ai-trace.json (unbox-ai)')
-    .option('--video [mode]', `which attempts record a video: ${VIDEO_MODES.join(', ')} (bare: on), over the config and every target`, parseVideoMode)
+    .option('--trace [mode]', `which attempts record a trace: ${RECORDING_MODES.join(', ')} (bare: on), over the config and every target`, parseRecordingMode('--trace'))
+    .option('--video [mode]', `which attempts record a video: ${RECORDING_MODES.join(', ')} (bare: on), over the config and every target`, parseRecordingMode('--video'))
     .addHelpText(
       'after',
       [
@@ -559,7 +562,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           strictCache?: boolean;
           debug?: boolean;
           aiTrace?: boolean;
-          video?: VideoMode | true;
+          trace?: RecordingMode | true;
+          video?: RecordingMode | true;
         },
         command: Command,
       ) => {
@@ -582,7 +586,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
             strictCache: options.strictCache,
             debug: options.debug,
             aiTrace: options.aiTrace,
-            video: videoOption(options.video),
+            trace: recordingOption(options.trace),
+            video: recordingOption(options.video),
             interruptSignal: signals.interruptSignal,
             forceSignal: signals.forceSignal,
           }),
@@ -620,7 +625,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--artifacts <dir>', 'artifact root (default: .e2e/artifacts)')
     .option('--debug', 'print phase timings and the agent step table to stderr')
     .option('--ai-trace', 'record every model call to .e2e/ai-trace.json (unbox-ai)')
-    .option('--video [mode]', 'record a video of the exploration (bare: on), when the engine supports it', parseVideoMode)
+    .option('--trace [mode]', 'record a trace of the exploration (bare: on), when the engine supports it; one attempt, so retry modes record none', parseRecordingMode('--trace'))
+    .option('--video [mode]', 'record a video of the exploration (bare: on), when the engine supports it; one attempt, so retry modes record none', parseRecordingMode('--video'))
     .addHelpText(
       'after',
       [
@@ -654,7 +660,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           artifacts?: string;
           debug?: boolean;
           aiTrace?: boolean;
-          video?: VideoMode | true;
+          trace?: RecordingMode | true;
+          video?: RecordingMode | true;
         },
         command: Command,
       ) =>
@@ -672,7 +679,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
             artifactsDir: options.artifacts,
             debug: options.debug,
             aiTrace: options.aiTrace,
-            video: videoOption(options.video),
+            trace: recordingOption(options.trace),
+            video: recordingOption(options.video),
             interruptSignal: signals.interruptSignal,
             forceSignal: signals.forceSignal,
             notice: (message) => process.stderr.write(`e2e explore: ${message}\n`),

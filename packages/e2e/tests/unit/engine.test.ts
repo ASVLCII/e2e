@@ -561,12 +561,13 @@ describe('engine targets in config', () => {
     ).toThrow(/defineEngine/);
   });
 
-  it('accepts a video mode on a target without an engine; the runner grades it later', () => {
+  it('accepts a trace and a video mode on a target without an engine; the runner grades them later', () => {
     const config = resolveConfig(
-      { targets: [{ name: 'ios', platform: 'ios', video: 'on' }] },
+      { targets: [{ name: 'ios', platform: 'ios', trace: 'off', video: 'on' }] },
       { projectRoot: ROOT, env: {} as NodeJS.ProcessEnv },
     );
-    expect(config.targets[0]!.video).toBe('on');
+    expect(config.targets[0]!.trace).toEqual({ mode: 'off', source: 'target' });
+    expect(config.targets[0]!.video).toEqual({ mode: 'on', source: 'target' });
   });
 
   it('accepts agent options alongside an executor', () => {

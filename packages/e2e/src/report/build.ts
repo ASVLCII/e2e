@@ -6,7 +6,7 @@ import { ENGINE_SPI_VERSION, type EngineSpiVersion } from '../engine/contract.ts
 import { BLOCKABLE_CODES } from '../agent/executor.ts';
 import { DEFAULT_OBSERVATION_BYTES, resolveLimits } from '../config/agent.ts';
 import type { ResolvedConfig, ResolvedLimits, ResolvedTarget } from '../config/resolve.ts';
-import type { AgentErrorCode, ConfiguredArtifactKind } from '../types.ts';
+import type { AgentErrorCode } from '../types.ts';
 import type { ErrorCategory, ErrorDetails, ErrorPhase, HookScope, SerializedError } from '../internal/errors.ts';
 import { resultId, timestamp } from '../internal/ids.ts';
 import { obj } from '../internal/objects.ts';
@@ -43,8 +43,8 @@ export interface ReportSource {
 export interface TargetProvenance {
   engine: { name: string; version: string; spiVersion: EngineSpiVersion };
   capabilities: string[];
-  /** What the engine can capture: the configurable kinds, and video. */
-  artifactCapabilities: (ConfiguredArtifactKind | 'video')[];
+  /** What the engine can capture: screenshots (a failure's among them), a trace, a video. */
+  artifactCapabilities: ('screenshot' | 'trace' | 'video')[];
   stateCapability: boolean;
 }
 

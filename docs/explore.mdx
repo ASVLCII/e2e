@@ -86,10 +86,11 @@ A rerun of the same goal writes to the same directory, and the digest keeps
 different goals apart.
 
 `--reporter list,markdown` also writes the findings to `.e2e/summary.md`.
-`--debug`, `--ai-trace`, and `--video` work as they do for `e2e run`. Video
-requires an engine that supports recording. The exploration is one attempt,
-so `--video=on-first-retry` records nothing; put the goal before a bare
-`--video`.
+`--debug`, `--ai-trace`, `--trace`, and `--video` work as they do for
+`e2e run`: they apply when the engine can record, with a notice otherwise.
+The exploration is one attempt, so a retry mode (`on-first-retry`,
+`on-all-retries`, and the CI trace default) records nothing; put the goal
+before a bare `--trace` or `--video`.
 
 ## Your config applies
 

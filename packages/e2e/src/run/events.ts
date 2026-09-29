@@ -110,8 +110,9 @@ export type RunEventFact =
        * under an `app` step, or what a worker's engine `init` reported
        * (`<target> worker <slot>: <line>`) once the run is executing.
        * `target` is the target the line is about, `app` for the app
-       * process and its services, or `collect` for a test file a narrowed
-       * run skipped.
+       * process and its services, `collect` for a test file a narrowed
+       * run skipped, or `run` for a recording the run asked for and will
+       * not make.
        */
       readonly type: 'notice';
       readonly target: string;

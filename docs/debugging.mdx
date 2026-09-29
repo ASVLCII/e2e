@@ -91,12 +91,14 @@ failed result:
 
 Artifacts land under `.e2e/artifacts/`, one directory per attempt:
 
-- **Screenshots.** Failed attempts capture one when screenshots are enabled
-  and pixels are allowed. The built-in `agent.assert` also captures one after
+- **Screenshots.** Failed attempts capture one whenever the engine can and
+  pixels are allowed. The built-in `agent.assert` also captures one after
   either verdict unless `screenshot: false` disables it. Capture can fail or
   be withheld. Use `app.screenshot('label')` to capture one explicitly.
-- **Playwright traces** when the `trace` artifact kind is enabled and capture
-  succeeds. Open a trace with `npx playwright show-trace <file>`.
+- **Playwright traces** on the attempts the [`trace`](/reference/config#trace)
+  mode records: every attempt locally, the first retry in CI. Open one with
+  `npx playwright show-trace <file>`; `--trace off` skips the cost for one
+  run, `--trace` records every attempt of a CI run.
 - **Downloads** saved through `web.waitForDownload`, recorded with kind
   `download`. They are the app's bytes: `redaction: "incomplete"` unless a
   secret was filled on the session and the file is text, which the runner
@@ -148,7 +150,8 @@ export default {
 
 A target's `video` wins over the config's, `--video` over both. A test's own
 option wins over all of them, which records one flow you are chasing
-without recording the suite:
+without recording the suite. `trace` takes the same modes and follows the
+same order:
 
 ```ts
 test('checkout', { video: 'on' }, async ({ agent }) => {
@@ -157,9 +160,11 @@ test('checkout', { video: 'on' }, async ({ agent }) => {
 ```
 
 `--video [mode]` takes an optional value, so put test files before it or
-write `--video=<mode>`. An engine that cannot record fails the run with
-`UNSUPPORTED_ARTIFACT` before any test starts, as soon as one test would
-record on it. [video](/reference/config#video) has every mode and file.
+write `--video=<mode>`. The flag and the config's `video` apply to the targets
+whose engine can record, with one notice naming the rest. A mode set on a
+target or a test is required: an engine that cannot record it fails the run
+with `UNSUPPORTED_ARTIFACT` before any test starts.
+[Recording](/reference/config#recording) has every mode and file.
 
 ## Console output
 

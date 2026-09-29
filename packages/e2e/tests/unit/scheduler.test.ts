@@ -31,6 +31,7 @@ const defaultOptions: ResolvedTestOptions = {
   agentContext: undefined,
   skipReason: undefined,
   serial: false,
+  trace: undefined,
   video: undefined,
 };
 
@@ -51,7 +52,8 @@ function makeTarget(name: string, index: number, engine?: EngineHandle): Resolve
     platform: 'web',
     engine,
     app: EMPTY_APP,
-    video: 'off',
+    trace: { mode: 'off', source: 'default' },
+    video: { mode: 'off', source: 'default' },
   };
 }
 

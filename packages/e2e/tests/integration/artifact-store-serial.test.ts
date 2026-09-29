@@ -62,7 +62,8 @@ describe('ArtifactStore across a serial group', () => {
         tests: 'tests/**/*.e2e.ts',
         reporters: ['json'] as const,
         cache: 'off' as const,
-        artifacts: { kinds: ['screenshot', 'trace'], store },
+        trace: 'on',
+        artifacts: { store },
       },
     });
     expect(outcome.status).toBe('passed');

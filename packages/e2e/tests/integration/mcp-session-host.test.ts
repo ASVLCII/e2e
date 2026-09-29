@@ -16,7 +16,7 @@ import { createFakeEngine, type FakeEngineBehavior, type FakeEngineHandle } from
 import { freePort } from '../helpers/free-port.ts';
 import { gate } from '../helpers/gate.ts';
 import { startupLog, writeStartupScripts } from '../helpers/startup-scripts.ts';
-import type { VideoMode } from '../../src/types.ts';
+import type { RecordingMode } from '../../src/types.ts';
 
 const sessionModule = new URL('../../dist/mcp/session.js', import.meta.url).href;
 const { SessionHost } = (await import(sessionModule)) as typeof import('../../src/mcp/session.ts');
@@ -50,7 +50,8 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     readonly idleMs?: number;
     readonly ttlMs?: number;
     readonly maxSessions?: number;
-    readonly video?: VideoMode;
+    readonly trace?: RecordingMode;
+    readonly video?: RecordingMode;
     /** Holds every config load until it settles. */
     readonly loaded?: Promise<void>;
   }
@@ -69,6 +70,7 @@ describe('SessionHost', { timeout: 60_000 }, () => {
           {
             targets: [{ name: 'kiosk', platform: 'kiosk', engine: engine().engine }],
             credentials: { admin: { username: 'admin', password: 'kiosk-pw' } },
+            ...(options.trace === undefined ? {} : { trace: options.trace }),
             ...(options.video === undefined ? {} : { video: options.video }),
           } as never,
           { projectRoot: dir, env: {}, configPath },
@@ -371,6 +373,20 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     expect(closed.endsWith(`- ${path.join(recordings, '2.webm')}`)).toBe(true);
     expect(readdirSync(recordings).toSorted()).toEqual(['1-demo.webm', '2.webm']);
     expect(existsSync(path.join(fake.attempts[0]!.artifactsDir, 'video', 'fake.webm'))).toBe(false);
+  });
+
+  it('traces the one attempt under on, and records no trace under a retry or retain-on-failure mode', async () => {
+    /** The trace operations one session with the config's `trace` ran. */
+    const traced = async (trace: RecordingMode | undefined) => {
+      const fake = createFakeEngine({ trace: true });
+      const session = host(() => fake, trace === undefined ? {} : { trace });
+      await session.open({});
+      await session.close('done');
+      return fake.operations.map((operation) => operation.method).filter((method) => method.includes('Trace'));
+    };
+    expect(await traced(undefined)).toEqual(['artifacts.startTrace', 'artifacts.stopTrace']);
+    expect(await traced('on')).toEqual(['artifacts.startTrace', 'artifacts.stopTrace']);
+    for (const mode of ['off', 'on-first-retry', 'on-all-retries', 'retain-on-failure'] as const) expect(await traced(mode)).toEqual([]);
   });
 
   it('lists no recording tools when the engine records no video', async () => {

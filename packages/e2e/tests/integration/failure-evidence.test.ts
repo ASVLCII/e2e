@@ -21,7 +21,6 @@ import { runProject, type RunOutcome } from '../helpers/run-project.ts';
 function fakeConfig(fake: FakeEngineHandle, extra: Partial<E2EConfig> = {}): E2EConfig {
   return {
     targets: [{ name: 'fake', platform: 'web', engine: fake.engine }],
-    artifacts: ['screenshot'],
     actionTimeout: 300,
     ...extra,
   } as E2EConfig;
@@ -188,12 +187,12 @@ describe('failure evidence', () => {
   );
 
   it(
-    'records what an assertion expected and observed as details, and captures the screen without a screenshot when the run keeps none',
+    'records what an assertion expected and observed as details, and always captures the screen and a screenshot',
     async () => {
       const fake = createFakeEngine({ artifacts: true });
       const { outcome, project } = await runProject(
         { 'tests/count.e2e.ts': WRONG_EXPECTATION_TEST },
-        { appUrl: FAKE_APP_URL, config: fakeConfig(fake, { artifacts: [] }) },
+        { appUrl: FAKE_APP_URL, config: fakeConfig(fake, { trace: 'off' }) },
       );
       try {
         assertValidReport(outcome.report);
@@ -204,9 +203,9 @@ describe('failure evidence', () => {
         });
         expect(attempt.error?.details?.observed).toBeDefined();
         expect(attempt.failure?.screen).toBeDefined();
-        expect(attempt.failure?.screenshot).toBeUndefined();
+        expect(attempt.failure?.screenshot).toBeDefined();
         expect(attempt.failure?.candidates).toBeUndefined();
-        expect(fake.operations.some((operation) => operation.method.startsWith('artifacts.screenshot('))).toBe(false);
+        expect(fake.operations.some((operation) => operation.method.startsWith('artifacts.screenshot('))).toBe(true);
       } finally {
         project.cleanup();
       }

@@ -344,6 +344,24 @@ describe('e2e run argument parsing', () => {
     expect(options.artifactsDir).toBe('out/artifacts');
   });
 
+  it('parses --trace and --video modes, a bare flag as on', async () => {
+    await invoke('run', '--trace=on-all-retries', '--video');
+    expect(lastRunOptions()).toMatchObject({ trace: 'on-all-retries', video: 'on' });
+    runMock.mockClear();
+    await invoke('run', '--trace', '--video=retain-on-failure');
+    expect(lastRunOptions()).toMatchObject({ trace: 'on', video: 'retain-on-failure' });
+    runMock.mockClear();
+    await invoke('run', 'tests/a.e2e.ts');
+    expect(lastRunOptions()).toMatchObject({ trace: undefined, video: undefined });
+  });
+
+  it('refuses a --trace value that is not a mode, with the way to write one', async () => {
+    await invoke('run', '--trace', 'tests/a.e2e.ts');
+    expect(runMock).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(2);
+    expect(written(stderrSpy)).toContain('write --trace=<mode>, or put test files before --trace');
+  });
+
   it('propagates the run outcome exit code', async () => {
     runMock.mockResolvedValue({ exitCode: 3, report: sampleReport() });
     await invoke('run');
@@ -588,6 +606,7 @@ describe('e2e --version and --help', () => {
       '--artifacts',
       '--debug',
       '--ai-trace',
+      '--trace',
       '--video',
       '-h',
     ]);

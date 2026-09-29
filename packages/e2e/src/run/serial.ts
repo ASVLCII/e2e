@@ -10,12 +10,11 @@ import {
 import { canonicalDigest, timestamp, uuidv7 } from '../internal/ids.ts';
 import type { CollectedTest } from '../collect/collect.ts';
 import { groupTitles, type RegisteredTest } from '../collect/registry.ts';
-import { pairVideoMode, type SkipInfo, type TestTargetPair } from '../collect/select.ts';
+import { pairRecordings, type SkipInfo, type TestTargetPair } from '../collect/select.ts';
 import type { ResolvedTarget } from '../config/resolve.ts';
 import type { ArtifactStore } from '../types.ts';
 import { createAttemptArtifacts, sanitizePathSegment } from './artifacts.ts';
 import type { AttemptContext, ClosingRecord, SessionClose, SessionPlan } from './execute.ts';
-import { attemptVideo } from './video.ts';
 import type { ArtifactSink } from './fixtures.ts';
 import type { StepRecord } from './steps.ts';
 import { findRegistered, type FileRef, type Realm, RealmManager } from './realm.ts';
@@ -184,7 +183,7 @@ async function runSerialAttempt(
   const startedMs = Date.now();
   const memberRecords: SerialMemberRecord[] = [];
   const first = members[0]!;
-  const video = attemptVideo(pairVideoMode(first), attemptIndex);
+  const recordings = pairRecordings(first, attemptIndex);
   const artifactSegments = [
     host.target.name,
     sanitizePathSegment(first.test.serialId ?? first.test.id),
@@ -226,8 +225,8 @@ async function runSerialAttempt(
   let shared: SharedSerialSession;
   try {
     shared = {
-      // Members share the group's session and video, which selection resolved alike for each.
-      session: await host.launchSession({ session: first.options.session, video, attemptIndex }, attemptId, artifacts.dir, host.interruptSignal),
+      // Members share the group's session and recordings, which selection resolved alike for each.
+      session: await host.launchSession({ session: first.options.session, recordings }, attemptId, artifacts.dir, host.interruptSignal),
       attemptId,
       artifactSegments,
       priorSteps: [],
@@ -341,7 +340,7 @@ async function runSerialAttempt(
     record.status = failedMember.status;
     if (failedMember.error !== undefined) record.error = failedMember.error;
   }
-  await host.closeSession(shared.session, { attemptId, video }, record, artifacts.sink, record.secondaryErrors);
+  await host.closeSession(shared.session, { attemptId, recordings }, record, artifacts.sink, record.secondaryErrors);
   await artifacts.settle();
   record.durationMs = Date.now() - startedMs;
   return record;

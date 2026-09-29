@@ -24,6 +24,7 @@ import {
   type PointHit,
   type PointTapResult,
   type PollExpectation,
+  type RecordingMode,
   type Reporter,
   type Role,
   type RoleAlias,
@@ -134,23 +135,26 @@ unique(7);
 ({ targets: [{ name: 'phone', engine }] }) satisfies E2EConfig;
 // @ts-expect-error cache mode is a closed union
 ({ targets, cache: 'sometimes' }) satisfies E2EConfig;
+({ targets, artifacts: { store: artifactStore } }) satisfies E2EConfig;
+// @ts-expect-error artifacts no longer lists kinds; trace and video choose the recordings
 ({ targets, artifacts: ['screenshot', 'trace'] }) satisfies E2EConfig;
+// @ts-expect-error artifacts.kinds was removed
 ({ targets, artifacts: { kinds: ['trace'], store: artifactStore } }) satisfies E2EConfig;
-// @ts-expect-error artifact kinds are a closed union
-({ targets, artifacts: ['gif'] }) satisfies E2EConfig;
-// @ts-expect-error video is its own option, not an artifact kind
-({ targets, artifacts: ['video'] }) satisfies E2EConfig;
+// @ts-expect-error artifacts.trace was removed; trace is a mode at the config root
+({ targets, artifacts: { trace: { record: 'retries' } } }) satisfies E2EConfig;
 // @ts-expect-error video retention moved to the video mode
 ({ targets, artifacts: { video: { retain: 'on-failure' } } }) satisfies E2EConfig;
-({ targets, video: 'retain-on-failure' }) satisfies E2EConfig;
-({ targets: [{ name: 'phone', engine, video: 'on-first-retry' }], video: 'off' }) satisfies E2EConfig;
+({ targets, trace: 'on-all-retries', video: 'retain-on-failure' }) satisfies E2EConfig;
+({ targets: [{ name: 'phone', engine, trace: 'off', video: 'on-first-retry' }], trace: 'on', video: 'off' }) satisfies E2EConfig;
+'on-all-retries' satisfies RecordingMode;
+// @ts-expect-error trace is a closed set of modes; record: 'retries' is on-all-retries
+({ targets, trace: 'retries' }) satisfies E2EConfig;
 // @ts-expect-error video is a closed set of modes
 ({ targets, video: 'sometimes' }) satisfies E2EConfig;
 // @ts-expect-error video is a mode, not a boolean
 ({ targets, video: true }) satisfies E2EConfig;
-({ targets, artifacts: { trace: { record: 'retries' } } }) satisfies E2EConfig;
-// @ts-expect-error trace recording is a closed union
-({ targets, artifacts: { trace: { record: 'on-failure' } } }) satisfies E2EConfig;
+// @ts-expect-error trace is a mode, not a boolean
+({ targets: [{ name: 'phone', engine, trace: true }] }) satisfies E2EConfig;
 ({ put: async (artifact) => ({ ref: artifact.startedAt ?? artifact.sha256 }) }) satisfies ArtifactStore;
 declare const reporter: Reporter;
 ({ targets, reporters: ['list', reporter] }) satisfies E2EConfig;
@@ -407,6 +411,10 @@ test.extend<{ device: unknown }>()('types a device', async ({ device }) => { dev
 
 // A test, a group, and a call each pin a configured agent by name.
 test('as the buyer', { agent: 'buyer' }, async () => {});
+test('traced on retries', { trace: 'on-all-retries', video: 'retain-on-failure' }, async () => {});
+test.describe('untraced', { trace: 'off' }, () => {});
+// @ts-expect-error a test's trace is a mode
+test('traced', { trace: 'all' }, async () => {});
 test.describe('admin flows', { agent: 'admin' }, () => {});
 await agent.act('approve it', { agent: 'admin' });
 await agent.assert('it is approved', { agent: 'buyer' });

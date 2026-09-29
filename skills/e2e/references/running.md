@@ -37,7 +37,8 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the s
 | `--pass-with-no-tests` | Exit 0 when nothing matches instead of `NO_TESTS`. |
 | `--debug` | Phase timings and an agent step table on stderr; step transcripts saved as artifacts. |
 | `--ai-trace` | Record every model call to `.e2e/ai-trace.json`. |
-| `--video [mode]` | Which attempts record a video (WebM on a browser engine, MP4 on a device engine), over the config and every target: bare is `on`; `--video=retain-on-failure` keeps only failed attempts' recordings; `on-first-retry` records only first retries. A test's own `video` still wins. The value is greedy: write `--video=<mode>` or put test files before the flag. The failure recap names the file. `UNSUPPORTED_ARTIFACT` when a test would record on an engine that cannot. |
+| `--trace [mode]` | Which attempts record a trace, over the config and every target: bare is `on`, `--trace off` skips the cost, `on-all-retries` / `on-first-retry` trace only retries. A test's own `trace` still wins. Targets whose engine cannot trace are skipped with a notice. Greedy like `--video`. |
+| `--video [mode]` | Which attempts record a video (WebM on a browser engine, MP4 on a device engine), over the config and every target: bare is `on`; `--video=retain-on-failure` keeps only failed attempts' recordings; `on-first-retry` records only first retries, `on-all-retries` every retry. A test's own `video` still wins. The value is greedy: write `--video=<mode>` or put test files before the flag. The failure recap names the file. Targets whose engine cannot record are skipped with a notice. |
 
 ```bash
 npx e2e run tests/signup.e2e.ts

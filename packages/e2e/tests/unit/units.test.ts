@@ -26,7 +26,8 @@ const target: ResolvedTarget = {
   platform: 'web',
   engine: undefined,
   app: EMPTY_APP,
-  video: 'off',
+  trace: { mode: 'off', source: 'default' },
+  video: { mode: 'off', source: 'default' },
 };
 
 function makeTest(
@@ -67,6 +68,7 @@ const defaultOptions: ResolvedTestOptions = {
   agentContext: undefined,
   skipReason: undefined,
   serial: false,
+  trace: undefined,
   video: undefined,
 };
 
