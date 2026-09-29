@@ -35,6 +35,7 @@ import {
   type Secret,
   type StepExecutorContext,
   type StepTurn,
+  type StoredArtifactLink,
   type Target,
   type Unique,
   type CacheStore,
@@ -156,6 +157,16 @@ unique(7);
 // @ts-expect-error trace is a mode, not a boolean
 ({ targets: [{ name: 'phone', engine, trace: true }] }) satisfies E2EConfig;
 ({ put: async (artifact) => ({ ref: artifact.startedAt ?? artifact.sha256 }) }) satisfies ArtifactStore;
+({
+  put: async (artifact) => ({ ref: artifact.sha256 }),
+  putLink: async (link: StoredArtifactLink) => ({ ref: `${link.url}#${link.attemptId}@${link.startedAt}` }),
+}) satisfies ArtifactStore;
+({ kind: 'video', url: 'https://r.example/a.mp4', mediaType: 'video/mp4', redaction: 'incomplete', runId: 'r', testId: 't', attemptId: 'a', startedAt: '2026-01-01T00:00:00.000Z' }) satisfies StoredArtifactLink;
+// @ts-expect-error a link has no bytes, and only video links exist
+({ kind: 'trace', url: 'https://r.example/a.zip', mediaType: 'application/zip', redaction: 'incomplete', runId: 'r', testId: 't', attemptId: 'a', startedAt: '2026-01-01T00:00:00.000Z' }) satisfies StoredArtifactLink;
+({ targets, output: 'results/e2e' }) satisfies E2EConfig;
+// @ts-expect-error output is one directory
+({ targets, output: ['a', 'b'] }) satisfies E2EConfig;
 declare const reporter: Reporter;
 ({ targets, reporters: ['list', reporter] }) satisfies E2EConfig;
 ({ targets, reporters: [reporter] }) satisfies E2EConfig;

@@ -896,6 +896,11 @@ describe('resolveConfig', () => {
     it('rejects unknown keys and a non-store store', () => {
       expect(() => resolve({ artifacts: { ttl: 1 } as never })).toThrow(/unknown artifacts config key "ttl"/);
       expect(() => resolve({ artifacts: { store: { upload: true } } as never })).toThrow(/artifacts.store must implement ArtifactStore/);
+      expect(() => resolve({ artifacts: { store: { put: async () => ({ ref: '' }), putLink: 'yes' } } as never })).toThrow(
+        'artifacts.store must implement ArtifactStore: { put(artifact), putLink?(link) }',
+      );
+      const linking = { put: async () => ({ ref: '' }), putLink: async () => ({ ref: '' }) };
+      expect(resolve({ artifacts: { store: linking } }).artifactStore).toBe(linking);
       expect(() => resolve({ artifacts: 'on' as never })).toThrow(/artifacts must be \{ store \}/);
     });
 
@@ -968,6 +973,54 @@ describe('resolveConfig', () => {
       expect(() => resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: { [kind]: 'all' as never } })).toThrow(
         `--${kind} must be one of`,
       );
+    });
+  });
+
+  describe('output', () => {
+    /** The message `resolve` throws for `raw` and `cli`. */
+    const refusal = (raw: Partial<E2EConfig>, cli: { output?: string } = {}): string => {
+      try {
+        resolveConfig({ targets: TARGETS, ...raw }, { projectRoot: ROOT, env: BASE_ENV, cli });
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'INVALID_CONFIG' });
+        return (error as Error).message;
+      }
+      throw new Error('resolved');
+    };
+
+    it('defaults to .e2e, resolves from the project root, and --output wins over the config', () => {
+      expect(resolve({}).output).toBe(path.join(ROOT, '.e2e'));
+      expect(resolve({ output: 'results/e2e' }).output).toBe(path.join(ROOT, 'results', 'e2e'));
+      expect(resolveConfig({ targets: TARGETS, output: 'results' }, { projectRoot: ROOT, env: BASE_ENV, cli: { output: 'out' } }).output).toBe(
+        path.join(ROOT, 'out'),
+      );
+      // The default cache sits inside the default output, outside anything a run clears.
+      expect(resolve({}).cache.dir).toBe(path.join(ROOT, '.e2e', 'cache'));
+    });
+
+    it('stays out of the digest', () => {
+      expect(resolve({ output: 'results' }).configDigest).toBe(resolve({}).configDigest);
+    });
+
+    it('refuses a directory the run cannot own, with the reason', () => {
+      expect(refusal({ output: '' })).toBe('output must be a non-empty path relative to the project root, got ""');
+      expect(refusal({ output: 5 as never })).toContain('output must be a non-empty path');
+      expect(refusal({ output: '.' })).toContain('output "." is the project root');
+      expect(refusal({}, { output: './' })).toContain('--output "./" is the project root');
+      expect(refusal({ output: '../elsewhere' })).toContain(`output "../elsewhere" is outside the project root ${ROOT}`);
+      expect(refusal({ output: '/tmp/e2e-results' })).toContain('is outside the project root');
+      expect(refusal({ output: '.e2e/cache' })).toContain('is the cache directory .e2e/cache or inside it');
+      expect(refusal({ output: 'store/results', cache: { dir: 'store' } })).toContain('is the cache directory store or inside it');
+      expect(refusal({ output: 'out', cache: { dir: 'out/artifacts/cache' } })).toContain('would hold cache.dir out/artifacts/cache under artifacts/');
+      expect(refusal({ output: 'tests' })).toContain('holds tests, where the tests glob "tests/**/*.e2e.ts" finds test files');
+      expect(refusal({ output: 'e2e', tests: ['e2e/smoke/**/*.e2e.ts'] })).toContain('holds e2e/smoke');
+      expect(refusal({ output: 'e2e', tests: 'e2e/login.e2e.ts' })).toContain('holds e2e,');
+    });
+
+    it('accepts an output beside the tests, or inside a glob rooted higher up', () => {
+      expect(resolve({ output: 'results', tests: ['tests/**/*.e2e.ts', '!results/**'] }).output).toBe(path.join(ROOT, 'results'));
+      expect(resolve({ output: 'results', tests: '**/*.e2e.ts' }).output).toBe(path.join(ROOT, 'results'));
+      expect(resolve({ output: 'out', cache: { dir: 'out/replays' } }).cache.dir).toBe(path.join(ROOT, 'out', 'replays'));
     });
   });
 

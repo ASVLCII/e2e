@@ -332,8 +332,8 @@ describe('e2e run argument parsing', () => {
       '--pass-with-no-tests',
       '--config',
       'custom.config.ts',
-      '--artifacts',
-      'out/artifacts',
+      '--output',
+      'out',
     );
     const options = lastRunOptions();
     expect(options.headed).toBe(true);
@@ -341,7 +341,7 @@ describe('e2e run argument parsing', () => {
     expect(options.aiTrace).toBe(true);
     expect(options.passWithNoTests).toBe(true);
     expect(options.configPath).toBe('custom.config.ts');
-    expect(options.artifactsDir).toBe('out/artifacts');
+    expect(options.output).toBe('out');
   });
 
   it('parses --trace and --video modes, a bare flag as on', async () => {
@@ -360,6 +360,18 @@ describe('e2e run argument parsing', () => {
     expect(runMock).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(2);
     expect(written(stderrSpy)).toContain('write --trace=<mode>, or put test files before --trace');
+  });
+
+  it('refuses the removed --artifacts, mapping it to --output of its parent', async () => {
+    for (const command of ['run', 'explore']) {
+      runMock.mockClear();
+      process.exitCode = undefined;
+      stderrSpy.mockClear();
+      await invoke(command, '--artifacts', 'out/artifacts');
+      expect(runMock).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(2);
+      expect(written(stderrSpy)).toContain('--artifacts was removed; write --output out instead');
+    }
   });
 
   it('propagates the run outcome exit code', async () => {
@@ -603,7 +615,7 @@ describe('e2e --version and --help', () => {
       '--no-cache',
       '--strict-cache',
       '--reporter',
-      '--artifacts',
+      '--output',
       '--debug',
       '--ai-trace',
       '--trace',

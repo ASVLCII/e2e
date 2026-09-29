@@ -10,5 +10,5 @@
 .devtools/
 .e2e/explore-bench/
 .e2e/explore-*/
-# Side-by-side measurement runs (`--artifacts .e2e-<label>/artifacts`).
+# Side-by-side measurement runs (`--output .e2e-<label>`).
 .e2e-*/

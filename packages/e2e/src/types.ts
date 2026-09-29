@@ -1086,6 +1086,32 @@ export interface StoredArtifact {
  */
 export interface ArtifactStore {
   put(artifact: StoredArtifact): Promise<{ readonly ref: string }>;
+  /**
+   * Receives a video a hosted service keeps (a browser or device provider's
+   * own recording): a link with no bytes, so `put` never sees it. Returns a
+   * reference the report records as the artifact's `ref` beside its `url`.
+   * Optional: without it a link is only recorded. A passed attempt's link
+   * under `retain-on-failure` is never handed over, since the report leaves
+   * it out. A failed `putLink` never fails the run, like `put`.
+   */
+  putLink?(link: StoredArtifactLink): Promise<{ readonly ref: string }>;
+}
+
+/** One provider-hosted recording, handed to `store.putLink` once the attempt stopped it. */
+export interface StoredArtifactLink {
+  readonly kind: 'video';
+  /** The `http(s)` URL the service serves the recording from. */
+  readonly url: string;
+  readonly mediaType: string;
+  /** A recording masks nothing, so a link is always `incomplete`. */
+  readonly redaction: 'incomplete';
+  readonly runId: string;
+  readonly testId: string;
+  readonly attemptId: string;
+  /** When the recording started, as an ISO timestamp. */
+  readonly startedAt: string;
+  /** The step that was running when the recording was registered, if any. */
+  readonly stepId?: string;
 }
 
 /**
@@ -1169,7 +1195,7 @@ export interface FinishedRun {
   readonly projectRoot: string;
   /** Where `report.json` was written; undefined when the write failed or config never loaded. */
   readonly reportPath: string | undefined;
-  /** Absolute directory the report's artifact paths are relative to. */
+  /** Absolute directory the report's artifact paths are relative to: `<output>/artifacts`. */
   readonly artifactsRoot: string;
   /** Where `--ai-trace` wrote the run's model calls, when it was requested. */
   readonly aiTracePath: string | undefined;
@@ -1245,8 +1271,19 @@ export interface E2EConfig {
    */
   video?: RecordingMode;
   /**
-   * Output renderers and reporter objects. `junit` writes `.e2e/junit.xml`,
-   * `markdown` writes `.e2e/summary.md`, `json` prints the report and
+   * The directory a run writes its results to, relative to the project root;
+   * default `.e2e`. It holds `report.json`, `junit.xml`, `summary.md`,
+   * `ai-trace.json`, `artifacts/` (cleared at the start of every run),
+   * `sessions/`, and the `e2e mcp` session videos under `videos/`.
+   * `--output <dir>` overrides it for one run. It must be inside the project
+   * root and not the root itself, may not hold a test glob's directory, and
+   * is independent of `cache.dir`, which may sit inside it but not under a
+   * directory the run clears.
+   */
+  output?: string;
+  /**
+   * Output renderers and reporter objects. `junit` writes `<output>/junit.xml`,
+   * `markdown` writes `<output>/summary.md`, `json` prints the report and
    * excludes `list`; a `Reporter` object runs
    * beside them and `--reporter` never removes it.
    */

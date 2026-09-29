@@ -31,7 +31,7 @@ npx e2e telemetry [disable|enable] # anonymous usage telemetry: status, or the s
 | `--max-failures <n>` | Stop once this many tests failed: the rest are skipped with cause `failure-limit`, running tests end as `interrupted`, exit 1. |
 | `--repeat-each <n>` | Run every selected test n times, each run its own result (`repeat` 0 through n-1). Add `--no-cache`, or the later runs replay the first's recording. The summary's `Repeats` row says how many tests passed every run and lists the runs of each one that did not. |
 | `--reporter <ids>` | `list`, `json`, `junit`, `markdown`, comma-separated. `json` cannot combine with `list`. |
-| `--artifacts <dir>` | Artifact root, default `.e2e/artifacts`. |
+| `--output <dir>` | Results directory for this run, over the config's `output` (default `.e2e`): `report.json`, `junit.xml`, `summary.md`, `ai-trace.json`, `artifacts/` (cleared when a run starts), `sessions/`. `--artifacts` is gone: `--artifacts out/artifacts` is `--output out`. |
 | `--no-cache` | Run with the replay cache off. |
 | `--strict-cache` | Fail a step whose committed recording no longer replays (`REPLAY_STALE`, exit 2) instead of letting the agent take it over. For CI that replays committed recordings. |
 | `--pass-with-no-tests` | Exit 0 when nothing matches instead of `NO_TESTS`. |
@@ -119,7 +119,8 @@ recorded flow is stale — `--no-cache` only skips the cache for one run.
   run (edited on rerun) and the job summary; needs `pull-requests: write` and
   `GITHUB_TOKEN` in the step's env.
 - Artifacts (screenshots, Playwright traces, video recordings, `--debug`
-  transcripts, downloads) live under `.e2e/artifacts/`; every path is
+  transcripts, downloads) live under `<output>/artifacts/` (`.e2e/artifacts/`
+  by default, emptied when a run starts); every path is
   recorded in the report, and a video a hosted service keeps is recorded by
   its URL.
 

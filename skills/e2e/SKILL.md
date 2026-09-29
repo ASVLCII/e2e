@@ -135,5 +135,5 @@ one. Without them, the installed CLI prints the same text:
   tools for a test API, and named personas under `agents`. When a step
   fails, tighten the goal first, then the context, then the agent. Topic
   `agent` has the loop.
-- `.e2e/` is output (`report.json`, `artifacts/`, `cache/`, `logs/`). Read it,
-  never edit it.
+- `.e2e/` is output (`report.json`, `artifacts/`, `cache/`, `logs/`; the
+  config's `output` moves all but `cache/`). Read it, never edit it.

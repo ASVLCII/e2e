@@ -12,7 +12,6 @@
  * restart and the client's tool list never changes.
  */
 
-import path from 'node:path';
 import { z } from 'zod';
 import { loadAiSdk } from '../agent/ai-sdk.ts';
 import { openInteractiveStep, type InteractiveStep } from '../agent/interactive-step.ts';
@@ -23,6 +22,7 @@ import { ConfigurationError, errorMessage, type SerializedError } from '../inter
 import { LocatorEngine } from '../locator/engine.ts';
 import { allocateAppPorts } from '../run/app-ports.ts';
 import { SharedAppProcesses } from '../run/process-pool.ts';
+import { outputLayout } from '../run/output.ts';
 import { sessionSecrecy } from '../run/secrecy.ts';
 import { openStandaloneAttempt, type StandaloneAttempt } from '../run/standalone.ts';
 import type { AgentParams } from '../types.ts';
@@ -203,7 +203,6 @@ export class SessionHost {
         env: this.options.env,
         signal: abort.signal,
         timeoutMs: ttlMs + CLOSE_GRACE_MS,
-        artifactsRoot: path.join(config.projectRoot, '.e2e', 'artifacts'),
         processes: this.apps,
         notice: (scope, message) => this.options.log('info', `${scope}: ${message}`),
       });
@@ -268,7 +267,7 @@ export class SessionHost {
     this.close(why, live.id).catch((cause: unknown) => this.options.log('error', `closing session ${live.id} failed: ${errorMessage(cause)}`));
   }
 
-  /** A recorder writing to `.e2e/videos/<session>/`, when the engine records video. */
+  /** A recorder writing to `<output>/videos/<session>/`, when the engine records video. */
   private recorder(id: string, config: ResolvedConfig, attempt: StandaloneAttempt): SessionRecorder | undefined {
     const { startVideo, stopVideo } = attempt.session.artifacts;
     if (startVideo === undefined || stopVideo === undefined) return undefined;
@@ -276,7 +275,7 @@ export class SessionHost {
       startVideo,
       stopVideo,
       attemptDir: attempt.artifactsDir,
-      outDir: path.join(config.projectRoot, '.e2e', 'videos', id),
+      outDir: outputLayout(config.output).videos(id),
       // Not the attempt's signal: a session that hit its TTL still saves the recording on the way out.
       operation: (timeoutMs) => ({
         signal: AbortSignal.timeout(timeoutMs),

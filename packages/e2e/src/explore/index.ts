@@ -65,7 +65,8 @@ export interface ExploreOptions {
   readonly timeoutMs?: number | undefined;
   readonly headed?: boolean | undefined;
   readonly reporters?: readonly BuiltinReporter[] | undefined;
-  readonly artifactsDir?: string | undefined;
+  /** The results directory, `--output`, over the config's `output`. */
+  readonly output?: string | undefined;
   readonly debug?: boolean | undefined;
   readonly aiTrace?: boolean | undefined;
   /** Which attempts record a trace, `--trace [mode]`; the exploration is one attempt, so a retry mode records nothing. */
@@ -139,7 +140,7 @@ export async function explore(options: ExploreOptions = {}): Promise<ExploreOutc
     targetIds: [target.name],
     headed: options.headed,
     reporters: options.reporters,
-    artifactsDir: options.artifactsDir,
+    output: options.output,
     debug: options.debug,
     aiTrace: options.aiTrace,
     trace: options.trace,

@@ -159,12 +159,28 @@ function runErrors(text: string): string {
   }
 }
 
+/**
+ * Where one run's results go, and what to remove once it ended. A build with
+ * `--output` keeps them in a directory inside the app, which the flag
+ * requires; an older build (the merge base, before the flag) takes
+ * `--artifacts` under `outDir`.
+ */
+function resultArgs(root: string, appDir: string, outDir: string): { args: string[]; written: string } {
+  const cli = readFileSync(path.join(root, 'packages', 'e2e', 'dist', 'cli', 'index.js'), 'utf8');
+  if (cli.includes("'--output <dir>'")) {
+    const written = path.join(appDir, '.e2e-bench-ab');
+    return { args: ['--output', written], written };
+  }
+  const written = path.join(outDir, 'artifacts');
+  return { args: ['--artifacts', written], written };
+}
+
 /** One `e2e run` through the build at `root`; exits 2 on a run that did not produce test results. */
 function runOnce(root: string, suite: string, runArgs: readonly string[], outDir: string): Promise<Sample> {
   const appDir = path.join(root, 'apps', suite);
-  const artifacts = path.join(outDir, 'artifacts');
+  const results = resultArgs(root, appDir, outDir);
   const bin = path.join(appDir, 'node_modules', 'e2e', 'dist', 'cli', 'bin.js');
-  const args = [bin, 'run', '--reporter', 'json', '--artifacts', artifacts, ...runArgs];
+  const args = [bin, 'run', '--reporter', 'json', ...results.args, ...runArgs];
   return new Promise((resolve) => {
     const started = process.hrtime.bigint();
     const child = spawn(process.execPath, args, { cwd: appDir, env: runEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -176,7 +192,7 @@ function runOnce(root: string, suite: string, runArgs: readonly string[], outDir
       const wallMs = Number(process.hrtime.bigint() - started) / 1e6;
       const text = Buffer.concat(stdout).toString('utf8');
       writeFileSync(path.join(outDir, 'report.json'), text);
-      rmSync(artifacts, { recursive: true, force: true });
+      rmSync(results.written, { recursive: true, force: true });
       const errors = runErrors(text);
       // Exit 1 is failed tests, which compare like any others; a run-level
       // error or a run that attempted nothing measured no test at all.

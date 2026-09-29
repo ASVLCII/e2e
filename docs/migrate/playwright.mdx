@@ -37,7 +37,7 @@ A Playwright key the runner recognizes (`testDir`, `baseURL`, `webServer`,
 | `maxFailures` | `--max-failures <n>`; no config key | CLI | renamed |
 | `reporter` | `reporters: ['list', 'junit']`; also `json` and `markdown` | config | renamed |
 | `reporter: 'html'` | no equivalent; `markdown` writes `.e2e/summary.md`, every run writes `.e2e/report.json` | config | missing |
-| `outputDir` | `--artifacts <dir>`, default `.e2e/artifacts` | CLI | renamed |
+| `outputDir` | `output`, default `.e2e`, holding `artifacts/` (cleared when a run starts, like `outputDir`) beside the report | config | renamed |
 | `metadata` | not yet | config | missing |
 
 ### Browser, timeouts, and artifacts
@@ -275,7 +275,7 @@ to do today.
 | `--ui` | not yet; `--headed` to watch, `e2e mcp` to drive the app from a coding agent | CLI | missing |
 | `--retries`, `--workers`, `--config`, `--pass-with-no-tests` | the same | CLI | same |
 | `--reporter` | the same flag; the ids are `list`, `json`, `junit`, `markdown` | CLI | same |
-| `--output` | `--artifacts` | CLI | renamed |
+| `--output` | `--output`, the results directory; the artifacts are in its `artifacts/` | CLI | same |
 | `--trace <mode>` | `--trace [mode]`, the same modes; a bare `--trace` is `on` | CLI | same |
 | `--last-failed`, `--shard`, `--repeat-each`, `--max-failures` | the same names; `--shard` keeps serial groups together | CLI | same |
 | `--quiet` | not yet | CLI | missing |

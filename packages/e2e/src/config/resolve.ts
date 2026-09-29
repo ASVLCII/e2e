@@ -10,7 +10,7 @@ import { didYouMean } from '../internal/suggest.ts';
 import { isRecordingMode, RECORDING_MODES, type RecordingKind, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { BUILTIN_REPORTER_LIST, BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { isStepExecutor } from '../agent/executor.ts';
-import { compileGlobList } from '../internal/globs.ts';
+import { compileGlob, compileGlobList, literalPrefix } from '../internal/globs.ts';
 import { boundedInt, describeValue, positiveInt } from './validate.ts';
 import type {
   ArtifactStore,
@@ -85,6 +85,8 @@ export interface ResolvedConfig {
   readonly workers: number;
   /** Host store every produced artifact is handed to; undefined keeps files local only. */
   readonly artifactStore: ArtifactStore | undefined;
+  /** Absolute directory the run writes its results to: `--output`, else the config's `output`, else `<projectRoot>/.e2e`. */
+  readonly output: string;
   /** The built-in renderers in force: `--reporter` when given, else the config's ids. */
   readonly reporters: readonly BuiltinReporter[];
   /** The reporter objects the config names; `--reporter` never removes one. */
@@ -123,8 +125,8 @@ export interface ResolvedCacheConfig {
 
 /**
  * Flags that replace config keys, so workers re-resolving the config file
- * apply them too. `--headed` and `--artifacts` are run options, not config
- * overrides, and travel separately.
+ * apply them too. `--headed` is a run option, not a config
+ * override, and travels separately.
  */
 export interface CliOverrides {
   retries?: number;
@@ -134,6 +136,8 @@ export interface CliOverrides {
   cache?: CacheMode;
   /** `--strict-cache`: turns `cache.strict` on for the run. */
   cacheStrict?: boolean;
+  /** `--output <dir>`: the results directory for this run, over the config's `output`. */
+  output?: string;
   /** `--trace [mode]`: which attempts record a trace, over the config's and every target's `trace`. */
   trace?: RecordingMode;
   /** `--video [mode]`: which attempts record a video, over the config's and every target's `video`. */
@@ -159,6 +163,7 @@ const TOP_LEVEL_KEYS = new Set([
   'retries',
   'workers',
   'artifacts',
+  'output',
   'trace',
   'video',
   'reporters',
@@ -295,6 +300,7 @@ export function resolveConfig(
     maxObservationBytes: Math.max(...[...agents.values()].map((entry) => entry.maxObservationBytes)),
   };
   const cache = resolveCacheConfig(raw, ci, options.projectRoot, cli.cache, cli.cacheStrict === true);
+  const output = resolveOutput(raw.output, cli.output, options.projectRoot, cache.dir, tests);
 
   const resolved: ResolvedConfig = {
     projectId,
@@ -311,6 +317,7 @@ export function resolveConfig(
     retries,
     workers,
     artifactStore,
+    output,
     reporters,
     customReporters,
     agentNames,
@@ -422,6 +429,59 @@ function resolveCacheConfig(
   };
 }
 
+/** The directories under the output a run clears or owns, which nothing else may live in. */
+const OUTPUT_OWNED_DIRS = ['artifacts', 'sessions', 'videos'] as const;
+
+/** Whether `inner` is `outer` or a path below it. */
+function isWithin(inner: string, outer: string): boolean {
+  const relative = path.relative(outer, inner);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * Resolves the results directory, `--output` over the config's `output`,
+ * from the project root. A run clears `<output>/artifacts` and writes over
+ * its reports, so the directory must be one it can own: inside the project
+ * root and not the root itself, not holding the directory a test glob scans,
+ * not the cache directory or inside it, and not wrapping the cache in a
+ * directory the run clears or owns.
+ */
+function resolveOutput(
+  configured: unknown,
+  flag: string | undefined,
+  projectRoot: string,
+  cacheDir: string,
+  tests: readonly string[],
+): string {
+  const where = flag === undefined ? 'output' : '--output';
+  const value: unknown = flag ?? configured;
+  if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} must be a non-empty path relative to the project root, got ${describeValue(value)}`);
+  }
+  const output = path.resolve(projectRoot, (value as string | undefined) ?? '.e2e');
+  const refuse = (reason: string): never => {
+    throw new ConfigurationError('INVALID_CONFIG', `${where} ${JSON.stringify(value)} ${reason}`);
+  };
+  if (output === projectRoot) refuse("is the project root; the run clears <output>/artifacts, so name a directory of its own, such as '.e2e'");
+  if (!isWithin(output, projectRoot)) refuse(`is outside the project root ${projectRoot}; name a directory inside it`);
+  if (isWithin(output, cacheDir)) refuse(`is the cache directory ${path.relative(projectRoot, cacheDir)} or inside it; keep results and the replay cache apart`);
+  for (const owned of OUTPUT_OWNED_DIRS) {
+    if (isWithin(cacheDir, path.join(output, owned))) {
+      refuse(`would hold cache.dir ${path.relative(projectRoot, cacheDir)} under ${owned}/, which the run owns; move cache.dir or the output`);
+    }
+  }
+  for (const pattern of tests) {
+    if (pattern.startsWith('!')) continue;
+    const glob = compileGlob(pattern);
+    const names = literalPrefix(glob);
+    const root = path.join(projectRoot, ...(names.length === glob.segments.length ? names.slice(0, -1) : names));
+    if (isWithin(root, output)) {
+      refuse(`holds ${path.relative(projectRoot, root) || '.'}, where the tests glob ${JSON.stringify(pattern)} finds test files; name a directory outside it`);
+    }
+  }
+  return output;
+}
+
 const ARTIFACTS_KEYS = new Set(['store']);
 
 /** Where a video fact lives now, for a config that still says it the old way. */
@@ -488,7 +548,7 @@ function resolveArtifactStore(raw: E2EConfig): ArtifactStore | undefined {
   if (store !== undefined && !isArtifactStore(store)) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      'artifacts.store must implement ArtifactStore: { put(artifact) }',
+      'artifacts.store must implement ArtifactStore: { put(artifact), putLink?(link) }',
     );
   }
   return store;
@@ -594,7 +654,8 @@ function isArtifactStore(value: unknown): value is ArtifactStore {
   return (
     typeof value === 'object' &&
     value !== null &&
-    typeof (value as { put?: unknown }).put === 'function'
+    typeof (value as { put?: unknown }).put === 'function' &&
+    ['undefined', 'function'].includes(typeof (value as { putLink?: unknown }).putLink)
   );
 }
 
@@ -893,12 +954,12 @@ function computeConfigDigest(raw: E2EConfig, projectId: string): string {
   // a store or a reporter may hold a client whose graph JSON cannot handle.
   //
   // `artifacts` holds only a host store, a live value, so it never enters the
-  // digest. Nor do `trace` and `video`, at the top or on a target: recording
+  // digest. Nor does `output`, where results land, nor `trace` and `video`, at the top or on a target: recording
   // a run must never invalidate the replays it would otherwise make. A
   // reporter object changes nothing about what a run records, so it never
   // enters the digest either; the built-in ids digest as they always have,
   // so adding a reporter to a config leaves its cache valid.
-  const { artifacts: _artifacts, trace: _trace, video: _video, ...recorded } = raw;
+  const { artifacts: _artifacts, output: _output, trace: _trace, video: _video, ...recorded } = raw;
   const forClone: Record<string, unknown> = {
     ...recorded,
     ...(Array.isArray(raw.reporters)

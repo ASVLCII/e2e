@@ -89,7 +89,9 @@ failed result:
 
 ## Artifacts
 
-Artifacts land under `.e2e/artifacts/`, one directory per attempt:
+Artifacts land under `.e2e/artifacts/` (`<output>/artifacts/` when the
+[`output`](/reference/config#output) is moved), one directory per attempt.
+Each run empties it first, so it holds the latest run's evidence:
 
 - **Screenshots.** Failed attempts capture one whenever the engine can and
   pixels are allowed. The built-in `agent.assert` also captures one after

@@ -57,7 +57,8 @@ export interface AttemptArtifacts {
  * produced files under report-relative paths, measuring and hashing them
  * asynchronously. With a `store`, each complete artifact is also handed to it
  * right then — as produced, not at run end — and the store's reference lands
- * on the record as `ref`.
+ * on the record as `ref`; a provider-hosted link goes to `putLink` the same
+ * way, when the store has one.
  */
 export function createAttemptArtifacts(options: {
   artifactsRoot: string;
@@ -158,7 +159,7 @@ export function createAttemptArtifacts(options: {
     link: (url, link) => {
       const id = `${options.attemptId}:artifact:${records.length}`;
       const stepId = options.currentStepId?.();
-      records.push({
+      const record: ArtifactRecord = {
         id,
         kind: 'video',
         mediaType: link.mediaType,
@@ -166,7 +167,32 @@ export function createAttemptArtifacts(options: {
         startedAt: link.startedAt,
         redaction: REDACTION_BY_KIND.video,
         producer: stepId === undefined ? { kind: 'attempt' } : { kind: 'step', stepId },
-      });
+      };
+      records.push(record);
+      const putLink = options.store?.putLink;
+      if (putLink !== undefined) {
+        pending.push(
+          (async () => {
+            // Best-effort like `put`: the record keeps its URL either way.
+            try {
+              const { ref } = await putLink.call(options.store, {
+                kind: 'video',
+                url,
+                mediaType: link.mediaType,
+                redaction: 'incomplete',
+                runId: options.identity?.runId ?? '',
+                testId: options.identity?.testId ?? '',
+                attemptId: options.identity?.attemptId ?? options.attemptId,
+                startedAt: link.startedAt,
+                ...(stepId === undefined ? {} : { stepId }),
+              });
+              if (typeof ref === 'string' && ref !== '') record.ref = ref;
+            } catch {
+              // best-effort by contract
+            }
+          })(),
+        );
+      }
       return id;
     },
   };

@@ -188,7 +188,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           E2E_MOBILE_BENCHMARK_IOS_APP: ${{ steps.app.outputs.app-path }}
           E2E_MOBILE_BENCHMARK_COMMENT: ios${{ env.SUITE == 'agentic' && ' agent' || '' }}
-          E2E_RUN: node node_modules/e2e/dist/cli/bin.js run --target ios-simulator ${{ env.SUITE == 'agentic' && '--config e2e.agent.config.ts --artifacts .e2e/agent/artifacts' || '' }}
+          E2E_RUN: node node_modules/e2e/dist/cli/bin.js run --target ios-simulator ${{ env.SUITE == 'agentic' && '--config e2e.agent.config.ts --output .e2e/agent' || '' }}
         run: $E2E_RUN || $E2E_RUN --last-failed
       # The artifact upload below fails whenever the repository's quota is
       # full, so the failure evidence goes into the log as well.
@@ -306,7 +306,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           E2E_MOBILE_BENCHMARK_ANDROID_APP: ${{ steps.app.outputs.app-path }}
           E2E_MOBILE_BENCHMARK_COMMENT: android${{ env.SUITE == 'agentic' && ' agent' || '' }}
-          E2E_RUN: node node_modules/e2e/dist/cli/bin.js run --target android-emulator ${{ env.SUITE == 'agentic' && '--config e2e.agent.config.ts --artifacts .e2e/agent/artifacts' || '' }}
+          E2E_RUN: node node_modules/e2e/dist/cli/bin.js run --target android-emulator ${{ env.SUITE == 'agentic' && '--config e2e.agent.config.ts --output .e2e/agent' || '' }}
       - name: Failure screens
         if: ${{ failure() }}
         working-directory: apps/mobile-benchmark

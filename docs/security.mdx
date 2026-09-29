@@ -246,9 +246,10 @@ values. CI defaults to read-only when no cache mode is configured.
 
 ## Artifacts and logs
 
-By default everything a run writes lands under `.e2e/`. The `--artifacts`
-flag moves the artifact root, and `command.log` is whatever project-relative
-path you configure.
+By default everything a run writes lands under `.e2e/`. The
+[`output`](/reference/config#output) option or `--output` moves it, the
+replay cache stays at `cache.dir`, and `command.log` is whatever
+project-relative path you configure.
 
 | Path | Contents | Redaction |
 | --- | --- | --- |

@@ -7,3 +7,5 @@ app/next-env.d.ts
 .e2e/sessions/
 .e2e/report.json
 .e2e/ai-trace.json
+# scripts/bench-ab.ts runs here with --output, and removes it after each run.
+.e2e-bench-ab/

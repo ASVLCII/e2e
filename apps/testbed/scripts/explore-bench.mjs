@@ -105,7 +105,7 @@ async function execute(run) {
     const log = createWriteStream(path.join(dir, 'cli.log'));
     const cli = spawn(
       process.execPath,
-      [CLI, 'explore', goal, '--config', 'e2e.explore.config.ts', '--max-steps', steps, '--timeout', timeout, '--artifacts', path.join(dir, 'artifacts'), '--debug'],
+      [CLI, 'explore', goal, '--config', 'e2e.explore.config.ts', '--max-steps', steps, '--timeout', timeout, '--output', dir, '--debug'],
       {
         cwd: ROOT,
         env: { ...process.env, E2E_MODEL: run.model, EXPLORE_APP_URL: `http://127.0.0.1:${run.port}`, FORCE_COLOR: '0' },

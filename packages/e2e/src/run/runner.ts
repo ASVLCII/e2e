@@ -1,5 +1,6 @@
 /** Run orchestration: config, collection, selection, execution, reporting. */
 
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import {
@@ -39,6 +40,7 @@ import type { ResultRecord, RunError, SerialGroupRecord } from './records.ts';
 import { runUnits } from './scheduler.ts';
 import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
+import { outputLayout } from './output.ts';
 import { lastFailedIds, readLastRun } from './last-run.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setSecretRegistry } from '../secrets.ts';
@@ -91,7 +93,13 @@ export interface RunOptions {
    */
   repeatEach?: number | undefined;
   reporters?: readonly BuiltinReporter[] | undefined;
-  artifactsDir?: string | undefined;
+  /**
+   * The results directory for this run (`--output`), relative to the project
+   * root, over the config's `output`: the report, the other reporter files,
+   * the AI trace, `artifacts/`, and `sessions/` go under it, and
+   * `lastFailed` reads the `report.json` there.
+   */
+  output?: string | undefined;
   passWithNoTests?: boolean | undefined;
   /** Runs with the trace cache off (`--no-cache`), overriding the config. */
   noCache?: boolean | undefined;
@@ -104,7 +112,7 @@ export interface RunOptions {
   agent?: string | readonly string[] | undefined;
   /** Prints aggregated phase timings to stderr after the run. */
   debug?: boolean | undefined;
-  /** Records every model call to `.e2e/ai-trace.json` (`--ai-trace`). */
+  /** Records every model call to `<output>/ai-trace.json` (`--ai-trace`). */
   aiTrace?: boolean | undefined;
   /**
    * Which attempts record a trace (`--trace [mode]`), over the config's and
@@ -199,7 +207,7 @@ export type ListOptions = Pick<
   | 'shard'
   | 'targetIds'
   | 'passWithNoTests'
-  | 'artifactsDir'
+  | 'output'
   | 'rawConfig'
   | 'env'
 >;
@@ -227,7 +235,7 @@ export interface ListedPair {
 export async function list(options: ListOptions = {}): Promise<{ pairs: ListedPair[] }> {
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
-  const config = await loadRunConfig(options, cwd, env, {});
+  const config = await loadRunConfig(options, cwd, env, options.output === undefined ? {} : { output: options.output });
   const collection = await collect(config, options.files);
   const selection = select(
     collection,
@@ -307,6 +315,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   if (options.reporters !== undefined) cli.reporters = options.reporters;
   if (options.noCache === true) cli.cache = 'off';
   if (options.strictCache === true) cli.cacheStrict = true;
+  if (options.output !== undefined) cli.output = options.output;
   if (options.trace !== undefined) cli.trace = options.trace;
   if (options.video !== undefined) cli.video = options.video;
   if (options.agent !== undefined) cli.agents = typeof options.agent === 'string' ? [options.agent] : options.agent;
@@ -422,7 +431,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
    * is not retried — the destination just failed.
    */
   const writeCanonicalReport = async (config: ResolvedConfig, document: Report1Document): Promise<string | undefined> => {
-    const target = reportSibling(config, options.artifactsDir, 'report.json');
+    const target = outputLayout(config.output).report;
     try {
       await writeJsonReport(target, document);
       return target;
@@ -454,7 +463,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       aiTraceRecorder.dispose();
       aiTraceRecorder = undefined;
     }
-    const target = reportSibling(config, options.artifactsDir, 'ai-trace.json');
+    const target = outputLayout(config.output).aiTrace;
     try {
       await writeJsonReport(target, aiTrace.document());
       return target;
@@ -515,10 +524,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
         exitCode,
         projectRoot: loaded.config?.projectRoot ?? cwd,
         reportPath,
-        artifactsRoot:
-          loaded.config === undefined
-            ? path.resolve(cwd, options.artifactsDir ?? path.join('.e2e', 'artifacts'))
-            : resolveArtifactsRoot(loaded.config, options.artifactsDir),
+        artifactsRoot: outputLayout(loaded.config?.output ?? path.resolve(cwd, options.output ?? '.e2e')).artifacts,
         aiTracePath,
         ...(lastRun === undefined ? {} : { lastRun }),
       },
@@ -546,7 +552,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     runId,
     projectId: config.projectId,
     projectRoot: config.projectRoot,
-    artifactsRoot: resolveArtifactsRoot(config, options.artifactsDir),
+    artifactsRoot: outputLayout(config.output).artifacts,
     ci: isCiMode(env),
     targets: config.targets.map((target) => target.name),
     ...(config.agentNames.length === 1 && config.agentNames[0] === 'default' ? {} : { agents: config.agentNames }),
@@ -559,6 +565,15 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // A run cancelled before it began collects nothing: the interrupt alone
     // decides the outcome.
     if (interrupted.aborted) return;
+
+    // Every run starts from an empty artifact tree, so what is there once it
+    // ends is this run's evidence and nothing a report no longer names.
+    try {
+      await rm(outputLayout(config.output).artifacts, { recursive: true, force: true });
+    } catch (cause) {
+      recordFailure(cause, 'collection');
+      return;
+    }
 
     // Which targets the run is for, settled before anything is collected,
     // downloaded, or started: an unknown --target is a collection failure.
@@ -695,9 +710,9 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // alone decides the outcome.
     if (interrupted.aborted) return;
 
-    const artifactsRoot = resolveArtifactsRoot(config, options.artifactsDir);
-    const sessionsRoot = path.join(config.projectRoot, '.e2e', 'sessions');
-    const store = SessionStore.create(runId, sessionsRoot);
+    const layout = outputLayout(config.output);
+    const artifactsRoot = layout.artifacts;
+    const store = SessionStore.create(runId, layout.sessions);
     sessionStore = store;
 
     // Both transports are reached through `SpawnUnitRunner`: the scheduler is
@@ -730,7 +745,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             runId,
             artifactsRoot,
             headed: options.headed ?? false,
-            sessionsRoot,
+            sessionsRoot: layout.sessions,
             sessionKeyBase64: store.exportKeyForWorker(),
             debug: debug.enabled,
             aiTrace: aiTrace !== undefined,
@@ -913,7 +928,7 @@ interface SelectionInputs {
  */
 async function selectionInputs(options: ListOptions, config: ResolvedConfig): Promise<SelectionInputs> {
   const lastRun =
-    options.lastFailed === true ? await readLastRun(reportSibling(config, options.artifactsDir, 'report.json')) : undefined;
+    options.lastFailed === true ? await readLastRun(outputLayout(config.output).report) : undefined;
   const filters: SelectionFilters = {
     ...(lastRun !== undefined ? { lastFailed: lastFailedIds(lastRun) } : {}),
     ...(options.shard !== undefined ? { shard: options.shard } : {}),
@@ -1077,12 +1092,3 @@ function isSummaryRow(value: unknown): value is ReporterSummary[number] {
   return typeof label === 'string' && label.length > 0 && typeof text === 'string' && text.length > 0;
 }
 
-function resolveArtifactsRoot(config: ResolvedConfig, override: string | undefined): string {
-  if (override !== undefined) return path.resolve(config.projectRoot, override);
-  return path.join(config.projectRoot, '.e2e', 'artifacts');
-}
-
-/** A file the run keeps beside the artifact tree: `.e2e/report.json`, `.e2e/ai-trace.json`. */
-function reportSibling(config: ResolvedConfig, artifactsDir: string | undefined, name: string): string {
-  return path.join(path.dirname(resolveArtifactsRoot(config, artifactsDir)), name);
-}

@@ -8,7 +8,6 @@
  * module only borrows its session lifecycle.
  */
 
-import path from 'node:path';
 import type { ExecutorAttempt } from '../agent/executor.ts';
 import type { AgentContext } from '../agent/invocation.ts';
 import type { ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
@@ -29,6 +28,7 @@ import { PreparedEngines, startDeclaredProcesses, validateEngine, type AppProces
 import { attemptRecording, type AttemptRecording, type ResolvedRecording } from '../internal/recording-modes.ts';
 import { sessionSecrecy } from './secrecy.ts';
 import { SessionStore } from './sessions.ts';
+import { outputLayout } from './output.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
 import { WorkerModels } from './worker-models.ts';
 
@@ -41,8 +41,6 @@ export interface StandaloneAttemptOptions {
   readonly signal: AbortSignal;
   /** How long the attempt may live; every fixture operation is capped by it. */
   readonly timeoutMs: number;
-  /** Where artifacts land, normally `<projectRoot>/.e2e/artifacts`. */
-  readonly artifactsRoot: string;
   /** The configured agent the `agent` fixture runs as when a call names none; default the run's first. */
   readonly agent?: string | undefined;
   /** Who starts the declared app processes: each for this attempt alone by default, or a host's `SharedAppProcesses` to share them across attempts. */
@@ -111,12 +109,13 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
     throw cause;
   }
 
-  const sessionStore = SessionStore.create(runId, path.join(config.projectRoot, '.e2e', 'sessions'));
+  const layout = outputLayout(config.output);
+  const sessionStore = SessionStore.create(runId, layout.sessions);
   const executor = new TargetExecutor({
     config,
     target,
     runId,
-    artifactsRoot: options.artifactsRoot,
+    artifactsRoot: layout.artifacts,
     sessionStore,
     headed: options.headed,
     workerSlot: 0,
@@ -136,7 +135,7 @@ export async function openStandaloneAttempt(options: StandaloneAttemptOptions): 
   });
   let session: TargetSession | undefined;
   const artifacts = createAttemptArtifacts({
-    artifactsRoot: options.artifactsRoot,
+    artifactsRoot: layout.artifacts,
     segments: [target.name, 'sessions', attemptId],
     attemptId,
     currentStepId: () => steps.currentStepId,
