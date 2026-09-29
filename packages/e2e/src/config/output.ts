@@ -12,7 +12,7 @@ import { ConfigurationError, errorMessage } from '../internal/errors.ts';
 import { compileGlob, literalPrefix, scansDirectory } from '../internal/globs.ts';
 import { ignoresCase, isWithin, realpathOfExisting } from '../internal/paths.ts';
 import { toPosixPath } from '../report/write.ts';
-import { DEFAULT_OUTPUT, OUTPUT_ENTRIES, OUTPUT_MARKER, OUTPUT_OWNED_DIRS } from '../run/output.ts';
+import { DEFAULT_OUTPUT, OUTPUT_MARKER, OUTPUT_OWNED_DIRS } from '../run/output.ts';
 import { describeValue } from './validate.ts';
 
 /** Whether `file` is a report-1 document, which only e2e writes. */
@@ -94,8 +94,9 @@ export function resolveOutput(
  * Why an existing directory is not e2e's to clear and write over, or
  * undefined when it is: it does not exist yet, carries the marker a run or a
  * session leaves (`claimOutput`), holds a report e2e wrote (an output from
- * before the marker, with a reporter's own files beside it), or holds
- * nothing but names e2e writes there and the cache directory. The default
+ * before the marker), or is empty but for the cache directory (a fresh clone
+ * of a project that commits its cache there). Names alone prove nothing: a
+ * foreign `artifacts/` looks like e2e's until the run deletes it. The default
  * `.e2e` is e2e's by name and never comes here. Both paths come resolved
  * through the filesystem, so a cache spelled in another case still matches.
  */
@@ -112,12 +113,12 @@ function ownershipProblem(output: string, cacheDir: string, fold: boolean): stri
   const cacheRelative = path.relative(output, cacheDir);
   const cacheEntry = isWithin(cacheDir, output) && cacheRelative !== '' ? cacheRelative.split(path.sep)[0] : undefined;
   const same = (a: string, b: string | undefined): boolean => b !== undefined && (fold ? a.toLowerCase() === b.toLowerCase() : a === b);
-  const foreign = entries.filter((name) => !OUTPUT_ENTRIES.has(name) && !same(name, cacheEntry)).toSorted();
+  const foreign = entries.filter((name) => !same(name, cacheEntry)).toSorted();
   if (foreign.length === 0) return undefined;
   const named = foreign.slice(0, NAMED_ENTRIES).join(', ');
   const more = foreign.length > NAMED_ENTRIES ? ` and ${foreign.length - NAMED_ENTRIES} more` : '';
   return (
-    `holds ${named}${more}, which e2e did not write; a run clears <output>/artifacts and writes over report.json there, ` +
+    `holds ${named}${more} and neither ${OUTPUT_MARKER} nor a report e2e wrote; a run clears <output>/artifacts and writes over report.json there, ` +
     `so name a new or empty directory, or create ${OUTPUT_MARKER} in it if the directory is e2e's`
   );
 }

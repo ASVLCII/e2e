@@ -406,8 +406,9 @@ moving the results never moves the recordings.
 A run deletes and writes over what is in the output directory, so it only
 uses a directory it can tell is its own: one that does not exist yet, the
 default `.e2e`, one that carries the `.e2e-output` marker, one whose
-`report.json` e2e wrote, or one that holds nothing but the names in the
-table above and `cache.dir`. An empty directory counts. Any other existing
+`report.json` e2e wrote, or one that is empty but for `cache.dir`. Names
+alone do not count: a directory holding only an `artifacts/` e2e did not
+write is refused, since the run would delete it. Any other existing
 directory, `src` or `node_modules` say, fails the config load with
 `INVALID_CONFIG` naming what is in it; name a new directory, or create
 `.e2e-output` in it if it is e2e's. The output also fails with

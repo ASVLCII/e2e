@@ -1318,7 +1318,7 @@ export interface E2EConfig {
    * `cache.dir`, which may sit inside it but not under a directory the run
    * clears. An existing directory must be e2e's: the default `.e2e`, one
    * holding the `.e2e-output` marker a run leaves or a `report.json` e2e
-   * wrote, or one holding nothing but what e2e writes there.
+   * wrote, or one that is empty but for `cache.dir`.
    */
   output?: string;
   /**

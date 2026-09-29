@@ -42,6 +42,12 @@ describe('clearArtifacts', () => {
     expect(readdirSync(path.join(root, 'artifacts', 'web', 'sessions'))).toEqual([live]);
   });
 
+  it('removes a file where the tree should be', async () => {
+    touch('artifacts');
+    await clearArtifacts(path.join(root, 'artifacts'));
+    expect(existsSync(path.join(root, 'artifacts'))).toBe(false);
+  });
+
   it('does nothing when there is no tree yet', async () => {
     await clearArtifacts(path.join(root, 'artifacts'));
     expect(existsSync(path.join(root, 'artifacts'))).toBe(false);

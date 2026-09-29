@@ -5,7 +5,7 @@
  */
 
 import type { Dirent } from 'node:fs';
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { uuidv7Time } from '../internal/ids.ts';
 
@@ -29,16 +29,6 @@ export const SESSION_ARTIFACTS = 'sessions';
 
 /** The directories under the output that a run, a reporter, or a session clears or owns, which nothing else may live in. */
 export const OUTPUT_OWNED_DIRS = ['artifacts', 'failures', 'sessions', 'videos'] as const;
-
-/** Every name a run, a built-in reporter, or a session writes directly under the output. */
-export const OUTPUT_ENTRIES: ReadonlySet<string> = new Set([
-  ...OUTPUT_OWNED_DIRS,
-  'report.json',
-  'ai-trace.json',
-  'junit.xml',
-  'summary.md',
-  OUTPUT_MARKER,
-]);
 
 export interface OutputLayout {
   /** The canonical `report.json`; the file reporters write beside it too (`junit.xml`, `summary.md`). */
@@ -93,6 +83,7 @@ export async function claimOutput(output: string, projectRoot: string): Promise<
  */
 export async function clearArtifacts(artifacts: string, now: number = Date.now()): Promise<void> {
   const remove = (entry: string): Promise<void> => rm(entry, { recursive: true, force: true });
+  if (!(await isDirectory(artifacts))) return remove(artifacts);
   for (const target of await entriesOf(artifacts)) {
     const targetDir = path.join(artifacts, target.name);
     if (!target.isDirectory()) {
@@ -110,6 +101,16 @@ export async function clearArtifacts(artifacts: string, now: number = Date.now()
         if (minted === undefined || now - minted > SESSION_TTL_MS + SESSION_CLOSE_GRACE_MS) await remove(path.join(entryPath, attempt.name));
       }
     }
+  }
+}
+
+/** Whether `target` is a directory; false when it is anything else or missing. */
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await stat(target)).isDirectory();
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw cause;
   }
 }
 

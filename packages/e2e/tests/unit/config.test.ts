@@ -1106,24 +1106,23 @@ describe('resolveConfig', () => {
         write('src/app.ts', 'export {};');
         write('src/lib/util.ts', 'export {};');
         const message = refusalIn({ output: 'src' });
-        expect(message).toContain('output "src" holds app.ts, lib, which e2e did not write');
+        expect(message).toContain('output "src" holds app.ts, lib and neither .e2e-output nor a report e2e wrote');
         expect(message).toContain('name a new or empty directory');
         expect(message).toContain('.e2e-output');
         write('node_modules/pkg/index.js');
-        expect(refusalIn({ output: 'node_modules' })).toContain('holds pkg, which e2e did not write');
+        expect(refusalIn({ output: 'node_modules' })).toContain('holds pkg and neither .e2e-output nor a report e2e wrote');
         write('package.json', '{}');
         expect(refusalIn({ output: 'package.json' })).toContain('output "package.json" is a file, not a directory');
       });
 
-      it('owns a directory that does not exist yet, is empty, holds only what e2e writes there, or carries the marker', () => {
+      it('owns a directory that does not exist yet, is empty but for the cache, carries the marker, or holds a report e2e wrote', () => {
         expect(outputIn({ output: 'fresh' })).toBe(path.join(root, 'fresh'));
         fs.mkdirSync(path.join(root, 'empty'));
         expect(outputIn({ output: 'empty' })).toBe(path.join(root, 'empty'));
-        write('earlier/report.json', '{}');
-        write('earlier/summary.md');
-        write('earlier/artifacts/web/a.png');
-        write('earlier/failures/a.md');
-        expect(outputIn({ output: 'earlier' })).toBe(path.join(root, 'earlier'));
+        // Names alone prove nothing: a foreign artifacts/ would be deleted.
+        write('foreign/artifacts/build.zip');
+        write('foreign/summary.md');
+        expect(refusalIn({ output: 'foreign' })).toContain('holds artifacts, summary.md and neither .e2e-output nor a report e2e wrote');
         // A fresh clone of a project that commits its replay cache inside the output.
         write('results/cache/entry.json', '{}');
         expect(outputIn({ output: 'results', cache: { dir: 'results/cache' } })).toBe(path.join(root, 'results'));
@@ -1136,7 +1135,7 @@ describe('resolveConfig', () => {
         expect(outputIn({ output: 'before' })).toBe(path.join(root, 'before'));
         write('lookalike/report.json', '{"name":"not a report"}');
         write('lookalike/index.ts', 'export {};');
-        expect(refusalIn({ output: 'lookalike' })).toContain('holds index.ts, which e2e did not write');
+        expect(refusalIn({ output: 'lookalike' })).toContain('holds index.ts, report.json and neither');
       });
 
       it('owns the default .e2e whatever an older version left in it', () => {
