@@ -11,7 +11,7 @@ import { obj } from '../internal/objects.ts';
 import { isSecret } from '../secrets.ts';
 import { ENGINE_SPI_VERSION, LOCATOR_ACTION_KINDS, POINTER_ACTION_KINDS } from './contract.ts';
 import type { Secret } from '../types.ts';
-import type { Engine, EngineAppDeclaration, EngineCapability, EngineHandle } from './index.ts';
+import type { Engine, EngineCapability, EngineHandle } from './index.ts';
 
 /** Every key an engine may declare; anything else is rejected at config load. */
 const KNOWN_KEYS = [
@@ -31,7 +31,7 @@ const KNOWN_KEYS = [
   'fixtures',
   'state',
   'artifacts',
-  'app',
+  'validateApp',
   'secrets',
   'session',
   'prepare',
@@ -51,20 +51,6 @@ const NESTED_HOOKS = {
   session: ['open', 'back', 'restart', 'reset'],
 } as const;
 
-/**
- * Members of the `app` declaration: facts about the app under test, copied
- * through as data. Their values are validated when the config resolves the
- * target, where an error can name it.
- */
-const APP_DECLARATION_KEYS = [
-  'url',
-  'environment',
-  'identity',
-  'command',
-  'readyUrl',
-  'services',
-] as const satisfies readonly (keyof EngineAppDeclaration)[];
-
 const FUNCTION_MEMBERS = [
   'observe',
   'locate',
@@ -77,6 +63,7 @@ const FUNCTION_MEMBERS = [
   'settleAttempt',
   'endAttempt',
   'dispose',
+  'validateApp',
 ] as const;
 
 /** Universal fixture names a contribution may never shadow. */
@@ -121,21 +108,6 @@ function hookManifest<K extends keyof typeof NESTED_HOOKS>(
     bound[member] = fn.bind(value);
   }
   return bound;
-}
-
-/** Validates the `app` declaration: closed data keys, no hooks. */
-function appDeclaration(name: string, value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) throw invalid(name, 'app must be an object');
-  const keys: readonly string[] = APP_DECLARATION_KEYS;
-  const declaration: Record<string, unknown> = {};
-  for (const [member, fact] of Object.entries(value)) {
-    if (!keys.includes(member)) {
-      throw invalid(name, `app has unknown key "${member}"; expected one of ${keys.join(', ')}. Steering hooks belong on session`);
-    }
-    if (typeof fact === 'function') throw invalid(name, `app.${member} is a declaration, not a hook`);
-    if (fact !== undefined) declaration[member] = fact;
-  }
-  return declaration;
 }
 
 /** Validates the `secrets` declaration: a list of `Secret` handles, each name once. */
@@ -319,7 +291,6 @@ export function defineEngine(spec: Engine): EngineHandle {
     handle['artifacts'] = artifacts;
     capabilities.add('artifacts');
   }
-  if (spec.app !== undefined) handle['app'] = appDeclaration(name, spec.app);
   if (spec.secrets !== undefined) handle['secrets'] = declaredSecrets(name, spec.secrets);
   if (spec.session !== undefined) handle['session'] = hookManifest(name, 'session', spec.session);
 
