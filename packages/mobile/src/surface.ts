@@ -499,9 +499,7 @@ export class AgentDeviceSurface {
       await this.stopLeaseRecording(dangling, attempt.artifactsDir, context.signal).catch(() => undefined);
     } else if (dangling !== undefined) {
       await this.settleInflight(context.signal).catch(() => undefined);
-      await this.command('stop video recording', (client) => client.recording.record({ action: 'stop' }), context.signal).catch(
-        () => undefined,
-      );
+      await this.stopScreenRecording(context.signal).catch(() => undefined);
     }
   }
 
@@ -510,8 +508,9 @@ export class AgentDeviceSurface {
   /**
    * Asks the device to record its screen into the attempt directory. Taps stay
    * visible in the recording (agent-device's touch indicator), which is the
-   * closest a phone comes to a cursor. A device provider that records its
-   * devices records the attempt instead, when the slot rides one of its leases.
+   * closest a phone comes to a cursor, unless `videoTouches` is `false`. A
+   * device provider that records its devices records the attempt instead,
+   * when the slot rides one of its leases.
    */
   async startVideo(operation: OperationContext): Promise<void> {
     const attempt = this.attempt;
@@ -530,7 +529,15 @@ export class AgentDeviceSurface {
     attempt.video = recording;
     await this.command(
       'start video recording',
-      (client) => client.recording.record({ action: 'start', path: absolute, quality: 'medium' }),
+      // The whole screen: an app scope refuses to start while no app is open, before `app.open()` and after `closeApp()`.
+      (client) =>
+        client.recording.record({
+          action: 'start',
+          path: absolute,
+          quality: 'medium',
+          recordingScope: 'device',
+          ...(this.options.videoTouches === false ? { hideTouches: true } : {}),
+        }),
       operation.signal,
     );
     // The device confirmed: it is recording from about now.
@@ -549,11 +556,7 @@ export class AgentDeviceSurface {
       attempt.video = undefined;
       return [segment];
     }
-    const result = await this.command(
-      'stop video recording',
-      (client) => client.recording.record({ action: 'stop' }),
-      operation.signal,
-    );
+    const result = await this.stopScreenRecording(operation.signal);
     // Cleared only now: a stop that failed leaves the recording for `endAttempt`.
     attempt.video = undefined;
     // The device may finalize the file under a path of its own choosing; the
@@ -562,6 +565,21 @@ export class AgentDeviceSurface {
     if (written !== video.absolute && existsSync(written)) renameSync(written, video.absolute);
     if (!existsSync(video.absolute)) return [];
     return [{ path: video.relative, startedAt: video.startedAt }];
+  }
+
+  /**
+   * Stops the device's screen recording. A device-scope recording started
+   * with no session made one of its own, and stopping it ends that session,
+   * whatever the test opened in it since, so the session is then as
+   * `closeApp` leaves it.
+   */
+  private async stopScreenRecording(signal: AbortSignal): Promise<{ readonly outPath?: unknown }> {
+    const result = await this.command('stop video recording', (client) => client.recording.record({ action: 'stop' }), signal);
+    if (result.recordOnlySession === true) {
+      this.sessionApp = undefined;
+      this.screenReplaced();
+    }
+    return result;
   }
 
   /**
