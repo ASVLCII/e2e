@@ -96,9 +96,19 @@ switched on for tests. Common settings:
 `@e2e-dev/agentmail` gives you real addresses from
 [AgentMail](https://agentmail.to):
 
-```bash
+<CodeGroup>
+```bash npm
 npm install --save-dev @e2e-dev/agentmail
 ```
+
+```bash pnpm
+pnpm add -D @e2e-dev/agentmail
+```
+
+```bash bun
+bun add -d @e2e-dev/agentmail
+```
+</CodeGroup>
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
