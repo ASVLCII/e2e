@@ -20,9 +20,19 @@ in a [provider](#other-email-services) for one.
 every email sent to it, whatever the address, and serves it over a REST API.
 Install it beside e2e:
 
-```bash
+<CodeGroup>
+```bash npm
 npm install --save-dev --save-exact maildev@3.0.0
 ```
+
+```bash pnpm
+pnpm add -D -E maildev@3.0.0
+```
+
+```bash bun
+bun add -d -E maildev@3.0.0
+```
+</CodeGroup>
 
 Start it as a service of the target, point the app's SMTP settings at its
 SMTP port, and pass `maildev()` its API port. `SMTP_HOST` and `SMTP_PORT`
