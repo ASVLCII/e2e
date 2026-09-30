@@ -17,21 +17,24 @@ describe.skipIf(process.env['AGENTMAIL_API_KEY'] === undefined)('agentMail() liv
     const aliases = agentMail();
     const inboxes = agentMail({ isolation: 'inbox' });
     const recipient = await aliases.acquire(context);
-    const sender = await inboxes.acquire(context);
     try {
-      expect(recipient.address).toMatch(/\+e2e-[0-9a-f]{10}@/u);
-      await new AgentMailClient({}).inboxes.messages.send(sender.inboxId, { to: [recipient.address], subject: 'Live check', text: 'Your code is 424242.' });
-      let listed = await aliases.list(recipient, context);
-      for (let polls = 0; listed.length === 0 && polls < 30; polls += 1) {
-        await sleep(2_000);
-        listed = await aliases.list(recipient, context);
+      const sender = await inboxes.acquire(context);
+      try {
+        expect(recipient.address).toMatch(/\+e2e-[0-9a-f]{10}@/u);
+        await new AgentMailClient({}).inboxes.messages.send(sender.inboxId, { to: [recipient.address], subject: 'Live check', text: 'Your code is 424242.' });
+        let listed = await aliases.list(recipient, context);
+        for (let polls = 0; listed.length === 0 && polls < 30; polls += 1) {
+          await sleep(2_000);
+          listed = await aliases.list(recipient, context);
+        }
+        expect(listed.map((summary) => summary.subject)).toEqual(['Live check']);
+        const message = await aliases.read(recipient, listed[0]!.id, context);
+        expect(message.text).toContain('Your code is 424242.');
+        expect(message.from).toContain(sender.address);
+      } finally {
+        await inboxes.release(sender, context);
       }
-      expect(listed.map((summary) => summary.subject)).toEqual(['Live check']);
-      const message = await aliases.read(recipient, listed[0]!.id, context);
-      expect(message.text).toContain('Your code is 424242.');
-      expect(message.from).toContain(sender.address);
     } finally {
-      await inboxes.release(sender, context);
       await aliases.release(recipient, context);
     }
     expect(await aliases.list(recipient, context)).toEqual([]);

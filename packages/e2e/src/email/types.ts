@@ -64,8 +64,8 @@ export interface EmailMessage {
 /**
  * Where `config.email` addresses come from and how their mail is read. The
  * runner owns everything a test and the agent see (filters, waits, retries,
- * the tools, what the model is shown); a provider only hands out addresses
- * and lists what arrived, so a local SMTP catcher, a hosted inbox service, or
+ * the tools, what the model is shown); a provider only hands out addresses,
+ * lists and reads what arrived, and gives addresses back, so a local SMTP catcher, a hosted inbox service, or
  * a mail server of your own plugs in the same way. `agentMail()` from
  * `@e2e-dev/agentmail` is one. Like every live value, a provider never
  * crosses a process boundary: each worker constructs its own.

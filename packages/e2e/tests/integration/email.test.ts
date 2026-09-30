@@ -116,7 +116,10 @@ describe('config.email', () => {
     app = await startSignupApp(mail);
     const model = installFakeLoopModel(signupModel);
     const run = await runProject(
-      { 'tests/email.e2e.ts': SUITE },
+      {
+        'tests/email.e2e.ts': SUITE,
+        'tests/own-email.e2e.ts': `import { test as base } from 'e2e';\n\nconst test = base.extend({ email: async (_fixtures, use) => use('own@acme.test') });\n\ntest('redefines the runner email fixture', async () => {});\n`,
+      },
       { appUrl: app.url, config: { tests: 'tests/**/*.e2e.ts', workers: 1, cache: 'off', email: mail, agents: { default: { model } } } },
     );
     outcome = run.outcome;
@@ -149,6 +152,13 @@ describe('config.email', () => {
     expect(result.attempts[0]!.error).toMatchObject({
       code: 'ASSERTION_FAILED',
       message: expect.stringMatching(/matching subject "Welcome aboard" within 1500ms; 1 other email arrived: "Verify your email" from Acme <noreply@acme\.test>$/u),
+    });
+  });
+
+  it('refuses a test.extend() fixture named email, which the runner contributes', () => {
+    expect(resultByTitle(outcome, 'redefines the runner email fixture').attempts[0]!.error).toMatchObject({
+      code: 'TEST_SETUP_FAILED',
+      message: 'fixture "email" is contributed by the runner (a built-in fixture); test.extend() cannot redefine it',
     });
   });
 

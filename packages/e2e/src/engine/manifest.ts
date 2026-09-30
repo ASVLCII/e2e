@@ -80,8 +80,6 @@ const FUNCTION_MEMBERS = [
   'dispose',
 ] as const;
 
-/** Universal fixture names a contribution may never shadow. */
-
 const FIXTURE_NAME_PATTERN = /^[a-z][A-Za-z0-9]*$/;
 
 function invalid(name: string, detail: string): ConfigurationError {

@@ -119,8 +119,10 @@ export class Mailbox {
     let failure: EmailProviderError | undefined;
     let seen: EmailMessage[] = [];
     for (;;) {
-      // Each poll is cut at the deadline, so a provider that stops answering
-      // cannot hold the wait past its timeout.
+      // Each poll is cut at the deadline, but gets at least a second: a
+      // `timeout: 0` wait and the last look after sleeping to the deadline
+      // still ask once, so a provider that stops answering holds the wait at
+      // most that second past its timeout.
       const budget = Math.max(deadline.remaining(), FIRST_POLL_MS);
       const poll = AbortSignal.any([signal, AbortSignal.timeout(budget)]);
       try {

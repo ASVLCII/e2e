@@ -107,11 +107,13 @@ interface ShownEmail {
 
 function shownOf(email: EmailMessage, redact: (text: string) => string): ShownEmail {
   const text = redact(email.text);
+  // Never between the halves of a surrogate pair, so an emoji at the cut does not leave half a character.
+  const cut = text.length > MAX_BODY_CHARS ? text.slice(0, MAX_BODY_CHARS).replace(/[\uD800-\uDBFF]$/u, '') : text;
   return {
     from: redact(email.from),
     to: redact(email.to.join(', ')),
     subject: redact(email.subject),
-    body: text.length > MAX_BODY_CHARS ? `${text.slice(0, MAX_BODY_CHARS)}\n[... ${text.length - MAX_BODY_CHARS} more characters]` : text,
+    body: cut === text ? text : `${cut}\n[... ${text.length - cut.length} more characters]`,
   };
 }
 

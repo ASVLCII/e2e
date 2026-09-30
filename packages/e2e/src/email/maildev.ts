@@ -84,11 +84,13 @@ export function maildev(options: MaildevOptions = {}): MailProvider<MailLease> {
     async acquire({ signal }) {
       // One look before the first address, so a MailDev nobody started fails here, naming the fix, rather than as a wait that times out.
       // Shared by every caller, so it runs under a budget of its own rather than the first caller's signal.
-      reachable ??= call('healthz', AbortSignal.timeout(HEALTH_CHECK_MS)).then(
+      const health = AbortSignal.timeout(HEALTH_CHECK_MS);
+      reachable ??= call('healthz', health).then(
         () => undefined,
         (cause: unknown) => {
           reachable = undefined;
-          throw cause;
+          if (!health.aborted) throw cause;
+          throw new Error(`MailDev is not answering at ${url} (no answer to GET /api/healthz within ${HEALTH_CHECK_MS}ms); start it before the run, e.g. npx maildev, or pass maildev({ url })`, { cause });
         },
       );
       await withAbort(reachable, signal, () => signal.reason as Error);

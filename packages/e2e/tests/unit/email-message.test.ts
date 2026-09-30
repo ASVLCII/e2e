@@ -79,11 +79,15 @@ describe('renderHtml', () => {
   });
 
   it('stays linear on markup that would make a backtracking pattern hang', () => {
-    const time = (html: string): number => {
-      const started = performance.now();
-      renderHtml(html);
-      return performance.now() - started;
-    };
+    // The fastest of a few runs, so a GC pause or a busy runner does not read as a slow scan.
+    const time = (html: string): number =>
+      Math.min(
+        ...Array.from({ length: 3 }, () => {
+          const started = performance.now();
+          renderHtml(html);
+          return performance.now() - started;
+        }),
+      );
     // Doubling the input at most roughly doubles the time; a quadratic scan quadruples it.
     const scales = (unit: string, count: number): void => {
       time(unit.repeat(count));

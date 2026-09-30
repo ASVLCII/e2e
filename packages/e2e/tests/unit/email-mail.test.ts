@@ -272,6 +272,15 @@ describe('the agent\'s email tools', () => {
     expect(read).not.toContain('hunt');
   });
 
+  it('cut a long body between characters, never inside an emoji', async () => {
+    const { attempt } = open();
+    const address = /New email address: (\S+)/u.exec(await call(attempt, 'new_email_address', {}))![1]!;
+    provider.deliver(address, { subject: 'Long', text: `${'x'.repeat(7_999)}\u{1F600} tail` });
+    const read = await call(attempt, 'wait_for_email', { address });
+    expect(read).toContain(`${'x'.repeat(7_999)}\n[... 7 more characters]`);
+    expect(read).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
   it('mask a secret in the sender and the recipients, not only the body', async () => {
     const { attempt } = open({ redact: (text) => text.replaceAll('hunter2-secret', '<secret:password>') });
     const address = /New email address: (\S+)/u.exec(await call(attempt, 'new_email_address', {}))![1]!;

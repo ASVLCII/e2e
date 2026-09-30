@@ -41,7 +41,11 @@ beforeAll(async () => {
     if (request.url === '/api/email' && request.method === 'GET') return send(200, store);
     if (request.url === '/api/email/delete' && request.method === 'POST') {
       const { ids } = JSON.parse(body) as { ids: string[] };
-      for (const id of ids) store.splice(store.findIndex((email) => email.id === id), 1);
+      for (const id of ids) {
+        const index = store.findIndex((email) => email.id === id);
+        if (index === -1) return send(404, { error: `no email ${id}` });
+        store.splice(index, 1);
+      }
       return send(200, true);
     }
     const one = /^\/api\/email\/([^/]+)$/u.exec(request.url ?? '');
@@ -91,9 +95,9 @@ describe('maildev()', () => {
     const provider = maildev({ url });
     const mine = await provider.acquire(context);
     const theirs = await provider.acquire(context);
-    catchMail('a', { to: [mine.address], subject: 'To' });
+    catchMail('a', { to: [mine.address], envelope: ['relay@acme.test'], subject: 'To' });
     catchMail('b', { to: ['someone@acme.test'], envelope: ['someone@acme.test', mine.address], subject: 'Bcc' });
-    catchMail('c', { to: ['someone@acme.test'], cc: [mine.address.toUpperCase()], subject: 'Cc, uppercased' });
+    catchMail('c', { to: ['someone@acme.test'], cc: [mine.address.toUpperCase()], envelope: ['someone@acme.test'], subject: 'Cc, uppercased' });
     catchMail('d', { to: [theirs.address], subject: 'Theirs' });
     const listed = await provider.list(mine, context);
     expect(listed.map((summary) => summary.subject)).toEqual(['To', 'Bcc', 'Cc, uppercased']);
