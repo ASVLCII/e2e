@@ -1,5 +1,19 @@
 # @e2e-dev/mobile
 
+## 0.8.0-canary-20260929180659
+
+### Minor Changes
+
+- [#610](https://github.com/tester-army/e2e/pull/610) [`aadcb5d`](https://github.com/tester-army/e2e/commit/aadcb5dddb79217608a88c75af6cc4e5a582c592) Thanks [@okwasniewski](https://github.com/okwasniewski)! - A device provider can record the attempts it serves: `DeviceProvider.record(lease, context)` starts the service's own recording of the leased device, and its file or link becomes the attempt's video in place of agent-device's recording. The worker now knows the lease id its slot rides, so `record` gets the lease as it traveled. A provider that cannot record leaves `record` out.
+
+### Patch Changes
+
+- [#627](https://github.com/tester-army/e2e/pull/627) [`425fd67`](https://github.com/tester-army/e2e/commit/425fd6765738da199a8dfbafa2d072294dd81822) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The iOS automation runner starts in `prepare`, through agent-device's `prepare ios-runner`, before the warm-up open. A cold runner used to start inside the first test's `app.open()` (or the warm-up open), under agent-device's 90 s `open` envelope; on a loaded CI Mac it outlasted that, and a timed-out `open` resets the daemon, which ended the other workers' sessions with it (`Daemon request timed out`, then `2 devices match this request equally`, `Invalid daemon response`). A build the suite installs itself now gets the runner start too.
+
+- [#646](https://github.com/tester-army/e2e/pull/646) [`d228e22`](https://github.com/tester-army/e2e/commit/d228e22ea309107cd42283bcfcb5f614ca3ea8c6) Thanks [@okwasniewski](https://github.com/okwasniewski)! - The README and the `mobileTools` docs show the pack in an agents entry's `tools` (`agents: { default: { model, tools: mobileTools(iphone, pixel) } }`), the shape `e2e` takes now that `createAgent()` is gone.
+- Updated dependencies [[`d228e22`](https://github.com/tester-army/e2e/commit/d228e22ea309107cd42283bcfcb5f614ca3ea8c6), [`d7a218a`](https://github.com/tester-army/e2e/commit/d7a218af0788a5957c789203b811a690d0e9ccb3), [`d7a218a`](https://github.com/tester-army/e2e/commit/d7a218af0788a5957c789203b811a690d0e9ccb3), [`12fe125`](https://github.com/tester-army/e2e/commit/12fe12550d37cfefe36b65a30d53ae4eb024d641), [`8a65a90`](https://github.com/tester-army/e2e/commit/8a65a9093d75a9e819bfc610cd7ebaf8055497a6), [`0cb74d6`](https://github.com/tester-army/e2e/commit/0cb74d6d916e62c38aeb05ce97658d3c67468843), [`425fd67`](https://github.com/tester-army/e2e/commit/425fd6765738da199a8dfbafa2d072294dd81822), [`ec1ea1e`](https://github.com/tester-army/e2e/commit/ec1ea1e4c3142661897e0c23654e0aba2c43dbaa), [`04a1261`](https://github.com/tester-army/e2e/commit/04a126191eb9fefc730b93cd249f7c152e0166d1), [`968b055`](https://github.com/tester-army/e2e/commit/968b05545db8c961bf864bcb2aa3fdfd59c626f8), [`97a7e7f`](https://github.com/tester-army/e2e/commit/97a7e7f12129b029d53f28458c2a7ea72c083ea4), [`d7a218a`](https://github.com/tester-army/e2e/commit/d7a218af0788a5957c789203b811a690d0e9ccb3), [`d7a218a`](https://github.com/tester-army/e2e/commit/d7a218af0788a5957c789203b811a690d0e9ccb3), [`d7a218a`](https://github.com/tester-army/e2e/commit/d7a218af0788a5957c789203b811a690d0e9ccb3), [`636acd9`](https://github.com/tester-army/e2e/commit/636acd901f03dbff9e657dcce10d98634f88a1ab), [`a411ac6`](https://github.com/tester-army/e2e/commit/a411ac65245fd3602acc731a051e9726f75756aa), [`d7a218a`](https://github.com/tester-army/e2e/commit/d7a218af0788a5957c789203b811a690d0e9ccb3), [`aadcb5d`](https://github.com/tester-army/e2e/commit/aadcb5dddb79217608a88c75af6cc4e5a582c592), [`85a3afd`](https://github.com/tester-army/e2e/commit/85a3afd7c41b6b28af84bd3182671fabaeec871e), [`ba0d280`](https://github.com/tester-army/e2e/commit/ba0d2804194d8985beb0760ab1fa1e9e945b6aaa)]:
+  - e2e@0.15.0-canary-20260929180659
+
 ## 0.8.0-canary-20260928184528
 
 ### Minor Changes
