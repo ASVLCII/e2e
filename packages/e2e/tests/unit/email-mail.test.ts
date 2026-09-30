@@ -251,6 +251,7 @@ describe('the agent\'s email tools', () => {
         '<email>',
         'From: Acme <noreply@acme.test>',
         `To: ${address}`,
+        `Delivered to: ${address}`,
         'Subject: Your password is <secret:password>',
         `Received: ${new Date(1_790_000_002_000).toISOString()}`,
         '',
@@ -270,6 +271,14 @@ describe('the agent\'s email tools', () => {
     const read = await call(attempt, 'wait_for_email', { address });
     expect(read.match(/<\/email>/gu)).toHaveLength(1);
     expect(read).not.toContain('hunt');
+  });
+
+  it('name the inbox a Bcc copy arrived in, which its To header does not', async () => {
+    const { attempt } = open();
+    const address = /New email address: (\S+)/u.exec(await call(attempt, 'new_email_address', {}))![1]!;
+    provider.deliver(address, { to: ['teammate@acme.test'], subject: 'Invite' });
+    const read = await call(attempt, 'wait_for_email', { address: address.toUpperCase() });
+    expect(read).toContain(`To: teammate@acme.test\nDelivered to: ${address}\n`);
   });
 
   it('cut a long body between characters, never inside an emoji', async () => {

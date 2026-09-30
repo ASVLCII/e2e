@@ -5,8 +5,8 @@ import type { MailLease, MailMessage, MailProvider } from '../../src/email/types
 export interface MemoryProvider extends MailProvider {
   readonly acquired: string[];
   readonly released: string[];
-  /** Delivers an email to `to`. */
-  deliver(to: string, message: { from?: string; subject?: string; text?: string; html?: string }): MailMessage;
+  /** Delivers an email to `to`; `message.to` is its To header when that names someone else (a Bcc copy). */
+  deliver(to: string, message: { from?: string; to?: string[]; subject?: string; text?: string; html?: string }): MailMessage;
 }
 
 /** An in-memory provider: addresses `user<n>@memory.test`, mail kept per address. */
@@ -22,7 +22,7 @@ export function memoryProvider(): MemoryProvider {
       const delivered: MailMessage = {
         id: `m${counter}`,
         from: message.from ?? 'Acme <noreply@acme.test>',
-        to: [to],
+        to: message.to ?? [to],
         subject: message.subject ?? '',
         receivedAt: new Date(1_790_000_000_000 + counter * 1000),
         text: message.text,

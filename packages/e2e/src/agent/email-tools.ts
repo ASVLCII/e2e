@@ -77,8 +77,9 @@ export function emailTools(attempt: ExecutorAttempt): Readonly<Partial<Record<Em
           run(options, async (signal) => {
             const filter = { ...(subject === undefined ? {} : { subject }), ...(from === undefined ? {} : { from }), ...(text === undefined ? {} : { text }) };
             const timeout = timeout_seconds === undefined ? DEFAULT_WAIT_TIMEOUT : timeout_seconds * 1000;
-            const email = await leased(mail, address).waitForMessage(filter, timeout, signal);
-            const shown = shownOf(email, mail.redact);
+            const mailbox = leased(mail, address);
+            const email = await mailbox.waitForMessage(filter, timeout, signal);
+            const shown = shownOf(email, mailbox.address, mail.redact);
             mail.remember([shown.subject, ...shown.body.split('\n'), ...urlsIn(shown.body)]);
             return describeEmail(email, shown);
           }),
@@ -101,17 +102,20 @@ function leased(mail: AttemptMail, address: string): Mailbox {
 interface ShownEmail {
   readonly from: string;
   readonly to: string;
+  /** The address whose inbox it arrived in, which a Bcc copy's headers never name. */
+  readonly deliveredTo: string;
   readonly subject: string;
   readonly body: string;
 }
 
-function shownOf(email: EmailMessage, redact: (text: string) => string): ShownEmail {
+function shownOf(email: EmailMessage, deliveredTo: string, redact: (text: string) => string): ShownEmail {
   const text = redact(email.text);
   // Never between the halves of a surrogate pair, so an emoji at the cut does not leave half a character.
   const cut = text.length > MAX_BODY_CHARS ? text.slice(0, MAX_BODY_CHARS).replace(/[\uD800-\uDBFF]$/u, '') : text;
   return {
     from: redact(email.from),
     to: redact(email.to.join(', ')),
+    deliveredTo: redact(deliveredTo),
     subject: redact(email.subject),
     body: cut === text ? text : `${cut}\n[... ${text.length - cut.length} more characters]`,
   };
@@ -124,7 +128,7 @@ function urlsIn(text: string): string[] {
 
 /** An email as the model reads it: its headers and text, fenced as untrusted content that cannot close the fence. */
 function describeEmail(email: EmailMessage, shown: ShownEmail): string {
-  const fenced = [`From: ${shown.from}`, `To: ${shown.to}`, `Subject: ${shown.subject}`, `Received: ${email.receivedAt.toISOString()}`, '', shown.body]
+  const fenced = [`From: ${shown.from}`, `To: ${shown.to}`, `Delivered to: ${shown.deliveredTo}`, `Subject: ${shown.subject}`, `Received: ${email.receivedAt.toISOString()}`, '', shown.body]
     .join('\n')
     .replace(/<(\/?)email>/giu, '<$1email\u200B>');
   return [
