@@ -165,16 +165,19 @@ export function missingAnchors(
 
 /**
  * Whether a candidate is the anchor: the same kind of node, with both labels
- * reading as recorded by shape (a count that moved on is still the effect; a
- * verb that changed is not). A recorded test id identifies the node when the
- * candidate carries it; otherwise, or when the id churned, the remaining
- * fields must identify it on their own, as `identifyingProjection` keys it.
+ * reading as recorded once relative times are folded (`Bob · now` is still
+ * the post at `Bob · 5m`). Counts are not folded: an anchor that says
+ * `Count: 1` or `Cart (2 items)` is usually the very effect the step had, and
+ * a screen left at `Count: 0` must not pass as it. A recorded test id
+ * identifies the node when the candidate carries it; otherwise, or when the
+ * id churned, the remaining fields must identify it on their own, as
+ * `identifyingProjection` keys it.
  */
 function anchorMatches(anchor: TraceTargetDescriptor, candidate: TraceTargetDescriptor): boolean {
   const semantic = withoutIds(anchor);
   const sameId = (anchor.testId !== undefined && candidate.testId === anchor.testId) || (anchor.elementId !== undefined && candidate.elementId === anchor.elementId);
   const identified = sameId || !isAnonymous(semantic);
-  return identified && fieldsEqual(semantic, candidate, SEMANTIC_ID_FIELDS) && sameLabels(anchor, candidate, ['name', 'text']);
+  return identified && fieldsEqual(semantic, candidate, SEMANTIC_ID_FIELDS) && sameLabels(anchor, candidate, ['name', 'text'], 'times');
 }
 
 /** One anchor as prose, the way an action summary names its target: `text "Saved"`, `button "Publish" (testid postBtn)`. */

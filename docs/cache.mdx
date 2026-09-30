@@ -45,22 +45,23 @@ npx e2e run --no-cache
    | Rung | Identity | Where it comes from |
    | --- | --- | --- |
    | 1 | test id | `data-testid` on web, the accessibility identifier on iOS and Android |
-   | 2 | element id | an authored `id` attribute on web; minted ids (`:r3:`, `input-1739`) are skipped |
+   | 2 | element id | an authored `id` attribute on web; an id that ends in a digit or reads like a hash is a framework's counter (`:r3:`, `mat-input-2`, `input-1739`) and is skipped |
    | 3 | exact label | the accessible name, or the text when there is no name |
-   | 4 | label shape | the label with counts, plurals, and relative times folded: `Reply (0 replies)` finds `Reply (1 reply)`, `Bob · now` finds `Bob · 5m` |
+   | 4 | label shape | the label with tallies and relative times folded: `Reply (0 replies)` finds `Reply (1 reply)`, `Bob · now` finds `Bob · 5m`. A number that names something stays as it reads: `Page 2` never finds `Page 3`, nor `Delete item 3` `Delete item 4` |
    | 5 | place | an unnamed control by its index among the unnamed controls of its kind |
 
    A control found on an id rung is the control whatever its label reads
-   now, a `Like (0 likes)` button that became `Unlike (1 like)`. Twins
-   sharing an id are told apart by their recorded place, never by their
-   labels, and a label rung that finds another number of them hands off
-   instead. It waits for missing controls and stops if a match is ambiguous.
+   now, a `Like (0 likes)` button that became `Unlike (1 like)`. Twins are
+   told apart by their recorded place, never by their labels, and a rung that
+   finds another number of them than were recorded hands off instead. It
+   waits for missing controls and stops if a match is ambiguous.
    Give controls test ids: a label that carries state changes on every run,
    an id only when the code does, and then the step simply re-records.
 3. Check the final path and controls that appeared during the original step.
-   Controls are checked by test id with their label compared by shape, so a
-   count that moved on is still the effect; text that changes with the data,
-   a count, a date, an id, a relative time such as `now`, a tally such as `2
+   Controls are checked by test id and their label as it reads, with only a
+   relative time such as `now` folded: a count is usually the effect itself,
+   so `Count: 1` recorded does not pass at `Count: 0`. Text that changes with
+   the data, a count, a date, an id, a relative time, a tally such as `2
    replies`, is not recorded when anything steadier appeared.
 4. Finish without a model call, or let the agent continue with a record of
    what ran and why replay stopped.

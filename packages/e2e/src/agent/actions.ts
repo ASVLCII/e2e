@@ -259,16 +259,19 @@ function describePlaced(
  */
 /**
  * An element id worth relocating by: one a developer wrote, not one a
- * framework minted per render (`:r3:`, `radix-:r1:`, `input-1739`). A minted
- * id would change under the recording like a label does, and a wrong id
- * match acts on the wrong control.
+ * framework minted per render (`:r3:`, `radix-:r1:`, `input-1739`,
+ * `mat-input-2`, `mui-3`). A minted id is a counter, so it ends in a digit
+ * and names whichever control rendered in that place this time; an id rung
+ * that trusted it would act on the wrong control while the right one sits
+ * beside it under its own label. Any trailing digit disqualifies an id, and
+ * so does a long mix of letters and digits, the shape of a hash.
  */
 function stableElementId(id: string | undefined): string | undefined {
   if (id === undefined) return undefined;
   const trimmed = id.trim();
   if (trimmed === '' || trimmed.length > MAX_TRACE_DESCRIPTOR_CHARS) return undefined;
   if (!/^[A-Za-z][\w-]*$/.test(trimmed)) return undefined;
-  if (/\d{3,}$/.test(trimmed) || /^(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{12,}$/.test(trimmed)) return undefined;
+  if (/\d$/.test(trimmed) || /^(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{12,}$/.test(trimmed)) return undefined;
   return trimmed;
 }
 

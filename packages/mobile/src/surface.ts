@@ -446,11 +446,6 @@ export class AgentDeviceSurface {
   }
 
   /**
-   * Runs one agent-device command under an operation budget and translates
-   * its failure. Contributed-fixture methods route through here too, so the
-   * device fixture never carries its own error mapping.
-   */
-  /**
    * A settings request, named for this worker's device like every other
    * command: the daemon resolves one without a selection against every
    * booted device, so a second booted simulator or emulator made these fail
@@ -460,6 +455,11 @@ export class AgentDeviceSurface {
     return this.command(label, (client) => client.settings.update({ ...this.selection(), ...request }), signal);
   }
 
+  /**
+   * Runs one agent-device command under an operation budget and translates
+   * its failure. Contributed-fixture methods route through here too, so the
+   * device fixture never carries its own error mapping.
+   */
   async command<T>(label: string, run: (client: AgentDeviceClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const client = this.requireClient();
     return runCommand(label, () => this.track(run(client)), signal ?? new AbortController().signal, this.where);

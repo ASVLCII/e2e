@@ -74,62 +74,86 @@ const ALL_IDENTITY_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text',
 /** The fields a control is labelled by. Text counts only when no name was recorded: a relabeled button is still the button. */
 export type LabelField = 'name' | 'text';
 
-/** A relative time word: the part of a label a calendar moves. */
-export const RELATIVE_TIME = /\b(?:just\s+now|now|today|yesterday|tomorrow)\b/i;
-/** A count with a unit of time, `2m`, `3 days`: the part of a label a clock moves. */
-export const AGE = /\b\d+\s*(?:ms|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?|w|weeks?|mo|months?|y|years?)\b/i;
+/**
+ * A relative time word: the part of a label a calendar moves. `now` counts
+ * only as a time of its own, at an edge of the label or beside a separator
+ * (`Bob · now`), never as the adverb of `Buy now`.
+ */
+export const RELATIVE_TIME = /\bjust\s+now\b|(?<=^|[^\w\s]\s*)now(?=\s*(?:$|[^\w\s]))|\b(?:today|yesterday|tomorrow)\b/i;
+/**
+ * A count with a unit of time, `2m`, `3 days`: the part of a label a clock
+ * moves. A one-letter unit is lower case only; `3 M` is a size, not minutes.
+ */
+export const AGE =
+  /\b\d+\s*(?:ms|[smhdwy]|mo|[Ss]ecs?|[Ss]econds?|[Mm]ins?|[Mm]inutes?|[Hh]rs?|[Hh]ours?|[Dd]ays?|[Ww]eeks?|[Mm]onths?|[Yy]ears?)\b/;
 const RELATIVE_TIME_ALL = new RegExp(RELATIVE_TIME.source, 'gi');
-const AGE_ALL = new RegExp(AGE.source, 'gi');
+const AGE_ALL = new RegExp(AGE.source, 'g');
 
 /**
- * A label with the state it carries taken out: every run of digits reads `#`,
- * a relative time reads `<age>`, and the noun a count governs is reduced to
- * a stem that its singular and plural share (`reply`/`replies`, `movie`/
- * `movies`, `like`/`likes`), so `Reply (0 replies)` and `Reply (1 reply)`,
- * or `Bob · now` and `Bob · 2m`, are the same shape. Case and whitespace
- * are folded too. A label that carries no state is its own shape.
+ * What a label fold takes out: `times` the relative times and ages only, the
+ * part a clock moves on its own; `counts` also every tally, a count governing
+ * a noun. Relocation folds counts, since a control's label often carries the
+ * tally of the thing it acts on; an end anchor never does, since a count that
+ * moved is usually the very effect the anchor stands for.
  */
-export function labelShape(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(RELATIVE_TIME_ALL, '<age>')
-    .replace(AGE_ALL, '<age>')
-    .replace(/\d+/g, '#')
-    .replace(/#(\s+)([a-z]+)\b/g, (_match, space: string, noun: string) => `#${space}${countedStem(noun)}`)
-    .replace(/\s+/g, ' ')
-    .trim();
+export type LabelFold = 'times' | 'counts';
+
+/**
+ * A label with the state it carries taken out. A relative time or an age
+ * reads `<age>`; with `counts`, a count governing a noun (`0 replies`,
+ * `3 followers`) reads `#` and the noun is reduced to a stem its singular and
+ * plural share (`reply`/`replies`, `movie`/`movies`, `match`/`matches`), so
+ * `Reply (0 replies)` and `Reply (1 reply)` are the same shape. A number
+ * that names rather than counts, `Page 2`, `Order #1234`, `Option 2`,
+ * `$19.99`, `Count: 1`, stays as it reads: two such labels are two controls.
+ * Case and whitespace are folded too. A label that carries no state is its
+ * own shape.
+ */
+export function labelShape(label: string, fold: LabelFold = 'counts'): string {
+  // Times fold before the case does: `3 M` is a size, `3 m` an age.
+  const timed = label.replace(RELATIVE_TIME_ALL, '<age>').replace(AGE_ALL, '<age>').toLowerCase();
+  const counted =
+    fold === 'counts'
+      ? timed.replace(/\b\d+(\s+)([a-z]{3,})\b/g, (_match, space: string, noun: string) => `#${space}${countedStem(noun)}`)
+      : timed;
+  return counted.replace(/\s+/g, ' ').trim();
 }
 
-/** The stem a counted noun shares with its plural: a trailing `s` dropped, then `ie` and `y` endings folded to `i`. */
+/**
+ * The stem a counted noun shares with its plural: an `-es` after a sibilant
+ * dropped (`matches`, `boxes`, `buses`), else a trailing `s`, then `ie` and
+ * `y` endings folded to `i`.
+ */
 function countedStem(noun: string): string {
-  const singular = noun.length > 3 && noun.endsWith('s') ? noun.slice(0, -1) : noun;
+  const singular = /(?:[sxz]|[cs]h)es$/.test(noun) ? noun.slice(0, -2) : noun.length > 3 && noun.endsWith('s') ? noun.slice(0, -1) : noun;
   return singular.replace(/(?:ie|y)$/, 'i');
 }
 
 /**
- * Whether a label reads as nothing but state: a bare count or a bare time.
- * Such a label's shape says only that it is a number, so the number itself
- * is compared: a counter left at `0` must not pass as the recorded `1`.
+ * Whether a label reads as nothing but a time. Such a label's shape says only
+ * that it is a time, so the label itself is compared: a stamp left at `now`
+ * must not pass as the recorded `2m`.
  */
 function isBareState(shape: string): boolean {
-  return /^(?:#|<age>)$/.test(shape);
+  return shape === '<age>';
 }
 
-/** Whether two optional labels share a shape; both absent counts, one absent does not. A bare count compares exactly. */
-function sameShape(recorded: string | undefined, candidate: string | undefined): boolean {
+/** Whether two optional labels share a shape; both absent counts, one absent does not. A bare time compares exactly. */
+function sameShape(recorded: string | undefined, candidate: string | undefined, fold: LabelFold): boolean {
   if (recorded === undefined || candidate === undefined) return recorded === candidate;
-  const shape = labelShape(recorded);
-  if (shape !== labelShape(candidate)) return false;
+  const shape = labelShape(recorded, fold);
+  if (shape !== labelShape(candidate, fold)) return false;
   return isBareState(shape) ? recorded.trim() === candidate.trim() : true;
 }
 
-/** Whether the candidate's labels read as the recording's on every listed field, by shape; an exact label is its own shape. */
+/** Whether the candidate's labels read as the recording's on every listed field, by shape under `fold`; an exact label is its own shape. */
 export function sameLabels(
   recorded: TraceTargetDescriptor,
   candidate: TraceTargetDescriptor,
   fields: readonly LabelField[],
+  fold: LabelFold,
 ): boolean {
-  return fields.every((field) => sameShape(recorded[field], candidate[field]));
+  return fields.every((field) => sameShape(recorded[field], candidate[field], fold));
 }
 
 /**
@@ -240,10 +264,12 @@ export function relocateDescriptor(
   const matches = matchingIds(descriptor, nodes, options);
   if (matches.length === 0) return { kind: 'failed', failure: 'target-not-found' };
   const { position } = descriptor;
-  // A lone match is the node for a descriptor with an identity. An anonymous
-  // one has only its count and place: one unnamed twin where the recording
-  // counted two is as likely the other field as the right one.
-  if (matches.length === 1 && (!isAnonymous(descriptor) || position?.of === 1)) return { kind: 'found', id: matches[0]! };
+  // A lone match is the node for a descriptor recorded alone. One recorded
+  // among twins has only its count and place: one survivor where the
+  // recording counted two is as likely the other twin as the right one, and
+  // among label twins it is whichever one still reads as recorded, which
+  // after the step acted on the recorded one is exactly the wrong one.
+  if (matches.length === 1 && (position === undefined || position.of === 1)) return { kind: 'found', id: matches[0]! };
   const positioned = position !== undefined && position.of === matches.length ? matches[position.index] : undefined;
   return positioned === undefined
     ? { kind: 'failed', failure: 'target-ambiguous', candidates: matches }
@@ -264,8 +290,8 @@ export function relocateDescriptor(
  *    control whose label counts or times something is found once the count
  *    moved.
  *
- * A position recorded among id twins holds on every rung below: a label tier
- * that finds another number of controls is looking at a different set.
+ * A recorded position holds on every rung: a rung that finds another number
+ * of controls than were counted is looking at a different set.
  *
  * Empty when nothing matches. The recorder uses the same projection to
  * notice, before it writes a target, that the description alone would not
@@ -291,17 +317,25 @@ function matchingIds(
           );
         })();
   const twins = descriptor.position?.of;
-  const idRungs = ID_FIELDS.filter((id) => descriptor[id] !== undefined).length;
-  for (const [index, tier] of matchingTiers(descriptor).entries()) {
+  // The first rung that matched anything, kept for when no rung finds the
+  // recorded number of twins: its matches are the candidates a caller with a
+  // recorded point may still tell apart.
+  let first: readonly string[] | undefined;
+  for (const tier of matchingTiers(descriptor)) {
     const matched = keyed.filter((candidate) => tier(candidate.descriptor));
     if (matched.length === 0) continue;
-    // A position was counted among the controls an id rung matched. A label
-    // rung that finds another number of them is looking at a different set,
-    // where the recorded index would name an unrelated control.
-    if (idRungs > 0 && index >= idRungs && twins !== undefined && twins > 1 && matched.length !== twins) continue;
-    return matched.map((candidate) => candidate.id);
+    const ids = matched.map((candidate) => candidate.id);
+    // A position was counted among the controls the first matching rung found
+    // when it was recorded. A rung that finds another number of them now is
+    // looking at a different set, where the recorded index would name an
+    // unrelated control, so the rungs below get their turn.
+    if (twins !== undefined && twins > 1 && matched.length !== twins) {
+      first ??= ids;
+      continue;
+    }
+    return ids;
   }
-  return [];
+  return first ?? [];
 }
 
 /** One tier of the ladder: whether a candidate's projection matches the recording at that tier. */
@@ -320,7 +354,7 @@ function matchingTiers(descriptor: TraceTargetDescriptor): readonly MatchTier[] 
       : [
           (candidate: TraceTargetDescriptor) => fieldsEqual(semantic, candidate, [...SEMANTIC_ID_FIELDS, ...labels]),
           (candidate: TraceTargetDescriptor) =>
-            fieldsEqual(semantic, candidate, SEMANTIC_ID_FIELDS) && sameLabels(semantic, candidate, labels),
+            fieldsEqual(semantic, candidate, SEMANTIC_ID_FIELDS) && sameLabels(semantic, candidate, labels, 'counts'),
         ]),
   ];
 }

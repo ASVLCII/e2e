@@ -1737,7 +1737,7 @@ describe('video', () => {
     expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
       // The session is gone, so it is put on the app again before the permission, as after closeApp.
       ['apps.open', { platform: 'ios', app: 'com.example.app' }],
-      ['settings.update', { setting: 'permission', permission: 'camera', state: 'grant' }],
+      ['settings.update', { platform: 'ios', setting: 'permission', permission: 'camera', state: 'grant' }],
       ['apps.open', { platform: 'ios', app: 'com.example.app', relaunch: true }],
     ]);
   });
