@@ -76,6 +76,13 @@ suites that consume the built packages the way a user would.
   hosted iOS simulators and Android emulators for the mobile engine
   (`DeviceProvider`). Expo publishes no SDK for the sessions API, so it calls
   Expo's GraphQL API with `fetch`, and `@e2e-dev/mobile` is its only peer.
+- `packages/agentmail` - the published `@e2e-dev/agentmail` package:
+  AgentMail inboxes for `config.email`, with the `agentmail` SDK as its one
+  dependency and `e2e` as its peer. It implements core's `MailProvider`;
+  the `email` fixture, the agent's email tools, and every rule about waiting,
+  rendering, and releasing addresses live in core (`packages/e2e/src/email/`,
+  with `maildev()` for a local app), and a provider only hands out addresses,
+  lists and reads what arrived, and gives addresses back.
 - `apps/testbed` (`@e2e-dev/testbed`, private) — dogfood project that
   consumes the **built** packages like a real user would: the playground app
   where every runner feature (sessions, routes, downloads, frames, uploads,

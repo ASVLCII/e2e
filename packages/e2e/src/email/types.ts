@@ -66,7 +66,8 @@ export interface EmailMessage {
  * runner owns everything a test and the agent see (filters, waits, retries,
  * the tools, what the model is shown); a provider only hands out addresses,
  * lists and reads what arrived, and gives addresses back, so a local SMTP catcher, a hosted inbox service, or
- * a mail server of your own plugs in the same way. Like every live value, a provider never
+ * a mail server of your own plugs in the same way. `agentMail()` from
+ * `@e2e-dev/agentmail` is one. Like every live value, a provider never
  * crosses a process boundary: each worker constructs its own.
  *
  * Every failure is `EMAIL_PROVIDER_FAILED`. During a wait, a failed `list`

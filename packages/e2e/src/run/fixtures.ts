@@ -259,7 +259,7 @@ const FOREIGN_FIXTURE_HINTS: Readonly<Record<string, string>> = {
   context: 'the browser context is owned by the engine: cookies, routes, and storage are on the web fixture of a Playwright target',
   request: 'there is no request fixture: call fetch() directly, or reach the browser through the web fixture of a Playwright target',
   driver: 'there is no WebDriver session: drive the device through app, screen, and (on an agent-device target) device',
-  email: 'no email provider is configured: set email in e2e.config.ts, e.g. email: maildev() from e2e for a local app',
+  email: 'no email provider is configured: set email in e2e.config.ts, e.g. email: maildev() from e2e for a local app, or agentMail() from @e2e-dev/agentmail for a remote site',
 };
 
 /**
