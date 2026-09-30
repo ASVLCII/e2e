@@ -224,7 +224,10 @@ function exploreAgentConfig(explorer: AgentConfig): AgentConfig {
 function credentialAccounts(credentials: ReadonlyMap<string, ResolvedCredential>): PlanAccount[] {
   const accounts = [...credentials.values()].map((credential) => ({ name: credential.name, username: credential.username }));
   const carried = Object.fromEntries(
-    accounts.map((account) => [account.name, { username: account.username, password: { kind: 'secret', name: account.name, purpose: 'password' } }]),
+    [...credentials.values()].map((credential) => [
+      credential.name,
+      { username: credential.username, password: { kind: 'secret', name: credential.password.name, purpose: 'password' } },
+    ]),
   );
   const bytes = Buffer.byteLength(JSON.stringify({ credentials: carried }));
   if (bytes > MAX_CREDENTIAL_BYTES) {

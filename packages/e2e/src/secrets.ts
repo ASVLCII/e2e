@@ -3,18 +3,26 @@
 import { credentialBrand, secretBrand } from './internal/brands.ts';
 import { ConfigurationError } from './internal/errors.ts';
 import { realmSlot } from './internal/realm-slot.ts';
-import { envName } from './config/secrets.ts';
+import { credentialNamed, envName } from './config/secrets.ts';
 import type { Credential, Credentials, Secret, SecretPurpose, Secrets } from './types.ts';
 
+/** One secret as the registry knows it: its name and what it is for. */
+interface RegisteredSecret {
+  readonly name: string;
+  readonly purpose: SecretPurpose;
+}
+
 /**
- * What the handles resolve against: the run's accounts and every secret by
- * name, as the two maps the resolved config carries. Named structurally
- * rather than picked from `ResolvedConfig`, so the public `secrets` surface
- * pulls no config module, and none of its imports, into a consumer's types.
+ * What the handles resolve against, as the resolved config carries it: the
+ * run's accounts, the `config.secrets` entries, and every secret the run
+ * holds. Named structurally rather than picked from `ResolvedConfig`, so the
+ * public `secrets` surface pulls no config module, and none of its imports,
+ * into a consumer's types.
  */
 export interface SecretRegistry {
-  readonly credentials: ReadonlyMap<string, { readonly username: string }>;
-  readonly secrets: ReadonlyMap<string, { readonly purpose: SecretPurpose }>;
+  readonly credentials: ReadonlyMap<string, { readonly name: string; readonly username: string; readonly password: RegisteredSecret }>;
+  readonly secrets: ReadonlyMap<string, RegisteredSecret>;
+  readonly allSecrets: ReadonlyMap<string, RegisteredSecret>;
 }
 
 /** Global slot so test modules in an isolated realm reach the runner's registry. */
@@ -68,7 +76,8 @@ function requireRegistry(caller: string, code: 'AUTH_CREDENTIAL_UNAVAILABLE' | '
   return registry;
 }
 
-function makeSecret(name: string, purpose: SecretPurpose): Secret {
+/** The opaque handle of a secret the registry holds, for a host that hands every configured secret to a step (`e2e mcp`). */
+export function secretHandle({ name, purpose }: RegisteredSecret): Secret {
   return Object.freeze({ name, purpose, [secretBrand]: true as const });
 }
 
@@ -76,8 +85,8 @@ function makeSecret(name: string, purpose: SecretPurpose): Secret {
  * The handle `secrets.get()` returns before any run installed a registry: at
  * config evaluation, where an engine option holds it until the engine
  * resolves it during an attempt. Only the resolved config knows whether the
- * name is a credential's password, so the purpose is read from the run's
- * registry when asked; the config load checks the name. Turned into a string
+ * name is a credential's password (`admin.password`), so the purpose is read
+ * from the run's registry when asked; the config load checks the name. Turned into a string
  * (a template literal, `String()`, `+`, `JSON.stringify`) it throws: the
  * config holds a name, not the value, and a string would pass the name off
  * as the value where only a string fits, a command's env or an agent's context.
@@ -92,7 +101,7 @@ function deferredSecret(name: string): Secret {
   const handle = {
     name,
     get purpose(): SecretPurpose {
-      return registrySlot.get(globalThis)?.secrets.get(name)?.purpose ?? 'generic-secret';
+      return registrySlot.get(globalThis)?.allSecrets.get(name)?.purpose ?? 'generic-secret';
     },
     [secretBrand]: true as const,
   };
@@ -126,7 +135,7 @@ export const credentials: Credentials = {
     return Object.freeze({
       name,
       username: resolved.username,
-      password: makeSecret(name, 'password'),
+      password: secretHandle(resolved.password),
       [credentialBrand]: true as const,
     });
   },
@@ -138,11 +147,13 @@ export const secrets: Secrets = {
     if (registry === undefined) return deferredSecret(name);
     const resolved = registry.secrets.get(name);
     if (resolved === undefined) {
+      const credential = credentialNamed(name, registry.credentials);
+      const hint = credential === undefined ? '' : `; credential "${credential.name}"'s password is credentials.user(${JSON.stringify(credential.name)}).password`;
       throw new ConfigurationError(
         'SECRET_UNAVAILABLE',
-        `secret "${name}" is not configured; add it to config.secrets or set ${envName('E2E_SECRET', name)}`,
+        `secret "${name}" is not configured; add it to config.secrets or set ${envName('E2E_SECRET', name)}${hint}`,
       );
     }
-    return makeSecret(name, resolved.purpose);
+    return secretHandle(resolved);
   },
 };

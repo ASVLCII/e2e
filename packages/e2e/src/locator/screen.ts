@@ -11,7 +11,7 @@ import { requireFinitePoint } from '../internal/geometry.ts';
 import { isPlainObject, rejectUnknownOptions } from '../internal/options.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
 import { obj } from '../internal/objects.ts';
-import { normalizeText } from '../internal/text.ts';
+import { isTextMatch, normalizeText } from '../internal/text.ts';
 import type {
   ActionOptions,
   ClickOptions,
@@ -113,8 +113,11 @@ function timedOut(cause: unknown): boolean {
 /** The keys of `TextMatchOptions`, what every text-family query takes. */
 const TEXT_OPTION_KEYS = ['exact', 'visible'] as const;
 
-/** The keys of `RoleOptions`: the accessible name, the text-match keys, and the states. */
-const ROLE_OPTION_KEYS = ['name', ...TEXT_OPTION_KEYS, 'checked', 'disabled', 'selected', 'expanded', 'pressed', 'level'] as const;
+/** The keys of `RoleOptions` beside the accessible name: the text-match keys and the states. */
+const ROLE_FILTER_KEYS = [...TEXT_OPTION_KEYS, 'checked', 'disabled', 'selected', 'expanded', 'pressed', 'level'] as const;
+
+/** The keys of `RoleOptions`: the accessible name and the filters. */
+const ROLE_OPTION_KEYS = ['name', ...ROLE_FILTER_KEYS] as const;
 
 class ScreenImpl implements Screen {
   constructor(
@@ -128,9 +131,15 @@ class ScreenImpl implements Screen {
     return this.wrap === undefined ? expression : this.wrap(expression);
   }
 
-  getByRole(role: Role | RoleAlias, options?: RoleOptions): Locator {
-    rejectUnknownOptions('getByRole', options, ROLE_OPTION_KEYS, 'INVALID_LOCATOR');
-    return new LocatorImpl(this.context, this.build(roleQuery(role, options, this.scope)));
+  getByRole(role: Role | RoleAlias, nameOrOptions?: TextMatch | RoleOptions, maybeOptions?: Omit<RoleOptions, 'name'>): Locator {
+    const named = isTextMatch(nameOrOptions);
+    if (!named && maybeOptions !== undefined) {
+      throw new TestError('INVALID_LOCATOR', 'getByRole takes options as its third argument only after a name: getByRole(role, name, options)');
+    }
+    const options = named ? maybeOptions : nameOrOptions;
+    rejectUnknownOptions('getByRole', options, named ? ROLE_FILTER_KEYS : ROLE_OPTION_KEYS, 'INVALID_LOCATOR');
+    const query = named ? { ...options, name: nameOrOptions } : options;
+    return new LocatorImpl(this.context, this.build(roleQuery(role, query, this.scope)));
   }
 
   getByLabel(text: TextMatch, options?: TextMatchOptions): Locator {

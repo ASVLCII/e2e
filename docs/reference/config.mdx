@@ -138,8 +138,9 @@ export interface E2EConfig {
    */
   cache?: CacheMode | CacheConfig;
   /**
-   * Named accounts. A credential's password is registered as a secret under
-   * the credential's name, so the name may not also appear under `secrets`.
+   * Named accounts. `credentials.user(name).password` is the handle of a
+   * credential's password, a secret named `<name>.password`; `secrets.get()`
+   * never returns it, so a credential and a secret may share a name.
    */
   credentials?: Readonly<Record<string, CredentialConfig>>;
   /**
@@ -610,7 +611,7 @@ engine.
 
 | Recorder | Files under the attempt's artifact directory |
 | --- | --- |
-| Web engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ screencast })`](/reference/web#options) sets the frame size and quality |
+| Browser engine, Playwright screencast | `video/video.webm`, one segment per page the attempt showed, later ones as `video/video-part<n>.webm`. [`web({ screencast })`](/reference/web#options) sets the frame size and quality |
 | Mobile engine, agent-device | `video/video.mp4` |
 | A provider's own recording ([`BrowserProvider.record`](/browser#recording-on-the-provider), [`DeviceProvider.record`](/mobile#hosted-devices)) | the file the provider wrote, as `video/<file>`: Kernel's is `video/replay.mp4`. Or a link to a recording the service keeps, recorded with `url` in place of `path`; the runner never downloads it |
 
@@ -771,7 +772,7 @@ runner and a worker is `CONFIG_NOT_DETERMINISTIC`. See
 ## credentials
 
 ```ts
-/** One `config.credentials` entry: an account whose password is the secret of the entry's name. */
+/** One `config.credentials` entry: an account whose password is a secret named `<entry>.password`. */
 export interface CredentialConfig {
   username: string;
   password: string | SecretProvider;
@@ -791,8 +792,13 @@ The username is a plain string; the password is an opaque `Secret` that test
 code cannot read, accepted only by `locator.fill` and `agent.act` params. An
 unconfigured name throws `AUTH_CREDENTIAL_UNAVAILABLE`.
 
-A credential's password is registered as the secret of the credential's name,
-so a name declared under both `credentials` and `secrets` is `INVALID_CONFIG`.
+Credentials and secrets are separate namespaces: `secrets.get(name)` returns a
+`secrets` entry only, and a credential's password is reachable only as
+`credentials.user(name).password`. The agent, the replay cache, and the
+reports know that handle as `<name>.password` (`<secret:admin.password>`), so
+`credentials.admin` and `secrets.admin` can both exist; a `secrets` entry
+named exactly `admin.password` beside an `admin` credential is
+`INVALID_CONFIG`.
 
 ```ts
 /** Named test identity. The password remains an opaque Secret. */
@@ -835,7 +841,8 @@ Called while `e2e.config.ts` evaluates, before any run exists, `secrets.get(name
 returns a reference by name that an engine option can hold, such as
 `web({ basicAuth: { username, password: secrets.get('previewPassword') } })`.
 The engine declares it, the config load fails with `INVALID_CONFIG` when no
-`secrets` entry or credential has the name, and the engine resolves the value
+`secrets` entry has the name (a credential's password is not one: declare a
+value an engine option needs under `secrets`), and the engine resolves the value
 when each attempt starts (a provider runs again every time). The value joins
 the attempt's redaction then, without the screenshot restrictions a fill
 brings, since it goes to the engine rather than onto the page. The digest

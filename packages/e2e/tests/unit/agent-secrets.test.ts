@@ -11,10 +11,12 @@ import type { AgentContext } from '../../src/agent/invocation.ts';
 import { authorizeSecretFill } from '../../src/agent/secrets.ts';
 import type { ResolvedCredential, ResolvedSecret } from '../../src/config/resolve.ts';
 import type { SemanticNode } from '../../src/engine/surface.ts';
+import { secretBrand } from '../../src/internal/brands.ts';
+import type { Secret } from '../../src/types.ts';
 import { credentials, setSecretRegistry } from '../../src/secrets.ts';
 
-const admin: ResolvedCredential = { name: 'admin', username: 'admin@example.com' };
-const adminPassword: ResolvedSecret = { name: 'admin', purpose: 'password', value: 'hunter2' };
+const adminPassword: ResolvedSecret = { name: 'admin.password', purpose: 'password', value: 'hunter2' };
+const admin: ResolvedCredential = { name: 'admin', username: 'admin@example.com', password: adminPassword };
 
 afterEach(() => {
   setSecretRegistry(undefined);
@@ -23,7 +25,7 @@ afterEach(() => {
 /** The two members `authorizeSecretFill` reads off the runtime, over one registered credential. */
 function runtime(): AgentContext {
   return {
-    config: { secrets: new Map([[adminPassword.name, adminPassword]]) },
+    config: { allSecrets: new Map([[adminPassword.name, adminPassword]]) },
     secrets: { resolve: async () => adminPassword.value },
   } as unknown as AgentContext;
 }
@@ -69,7 +71,7 @@ const asPlainTextbox: SemanticNode = {
 
 describe('authorizeSecretFill', () => {
   it('lets a credential password into an Android password field as the mobile engine projects it', async () => {
-    setSecretRegistry({ credentials: new Map([[admin.name, admin]]), secrets: new Map([[adminPassword.name, adminPassword]]) });
+    setSecretRegistry({ credentials: new Map([[admin.name, admin]]), secrets: new Map(), allSecrets: new Map([[adminPassword.name, adminPassword]]) });
     const recorder = host();
     await expect(authorizeSecretFill(recorder, runtime(), credentials.user('admin').password, androidPasswordField)).resolves.toBe(
       'hunter2',
@@ -78,9 +80,19 @@ describe('authorizeSecretFill', () => {
   });
 
   it('refuses the same field projected as a plain textbox, the shape before the mobile fix', async () => {
-    setSecretRegistry({ credentials: new Map([[admin.name, admin]]), secrets: new Map([[adminPassword.name, adminPassword]]) });
+    setSecretRegistry({ credentials: new Map([[admin.name, admin]]), secrets: new Map(), allSecrets: new Map([[adminPassword.name, adminPassword]]) });
     const recorder = host();
     await expect(authorizeSecretFill(recorder, runtime(), credentials.user('admin').password, asPlainTextbox)).rejects.toMatchObject({
+      code: 'POLICY_DENIED',
+      message: 'field purpose none is incompatible with secret purpose password',
+    });
+    expect(recorder.decisions).toEqual(['secret.purpose:denied:POLICY_DENIED']);
+  });
+
+  it('judges the purpose by the config, not by what a handle claims', async () => {
+    const claimsGeneric: Secret = Object.freeze({ name: adminPassword.name, purpose: 'generic-secret', [secretBrand]: true as const });
+    const recorder = host();
+    await expect(authorizeSecretFill(recorder, runtime(), claimsGeneric, asPlainTextbox)).rejects.toMatchObject({
       code: 'POLICY_DENIED',
       message: 'field purpose none is incompatible with secret purpose password',
     });

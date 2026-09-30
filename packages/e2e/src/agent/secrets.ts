@@ -27,7 +27,7 @@ export async function authorizeSecretFill(
   secret: Secret,
   node: SemanticNode,
 ): Promise<string> {
-  const registered = runtime.config.secrets.get(secret.name);
+  const registered = runtime.config.allSecrets.get(secret.name);
   if (registered === undefined) {
     const code = unavailableCode(secret);
     host.recordPolicy('secret.registered', 'denied', code);
@@ -48,11 +48,12 @@ export async function authorizeSecretFill(
   // A password belongs in a password field, where the surface masks it. A
   // generic secret has no field of its own: it goes wherever the test says,
   // and redaction covers the value the moment it shows on screen.
-  if (secret.purpose === 'password' && node.inputPurpose !== 'password') {
+  // The config says what the secret is for, not the handle a test built.
+  if (registered.purpose === 'password' && node.inputPurpose !== 'password') {
     host.recordPolicy('secret.purpose', 'denied', 'POLICY_DENIED');
     throw new AgentError(
       'POLICY_DENIED',
-      `field purpose ${node.inputPurpose ?? 'none'} is incompatible with secret purpose ${secret.purpose}`,
+      `field purpose ${node.inputPurpose ?? 'none'} is incompatible with secret purpose ${registered.purpose}`,
     );
   }
 
