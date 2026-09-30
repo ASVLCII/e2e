@@ -9,6 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import {
   ConfigurationError,
   EngineError,
@@ -52,7 +53,7 @@ export interface BrowserRequest {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** Aborts on interrupt, and when the attempt that needs the browser is cancelled or exceeds its budget. */
   readonly signal: AbortSignal;
-  /** Reports one line of progress to the run's reporter (a session URL to watch); discarded in a worker process. */
+  /** Reports one line of progress to the run's reporter (a session URL to watch), from the runner and from a worker alike. */
   readonly log: (line: string) => void;
 }
 
@@ -89,6 +90,37 @@ export interface BrowserReleaseContext {
   readonly log: (line: string) => void;
 }
 
+/** Handed to `downloads.read`, once per file. */
+export interface BrowserDownloadContext {
+  readonly runId: string;
+  readonly targetName: string;
+  /** The run's environment, the same `acquire` saw. */
+  readonly env: Readonly<Record<string, string | undefined>>;
+  /** Aborts when the `web.waitForDownload` call is cancelled or exceeds its timeout. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * How a download reaches the runner from a browser on another machine. The
+ * browser saves every file to its own disk, where the runner cannot open
+ * it, so the engine points the browser's downloads at `dir` there and reads
+ * each finished file back through `read`.
+ */
+export interface BrowserProviderDownloads {
+  /** Absolute directory on the browser's machine the browser saves downloads to; created by the browser if missing. */
+  readonly dir: string;
+  /** The bytes of one finished download, `file` an absolute path under `dir`, read off the leased browser's disk. */
+  read(lease: BrowserLease, file: string, context: BrowserDownloadContext): Promise<Uint8Array>;
+}
+
+/** The downloads of the browser an attempt rides, read through its provider. */
+export interface LeaseDownloads {
+  /** The provider as error messages name it: `browser provider "kernel"`. */
+  readonly provider: string;
+  readonly dir: string;
+  read(file: string, signal: AbortSignal): Promise<Uint8Array>;
+}
+
 /** A provider recording the attempt started, with who made it and which lease it covers, for `stopProviderRecording`. */
 export interface LeaseRecording {
   readonly recording: ProviderRecording;
@@ -103,8 +135,10 @@ export interface LeaseRecording {
  * browser drops calls it again, from its own process, for a replacement. In
  * `attempt` scope every `startAttempt` calls it from the worker. `release`
  * is called exactly once per lease, by the process that acquired it, also
- * after an `acquire` of another slot failed. A provider must not rely on
- * runner-process state to serve a request from a worker.
+ * after an `acquire` of another slot failed; a worker that dies first never
+ * calls it, and `sweep`, when the provider has one, releases what it left.
+ * A provider must not rely on runner-process state to serve a request from
+ * a worker.
  */
 export interface BrowserProvider {
   /** Label in progress lines and error messages. */
@@ -122,6 +156,23 @@ export interface BrowserProvider {
    * screencast.
    */
   record?(lease: BrowserLease, context: ProviderRecordContext): Promise<ProviderRecording>;
+  /**
+   * Serves `web.waitForDownload` for a browser that runs on another machine.
+   * Without it a download on such a browser fails, since the file lands on
+   * the browser's disk; a provider whose browsers run on the runner's own
+   * machine leaves it out.
+   */
+  readonly downloads?: BrowserProviderDownloads | undefined;
+  /**
+   * Releases every lease of the run and target the provider still holds
+   * open, and resolves to their ids. Called once per target from `finish`,
+   * in the runner, after every worker exited and the leases `prepare` made
+   * were released: whatever it finds is a lease a worker acquired (a
+   * per-attempt browser, a replacement) and never gave back, because the
+   * worker died before it could. Find them by what `acquire` tagged them
+   * with at the service: the run id and the target.
+   */
+  sweep?(context: BrowserReleaseContext): Promise<readonly string[]>;
 }
 
 const SCOPES: ReadonlySet<string> = new Set<BrowserProviderScope>(['worker', 'attempt']);
@@ -137,8 +188,21 @@ export function asBrowserProvider(browser: object): BrowserProvider {
       throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" must implement ${member}()`);
     }
   }
-  if (candidate.record !== undefined && typeof candidate.record !== 'function') {
-    throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" has a record that is not a function`);
+  for (const member of ['record', 'sweep'] as const) {
+    if (candidate[member] !== undefined && typeof candidate[member] !== 'function') {
+      throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" has a ${member} that is not a function`);
+    }
+  }
+  const downloads = candidate.downloads as Partial<Record<keyof BrowserProviderDownloads, unknown>> | null | undefined;
+  if (
+    downloads !== undefined &&
+    (typeof downloads !== 'object' || downloads === null || !isNonEmptyString(downloads.dir) || typeof downloads.read !== 'function')
+  ) {
+    throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" has downloads that are not { dir, read() }`);
+  }
+  // The browser's own machine may be POSIX or Windows, whatever the runner's is.
+  if (downloads !== undefined && !path.posix.isAbsolute(downloads.dir as string) && !path.win32.isAbsolute(downloads.dir as string)) {
+    throw new ConfigurationError('INVALID_CONFIG', `web: browser provider "${candidate.name}" has downloads.dir ${JSON.stringify(downloads.dir)}; name an absolute path on the browser's machine`);
   }
   if (candidate.scope !== undefined && (typeof candidate.scope !== 'string' || !SCOPES.has(candidate.scope))) {
     throw new ConfigurationError(
@@ -240,6 +304,8 @@ interface WorkerRun {
   readonly slot: number;
   /** Worker slots the run uses for the target, as `prepare` saw them; the request's `slots`. */
   readonly slots: number;
+  /** The worker's line to the reporter, as `init` got it; the runner prefixes the target and slot. */
+  readonly log: (line: string) => void;
 }
 
 /** A lease a worker attaches to, and whether the worker (not the runner's `prepare`) acquired it. */
@@ -263,8 +329,12 @@ const discard = (): void => undefined;
  */
 export class LeasedBrowsers {
   readonly scope: BrowserProviderScope;
+  /** The provider's name, for messages. */
+  readonly name: string;
   /** Leases granted so far, per target, filled as each `acquire` settles. */
   private readonly held = new Map<string, BrowserLease[]>();
+  /** Targets whose `prepare` succeeded, so workers ran and may have left leases open. */
+  private readonly workersRan = new Set<string>();
   private run: WorkerRun | undefined;
   /** The lease the worker's shared browser attaches to, and whether `endpoint` has handed it out yet. */
   private current: WorkerLease | undefined;
@@ -277,6 +347,7 @@ export class LeasedBrowsers {
 
   constructor(private readonly provider: BrowserProvider) {
     this.scope = provider.scope ?? 'worker';
+    this.name = provider.name;
   }
 
   // --- runner side ---
@@ -290,10 +361,13 @@ export class LeasedBrowsers {
   async prepare(info: EnginePrepareInfo): Promise<EnginePrepareResult> {
     if (info.slots === 0) return {};
     const variable = handoffVariable(info.targetName);
-    if (this.scope === 'attempt') return { env: { [variable]: encodeHandoff({ slots: info.slots, leases: [] }) } };
-    const { provider } = this;
     const held: BrowserLease[] = [];
     this.held.set(info.targetName, held);
+    if (this.scope === 'attempt') {
+      this.workersRan.add(info.targetName);
+      return { env: { [variable]: encodeHandoff({ slots: info.slots, leases: [] }) } };
+    }
+    const { provider } = this;
     info.log(`leasing ${info.slots} browser(s) from ${provider.name}`);
     const leases = await allOrFirstFailure(
       Array.from({ length: info.slots }, (_, slot) => async () => {
@@ -312,21 +386,55 @@ export class LeasedBrowsers {
       }),
       `browser provider "${provider.name}" could not lease a browser`,
     );
-    return { workers: leases.length, env: { [variable]: encodeHandoff({ slots: leases.length, leases }) } };
+    const env = { [variable]: encodeHandoff({ slots: leases.length, leases }) };
+    this.workersRan.add(info.targetName);
+    return { workers: leases.length, env };
   }
 
-  /** Releases what `prepare` leased for the target, every lease before the first failure is reported. */
+  /**
+   * Releases what `prepare` leased for the target, every lease before the
+   * first failure is reported, then has the provider sweep up the leases a
+   * worker that died left open, in either scope, once workers ran: the sweep
+   * runs whatever the releases did, and is skipped when `prepare` failed and
+   * no worker started.
+   */
   async finish(info: EngineFinishInfo): Promise<void> {
     const { provider } = this;
     const leases = this.held.get(info.targetName);
+    const swept = this.workersRan.delete(info.targetName);
     this.held.delete(info.targetName);
-    if (leases === undefined || leases.length === 0) return;
+    if (leases === undefined) return;
     const context = { runId: info.runId, targetName: info.targetName, env: info.env, signal: info.signal, log: (line: string) => info.log(`${provider.name}: ${line}`) };
-    await allOrFirstFailure(
-      leases.map((lease) => () => provider.release(lease, context)),
-      `browser provider "${provider.name}" could not release a browser`,
-    );
-    info.log(`${provider.name}: released ${leases.length} browser(s)`);
+    try {
+      if (leases.length === 0) return;
+      await allOrFirstFailure(
+        leases.map((lease) => () => provider.release(lease, context)),
+        `browser provider "${provider.name}" could not release a browser`,
+      );
+      info.log(`${provider.name}: released ${leases.length} browser(s)`);
+    } finally {
+      if (swept) await this.sweep(context);
+    }
+  }
+
+  /**
+   * The provider's sweep of the leases workers left open, bounded by the
+   * cleanup budget. A backstop, so a sweep that fails is reported as a line,
+   * never as the run's failure: the service still ends an idle browser.
+   */
+  private async sweep(context: BrowserReleaseContext): Promise<void> {
+    const { provider } = this;
+    const sweep = provider.sweep?.bind(provider);
+    if (sweep === undefined) return;
+    let released: unknown;
+    try {
+      released = await raceAbort(sweep(context), context.signal, `sweeping browsers of "${provider.name}"`);
+    } catch (cause) {
+      context.log(`could not release the browsers a worker left open: ${message(cause)}`);
+      return;
+    }
+    const ids = Array.isArray(released) ? released.filter(isNonEmptyString) : [];
+    if (ids.length > 0) context.log(`released ${ids.length} browser(s) a worker left open: ${ids.join(', ')}`);
   }
 
   // --- worker side ---
@@ -350,7 +458,14 @@ export class LeasedBrowsers {
         { retryable: false },
       );
     }
-    this.run = { runId: info.runId, targetName: info.targetName, env: info.env, slot: info.workerSlot, slots: handoff.slots };
+    this.run = {
+      runId: info.runId,
+      targetName: info.targetName,
+      env: info.env,
+      slot: info.workerSlot,
+      slots: handoff.slots,
+      log: (line) => info.log(`${provider.name}: ${line}`),
+    };
     if (this.scope === 'attempt') return;
     const lease = handoff.leases[info.workerSlot];
     if (lease === undefined) {
@@ -380,7 +495,7 @@ export class LeasedBrowsers {
       return previous.lease.cdpEndpoint;
     }
     const { tenure } = this;
-    const lease = await this.acquire({ runId: run.runId, targetName: run.targetName, slot: run.slot, slots: run.slots, env: run.env, signal, log: discard });
+    const lease = await this.acquire({ runId: run.runId, targetName: run.targetName, slot: run.slot, slots: run.slots, env: run.env, signal, log: run.log });
     if (signal.aborted || this.tenure !== tenure) {
       await this.provider.release(lease, this.releaseContext(run, signal)).catch(discard);
       throw new EngineError('CANCELLED', `browser lease from "${this.provider.name}" arrived after the worker gave up; released`, { retryable: false });
@@ -409,7 +524,7 @@ export class LeasedBrowsers {
       attemptId: context.attemptId,
       env: run.env,
       signal: context.signal,
-      log: discard,
+      log: run.log,
     });
     if (context.signal.aborted || this.opened !== opened) {
       await this.provider.release(lease, this.releaseContext(run, context.signal)).catch(discard);
@@ -469,6 +584,34 @@ export class LeasedBrowsers {
     };
   }
 
+  /**
+   * The downloads of the browser the attempt rides, when the provider
+   * serves them: the attempt's lease in `attempt` scope and the worker's
+   * current one in `worker` scope. A read that fails is named after the
+   * provider, or is the cancellation when the caller gave up first.
+   */
+  downloads(): LeaseDownloads | undefined {
+    const { provider } = this;
+    const served = provider.downloads;
+    if (served === undefined) return undefined;
+    const label = `browser provider "${provider.name}"`;
+    return {
+      provider: label,
+      dir: served.dir,
+      read: async (file, signal) => {
+        const run = this.requireRun();
+        const lease = this.scope === 'attempt' ? this.attempt : this.current?.lease;
+        if (lease === undefined) throw invalidState(`${label} was asked for a download before the attempt had a browser`);
+        try {
+          return await served.read(lease, file, { runId: run.runId, targetName: run.targetName, env: run.env, signal });
+        } catch (cause) {
+          if (signal.aborted) throw connectionAbort(signal, `download from "${provider.name}"`);
+          throw new EngineError('ENGINE_FAILURE', `${label} could not read download ${file} from browser ${lease.id}: ${message(cause)}`, { retryable: false, cause });
+        }
+      },
+    };
+  }
+
   private requireRun(): WorkerRun {
     if (this.run === undefined) {
       throw new EngineError('ENGINE_FAILURE', `browser provider "${this.provider.name}" was asked for a browser before init`, { retryable: false });
@@ -506,6 +649,6 @@ export class LeasedBrowsers {
   }
 
   private releaseContext(run: WorkerRun, signal: AbortSignal): BrowserReleaseContext {
-    return { runId: run.runId, targetName: run.targetName, env: run.env, signal, log: discard };
+    return { runId: run.runId, targetName: run.targetName, env: run.env, signal, log: run.log };
   }
 }

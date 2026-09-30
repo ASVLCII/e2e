@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineAttemptContext, EngineCleanupContext, EngineFinishInfo, EngineInitInfo, EnginePrepareInfo, OperationContext, ProviderRecordContext, ProviderRecording } from 'e2e/engine';
 import { connectCdp } from '../../src/browser-connection.ts';
 import { web } from '../../src/index.ts';
-import { LeasedBrowsers, type BrowserLease, type BrowserProvider, type BrowserRequest } from '../../src/provider.ts';
+import { LeasedBrowsers, type BrowserLease, type BrowserProvider, type BrowserReleaseContext, type BrowserRequest } from '../../src/provider.ts';
 import { PlaywrightSurface } from '../../src/surface.ts';
 import { noSecrets } from '../helpers/secrets.ts';
 
@@ -56,9 +56,11 @@ function fakeBrowser(contextId: string) {
 }
 
 /** A scripted provider: leases `lease-<n>` against `wss://<n>.example`, remembering every call. */
-function provider(options: { scope?: 'worker' | 'attempt'; failSlot?: number; failRelease?: boolean; reconnect?: boolean } = {}) {
+function provider(options: { scope?: 'worker' | 'attempt'; failSlot?: number; failRelease?: boolean; reconnect?: boolean; sweep?: 'open' | 'fail' } = {}) {
   const acquired: BrowserRequest[] = [];
   const released: BrowserLease[] = [];
+  const open = new Map<string, BrowserLease>();
+  const swept: BrowserReleaseContext[] = [];
   let sequence = 0;
   const impl: BrowserProvider = {
     name: 'toy-cloud',
@@ -68,20 +70,34 @@ function provider(options: { scope?: 'worker' | 'attempt'; failSlot?: number; fa
       if (request.slot === options.failSlot) throw new Error(`no capacity for slot ${request.slot}`);
       request.log('starting');
       const n = sequence++;
-      return {
+      const lease = {
         id: `lease-${n}`,
         cdpEndpoint: `wss://${n}.example`,
         ...(options.reconnect === true ? { reconnectEndpoint: `wss://${n}.example/reconnect` } : {}),
         // A provider's own bookkeeping never reaches a worker.
         secret: 'x'.repeat(100),
       } as BrowserLease;
+      open.set(lease.id, lease);
+      return lease;
     },
     async release(lease) {
       released.push(lease);
       if (options.failRelease === true) throw new Error('stop failed');
+      open.delete(lease.id);
     },
+    ...(options.sweep === undefined
+      ? {}
+      : {
+          async sweep(context: BrowserReleaseContext) {
+            swept.push(context);
+            if (options.sweep === 'fail') throw new Error('list failed');
+            const ids = [...open.keys()];
+            open.clear();
+            return ids;
+          },
+        }),
   };
-  return { impl, acquired, released };
+  return { impl, acquired, released, swept };
 }
 
 const prepareInfo = (slots: number, log: (line: string) => void = () => undefined, env: Record<string, string> = { BROWSER_TOKEN: 't' }): EnginePrepareInfo => ({
@@ -101,7 +117,7 @@ const finishInfo = (log: (line: string) => void = () => undefined): EngineFinish
   timeoutMs: 5_000,
   log,
 });
-const initInfo = (workerSlot: number, env: Readonly<Record<string, string | undefined>> = {}): EngineInitInfo => ({
+const initInfo = (workerSlot: number, env: Readonly<Record<string, string | undefined>> = {}, log: (line: string) => void = () => undefined): EngineInitInfo => ({
   runId: 'run-1',
   targetName: 'web',
   projectRoot: '/project',
@@ -110,7 +126,7 @@ const initInfo = (workerSlot: number, env: Readonly<Record<string, string | unde
   headed: false,
   workerSlot,
   signal: new AbortController().signal,
-  log: () => undefined,
+  log,
 });
 const attempt = (attemptId: string): EngineAttemptContext => ({ attemptId, artifactsDir: '/tmp/e2e-provider-artifacts', signal: new AbortController().signal, resolveSecret: noSecrets });
 const cleanup = (): EngineCleanupContext => ({ timeoutMs: 1_000, signal: new AbortController().signal });
@@ -147,6 +163,23 @@ describe('web({ browser: provider })', () => {
     expect(() => web({ browser: provider({ scope: 'attempt' }).impl })).not.toThrow();
   });
 
+  it('rejects downloads that are not a directory and a read()', () => {
+    for (const downloads of [null, { dir: '', read: async () => new Uint8Array() }, { dir: '/downloads' }]) {
+      expect(() => web({ browser: { ...provider().impl, downloads } as unknown as BrowserProvider })).toThrow(
+        /provider "toy-cloud" has downloads that are not \{ dir, read\(\) \}/,
+      );
+    }
+    expect(() => web({ browser: { ...provider().impl, downloads: { dir: '/downloads', read: async () => new Uint8Array() } } })).not.toThrow();
+  });
+
+  it("rejects a relative downloads.dir, and takes an absolute one in either the POSIX or the Windows form", () => {
+    const read = async () => new Uint8Array();
+    expect(() => web({ browser: { ...provider().impl, downloads: { dir: 'downloads', read } } })).toThrow(
+      /provider "toy-cloud" has downloads.dir "downloads"; name an absolute path on the browser's machine/,
+    );
+    expect(() => web({ browser: { ...provider().impl, downloads: { dir: 'C:\\Users\\kernel\\Downloads', read } } })).not.toThrow();
+  });
+
   it('rejects a provider together with connect: two browser sources', () => {
     expect(() => web({ browser: provider().impl, connect: { cdpEndpoint: () => 'ws://x' } })).toThrow(/two browser sources/);
   });
@@ -159,14 +192,18 @@ describe('web({ browser: provider })', () => {
     expect(() => web({ browser: provider().impl, headers: { 'x-preview': 'synthetic' } })).not.toThrow();
   });
 
-  it('declares context replacement for worker scope and not for attempt scope, and a finish hook for both', () => {
+  it('declares context replacement for worker scope and not for attempt scope, and a finish hook for both', async () => {
     const perWorker = web({ browser: provider().impl });
     expect(perWorker.state).toBeDefined();
     expect(perWorker.session?.reset).toBeTypeOf('function');
     expect(perWorker.finish).toBeTypeOf('function');
     const perAttempt = web({ browser: provider({ scope: 'attempt' }).impl });
     expect(perAttempt.state).toBeUndefined();
-    expect(perAttempt.session?.reset).toBeUndefined();
+    await expect(perAttempt.session!.reset!(operation())).rejects.toMatchObject({
+      code: 'UNSUPPORTED_CAPABILITY',
+      message:
+        'app.clearState() is unavailable with browser provider "toy-cloud" with scope "attempt": it replaces the browser context, and the attempt rides one persistent context; every attempt already starts on a fresh browser, and scope "worker" can clear one mid-test',
+    });
     expect(perAttempt.session?.restart).toBeTypeOf('function');
   });
 });
@@ -356,6 +393,23 @@ describe('worker scope', () => {
     expect(cloud.released.map((lease) => lease.id)).toEqual(['lease-2', 'lease-3', 'lease-0', 'lease-1']);
   });
 
+  it('reports the progress a replacement lease logs through the worker\'s line to the reporter', async () => {
+    const cloud = provider();
+    const fake = fakeBrowser('context');
+    vi.mocked(connectCdp).mockResolvedValue(fake.browser);
+    const { env } = await prepared(cloud.impl, 1);
+    const lines: string[] = [];
+    const worker = new PlaywrightSurface({ browser: cloud.impl });
+    await worker.init(initInfo(0, env, (line) => lines.push(line)));
+    await worker.startAttempt(attempt('a1'));
+    await worker.endAttempt(cleanup());
+    expect(lines).toEqual([]);
+    fake.drop();
+    await worker.startAttempt(attempt('a2'));
+    expect(lines).toEqual(['toy-cloud: starting']);
+    await worker.dispose(cleanup());
+  });
+
   it('releases the replacement on dispose even when ending the attempt failed', async () => {
     const cloud = provider();
     const fake = fakeBrowser('context');
@@ -435,9 +489,12 @@ describe('attempt scope', () => {
     const cloud = provider({ scope: 'attempt' });
     const { env } = await prepared(cloud.impl, 2);
     const worker = new PlaywrightSurface({ browser: cloud.impl });
-    await worker.init(initInfo(1, { ...env, BROWSER_TOKEN: 't' }));
+    const lines: string[] = [];
+    await worker.init(initInfo(1, { ...env, BROWSER_TOKEN: 't' }, (line) => lines.push(line)));
     await worker.startAttempt(attempt('a1'));
     expect(cloud.acquired.map((request) => [request.slot, request.slots, request.attemptId, request.env])).toEqual([[1, 2, 'a1', { ...env, BROWSER_TOKEN: 't' }]]);
+    // Its progress reaches the reporter through the worker, as a lease from prepare does through the runner.
+    expect(lines).toEqual(['toy-cloud: starting']);
     expect(vi.mocked(connectCdp).mock.calls.map(([endpoint]) => endpoint)).toEqual(['wss://0.example']);
     await worker.endAttempt(cleanup());
     expect(cloud.released.map((lease) => lease.id)).toEqual(['lease-0']);
@@ -571,6 +628,85 @@ describe('attempt scope', () => {
       await worker.dispose(cleanup());
       expect(cloud.released.map((lease) => lease.id)).toEqual(['lease-0']);
     }
+  });
+});
+
+describe('leases a worker left open', () => {
+  it('rejects a sweep that is not a function', () => {
+    expect(() => web({ browser: { ...provider().impl, sweep: 'all' } as unknown as BrowserProvider })).toThrow(
+      /provider "toy-cloud" has a sweep that is not a function/,
+    );
+  });
+
+  it('has the provider sweep up an attempt\'s browser once the worker died holding it', async () => {
+    const cloud = provider({ scope: 'attempt', sweep: 'open' });
+    const { runner, env } = await prepared(cloud.impl, 1);
+    const worker = new PlaywrightSurface({ browser: cloud.impl });
+    await worker.init(initInfo(0, env));
+    await worker.startAttempt(attempt('a1'));
+    // The worker is killed here: neither endAttempt nor dispose runs.
+    const lines: string[] = [];
+    await runner.finish(finishInfo((line) => lines.push(line)));
+    expect(cloud.swept).toHaveLength(1);
+    expect(cloud.swept[0]).toMatchObject({ runId: 'run-1', targetName: 'web', env: { BROWSER_TOKEN: 't' } });
+    expect(lines).toEqual(['toy-cloud: released 1 browser(s) a worker left open: lease-0']);
+  });
+
+  it('sweeps after releasing what prepare leased, so only a dead worker\'s replacement is left to find', async () => {
+    const cloud = provider({ sweep: 'open' });
+    const fake = fakeBrowser('context');
+    vi.mocked(connectCdp).mockResolvedValue(fake.browser);
+    const { runner, env } = await prepared(cloud.impl, 1);
+    const worker = new PlaywrightSurface({ browser: cloud.impl });
+    await worker.init(initInfo(0, env));
+    await worker.startAttempt(attempt('a1'));
+    await worker.endAttempt(cleanup());
+    fake.drop();
+    await worker.startAttempt(attempt('a2'));
+    const lines: string[] = [];
+    await runner.finish(finishInfo((line) => lines.push(line)));
+    expect(cloud.released.map((lease) => lease.id)).toEqual(['lease-0']);
+    expect(lines).toEqual(['toy-cloud: released 1 browser(s)', 'toy-cloud: released 1 browser(s) a worker left open: lease-1']);
+  });
+
+  it('logs nothing when every worker gave its leases back, and sweeps nothing for a target with no slots', async () => {
+    const cloud = provider({ scope: 'attempt', sweep: 'open' });
+    const { runner, env } = await prepared(cloud.impl, 1);
+    const worker = new PlaywrightSurface({ browser: cloud.impl });
+    await worker.init(initInfo(0, env));
+    await worker.startAttempt(attempt('a1'));
+    await worker.endAttempt(cleanup());
+    await worker.dispose(cleanup());
+    const lines: string[] = [];
+    await runner.finish(finishInfo((line) => lines.push(line)));
+    expect(cloud.swept).toHaveLength(1);
+    expect(lines).toEqual([]);
+
+    const idle = new PlaywrightSurface({ browser: cloud.impl });
+    await idle.prepare(prepareInfo(0));
+    await idle.finish(finishInfo());
+    expect(cloud.swept).toHaveLength(1);
+  });
+
+  it('sweeps even when a release failed and reports the release failure, and only logs a sweep that failed', async () => {
+    const failing = provider({ failRelease: true, sweep: 'open' });
+    const { runner } = await prepared(failing.impl, 1);
+    await expect(runner.finish(finishInfo())).rejects.toMatchObject({ message: expect.stringContaining('could not release a browser: stop failed') });
+    expect(failing.swept).toHaveLength(1);
+
+    const broken = provider({ scope: 'attempt', sweep: 'fail' });
+    const { runner: sweeper } = await prepared(broken.impl, 1);
+    const lines: string[] = [];
+    await expect(sweeper.finish(finishInfo((line) => lines.push(line)))).resolves.toBeUndefined();
+    expect(lines).toEqual(['toy-cloud: could not release the browsers a worker left open: list failed']);
+  });
+
+  it('sweeps nothing when prepare failed and no worker started', async () => {
+    const cloud = provider({ failSlot: 0, sweep: 'open' });
+    const runner = new PlaywrightSurface({ browser: cloud.impl });
+    await expect(runner.prepare(prepareInfo(1))).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
+    await runner.finish(finishInfo());
+    expect(cloud.swept).toEqual([]);
   });
 });
 

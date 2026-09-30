@@ -15,9 +15,9 @@ import { kernelBrowsers, type KernelBrowserParams, type KernelBrowsers, type Ker
 const KERNEL_API_KEY = 'KERNEL_API_KEY';
 
 /**
- * Kernel terminates a browser idle this long: the backstop for a worker that
- * died before the engine could release its lease. Kernel's own default is
- * shorter than a slow suite's gaps between attempts.
+ * Kernel terminates a browser idle this long: the backstop for a run that
+ * died before the engine could release or sweep its leases. Kernel's own
+ * default is shorter than a slow suite's gaps between attempts.
  */
 const DEFAULT_TIMEOUT_SECONDS = 600;
 
@@ -30,7 +30,8 @@ export interface KernelOptions extends KernelBrowserParams {
   /**
    * `worker` (default): one browser per worker slot, leased in `prepare` and
    * released in `finish`. `attempt`: a fresh browser per test attempt,
-   * reattached after a CDP transport drop; rules out `headers` and `basicAuth`.
+   * reattached after a CDP transport drop; rules out `headers`, `basicAuth`,
+   * and `userAgent`.
    */
   readonly scope?: BrowserProviderScope | undefined;
   /**
@@ -46,12 +47,16 @@ export interface KernelOptions extends KernelBrowserParams {
 
 const REPLAY_FILE = 'replay.mp4';
 
+/** Where each Kernel browser saves downloads on its own disk, for the engine to read back through the browser filesystem API. */
+const DOWNLOADS_DIR = '/tmp/e2e-downloads';
+
 /**
  * Kernel browsers for `web({ browser: kernel() })`: one hosted Chromium per
  * worker slot, or per attempt with `scope: 'attempt'`, created when the
  * engine asks and deleted when it gives the lease back. Every browser is
- * tagged with the run, target, slot, and attempt. `KERNEL_API_KEY` comes
- * from the run's environment.
+ * tagged with the run, target, slot, and attempt, and saves downloads to its
+ * own disk, read back through Kernel's browser filesystem API.
+ * `KERNEL_API_KEY` comes from the run's environment.
  */
 export function kernel(options: KernelOptions = {}): BrowserProvider {
   const { scope, replay = true, ...params } = options;
@@ -118,6 +123,24 @@ export function kernel(options: KernelOptions = {}): BrowserProvider {
     },
     async release(lease: BrowserLease, context: BrowserReleaseContext): Promise<void> {
       await clientFor(context.env).delete(lease.id, context.signal);
+    },
+    async sweep(context: BrowserReleaseContext): Promise<readonly string[]> {
+      const client = clientFor(context.env);
+      const open = await client.listActive({ e2e_run: context.runId, e2e_target: context.targetName }, context.signal);
+      const settled = await Promise.allSettled(open.map(async (id) => ((await client.delete(id, context.signal)) ? id : undefined)));
+      const deleted = settled.flatMap((result) => (result.status === 'fulfilled' && result.value !== undefined ? [result.value] : []));
+      const failed = open.flatMap((id, index) => {
+        const result = settled[index]!;
+        return result.status === 'rejected' ? [`${id} (${result.reason instanceof Error ? result.reason.message : String(result.reason)})`] : [];
+      });
+      if (failed.length > 0) {
+        throw new Error(`deleted ${deleted.length === 0 ? 'none' : deleted.join(', ')}; could not delete ${failed.join(', ')}, so Kernel ends it after timeout_seconds`);
+      }
+      return deleted;
+    },
+    downloads: {
+      dir: DOWNLOADS_DIR,
+      read: async (lease, file, context) => clientFor(context.env).readFile(lease.id, file, context.signal),
     },
     ...(replayParams === undefined ? {} : { record: replays(replayParams) }),
   };

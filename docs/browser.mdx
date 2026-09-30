@@ -171,6 +171,17 @@ export interface BrowserProvider {
   release(lease: BrowserLease, context: BrowserReleaseContext): Promise<void>;
   /** Optional: the service's own recording of the browser, in the worker, for an attempt that records video. */
   record?(lease: BrowserLease, context: ProviderRecordContext): Promise<ProviderRecording>;
+  /** Optional: serves `web.waitForDownload` for a browser on another machine. */
+  readonly downloads?: BrowserProviderDownloads;
+  /** Optional: releases the run's leases a dead worker left open, once the run ends; resolves to their ids. */
+  sweep?(context: BrowserReleaseContext): Promise<readonly string[]>;
+}
+
+export interface BrowserProviderDownloads {
+  /** Absolute directory on the browser's machine the browser saves downloads to. */
+  readonly dir: string;
+  /** The bytes of one finished download, `file` a path under `dir`, read off the leased browser. */
+  read(lease: BrowserLease, file: string, context: BrowserDownloadContext): Promise<Uint8Array>;
 }
 
 export interface BrowserLease {
@@ -202,9 +213,18 @@ threw, within `cleanupTimeout`. When a worker's browser drops, the worker
 leases a replacement itself at the next attempt start and releases it when
 the worker exits; the dead lease stays with the runner, which releases it
 at the end. `acquire` therefore runs in a worker process too, so a provider
-must not depend on state it built in the runner process, and `log` is
-discarded there. Each lease is released exactly once, by the side that
-acquired it.
+must not depend on state it built in the runner process; its `log` still
+reaches the reporter, prefixed with the target and worker slot. Each lease
+is released exactly once, by the side that acquired it.
+
+A worker that dies (a crash, `process.exit`, a kill) cannot release what it
+acquired: an attempt's browser, or a replacement. Implement `sweep` to have
+the runner release those too. It runs once per target when the run ends,
+after the last worker exited and the leases the runner holds were released,
+so every lease it finds with the run's id and the target at the service is
+one a worker left open; it releases them and resolves to their ids, which
+the reporter lists. A sweep that fails is reported as a line and fails
+nothing. Without `sweep`, such a browser lives until the service ends it.
 
 `scope: 'attempt'` leases a fresh browser in every `startAttempt`, retries
 included, and releases it in `endAttempt`, also after a start that failed.
@@ -215,7 +235,10 @@ browser's own first tab, so the remote must contain only that context, and
 the limits of
 [`connect.reconnectEndpoint`](/reference/web#recovering-a-cdp-transport)
 apply: no `headers`, `basicAuth`, or `userAgent` (each is `INVALID_CONFIG`), no
-`app.clearState()`, no session state capture or restore. After a transport
+`app.clearState()` (`UNSUPPORTED_CAPABILITY` naming the scope), and no session
+state capture or restore, so a run whose tests consume a
+[session](/authentication) on the target fails with `COLLECTION_ERROR`
+before its setup test logs in. After a transport
 drop the next operation reattaches through the lease's `reconnectEndpoint`,
 or `cdpEndpoint` when the lease has none, and the engine checks it is the
 same browser.
@@ -299,6 +322,18 @@ sessions are billed while they run, so keep `workers` at what the suite can
 fill; `scope: 'attempt'` trades a session start per test for a browser no
 earlier test has touched.
 
+### Downloads on the provider
+
+A hosted browser saves a download to its own disk, where the runner cannot
+open it. Implement `downloads` and `web.waitForDownload` works as it does
+locally: the engine has the browser save the file under `dir` on its machine
+and hands the finished file's path to `read`, which fetches the bytes through
+the service's file API, in the worker, bounded by the call's timeout. The
+engine saves them as the attempt's `download` artifact. Without `downloads`, a
+download on a browser that runs on another machine fails with `ENGINE_FAILURE`
+naming the provider; one whose browsers run on the runner's machine needs
+nothing. [Kernel](/integrations/kernel#downloads) serves downloads this way.
+
 ### Recording on the provider
 
 A service that records its browsers can record the attempt's video too.
@@ -349,6 +384,24 @@ so a recording never keeps running on a browser later attempts share. A
 provider that cannot record, or a browser the service cannot record (a
 headless one), leaves `record` out, and the engine records the screencast.
 [Kernel](/integrations/kernel#recordings) records this way.
+
+## Icon fonts and generated content
+
+Text a stylesheet adds with `::before` or `::after` is part of a control's
+name, as browsers and screen readers read it: a button whose icon is
+`.next::before { content: "→" }` is `button "→ Next"` in the tree and to
+`getByRole`. Icon fonts are the exception. Font Awesome and its kin draw
+each icon from a private-use character (`\f090`) that means nothing as text,
+so the engine drops those characters from every name: the-internet's
+`<button><i class="fa fa-sign-in"> Login</i></button>` is `button "Login"`,
+and `getByRole('button', { name: 'Login' })` finds it; a glyph between two
+words reads as a space. A control whose only content is such an icon reads
+as its `title` when it has one, but the browser names it by the glyph, so
+`getByRole` by that title finds nothing: give it an `aria-label`, or reach
+it with `web.locator('[title="Sign out"]')`. A `RegExp` name is matched against the
+name as the browser computes it, glyph included, so leave it unanchored
+(`/Login/`) on such a control. Label text never includes generated content,
+as `getByLabel` reads it.
 
 ## Inert content
 
