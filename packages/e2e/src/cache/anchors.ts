@@ -46,8 +46,9 @@ const ANCHOR_FIELDS: readonly DescriptorField[] = ['role', 'name', 'text', 'test
 /**
  * Derives the end anchors of one step: relocatable descriptors present in the
  * passing observation and absent from the starting one, deduplicated, capped.
- * Leaves are the anchors; containers stand in only when no leaf appeared. A
- * container's accessible name is usually the concatenation of its children's,
+ * Stable leaves are the anchors; stable containers stand in when every leaf
+ * that appeared is volatile, and only with nothing stable at all do the
+ * volatile leaves, then containers, stay. A container's accessible name is usually the concatenation of its children's,
  * so it repeats what the leaves already say, and whether a screen's shell
  * groups (a tab bar, a scroll view named after its first tab) are listed at
  * all differs from one capture to the next on a device, so a replay whose

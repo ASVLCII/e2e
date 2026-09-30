@@ -288,7 +288,9 @@ export function describeTarget(
   const name = field(node.name);
   const text = field(node.text);
   const testId = field(node.testId);
-  const elementId = stableElementId(node.attributes?.['id']);
+  // Through `field` like every other descriptor field: an id a secret value
+  // leaked into is redacted, and a redacted id is no id at all.
+  const elementId = stableElementId(field(node.attributes?.['id']));
   const placeholder = field(node.attributes?.['placeholder']);
   const selector = node.selector === undefined ? undefined : bound(node.selector, MAX_TRACE_DESCRIPTOR_CHARS);
   const inputPurpose =

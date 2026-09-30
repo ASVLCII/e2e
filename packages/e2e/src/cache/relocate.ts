@@ -25,7 +25,7 @@ import type { TracePosition, TraceTargetDescriptor } from './trace.ts';
  * change, because an entry recorded under different rules could relocate to a
  * different node.
  */
-export const REPLAY_POLICY_VERSION = 'conservative/6';
+export const REPLAY_POLICY_VERSION = 'conservative/7';
 
 /**
  * The share of the viewport a scrolled node must have covered when it was
