@@ -1956,6 +1956,7 @@ describe('deterministic actions', () => {
     const before = pans();
     await h.engine.perform!((await observed(h, 'Note')).ref, { kind: 'press', key: 'a' }, test());
     expect(pans()).toBe(before + 1);
+    expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e15' });
   });
 
   it('acts at once on a control it just lifted, since the lift already settled the screen', async () => {
