@@ -89,7 +89,7 @@ describe('agentMail() releasing a message two aliases received', () => {
     expect(org.inboxes.get(me.inboxId)!.messages.map((message) => message.subject)).toEqual(['Invite']);
   });
 
-  it('sweeps alias mail older than any attempt lives in the background, once per process, and nothing else', async () => {
+  it('sweeps alias mail older than any attempt lives in the background, not again within the hour, and nothing else', async () => {
     org.inboxes.set('qa@agentmail.to', { clientId: undefined, metadata: undefined, messages: [] });
     org.clock = Date.now() - 7 * 60 * 60 * 1000;
     for (const n of [1, 2, 3]) org.deliver('qa@agentmail.to', { to: [`qa+e2e-00000000${n}0@agentmail.to`], subject: `Old ${n}` });
