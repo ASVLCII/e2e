@@ -146,10 +146,8 @@ describe('output', () => {
       const project = createProject({ 'tests/pass.e2e.ts': PASSING_TEST });
       const fake = createFakeEngine();
       const host = new SessionHost({
-        loadConfig: async () => {
-          const configPath = path.join(project.dir, 'e2e.config.ts');
-          return { ...resolveConfig(engineConfig(fake.engine) as never, { projectRoot: project.dir, env: {}, configPath }), configPath };
-        },
+        locateConfig: () => path.join(project.dir, 'e2e.config.ts'),
+        loadConfig: async (configPath) => ({ ...resolveConfig(engineConfig(fake.engine) as never, { projectRoot: project.dir, env: {}, configPath }), configPath }),
         env: {},
         headed: false,
         log: () => undefined,
