@@ -216,6 +216,8 @@ const CHROME_LIFT_MS = 400;
 /** Node actions that touch the control's centre, which chrome drawn over it would take instead. */
 const TOUCH_ACTIONS: ReadonlySet<LocatorAction['kind']> = new Set([
   'tap',
+  // A character press taps an unfocused field to focus it first.
+  'press',
   'focus',
   'doubleTap',
   'longPress',
@@ -236,6 +238,12 @@ function liftClearOf(rect: Rect, covering: CoveringChrome): { x: number; y: numb
   const y = Math.min(band.y - CHROME_CLEARANCE, containerRect.y + containerRect.height / 2 + distance / 2);
   const dy = Math.max(containerRect.y + CHROME_CLEARANCE, y - distance) - y;
   return { x: containerRect.x + containerRect.width / 2, y, dx: 0, dy, durationMs: CHROME_LIFT_MS };
+}
+
+/** A binding with its node's rect moved down by `dy`: where a scroll by `dy` carries the node. */
+function shiftedBy(entry: NodeBinding, dy: number): NodeBinding {
+  const rect = entry.node.rect;
+  return rect === undefined ? entry : { ...entry, node: { ...entry.node, rect: { ...rect, y: rect.y + dy } } };
 }
 
 const MAX_LOCATED_REFS = 2048;
@@ -1068,10 +1076,11 @@ export class AgentDeviceSurface {
    * The control once it is out from under a sticky footer its list scrolls
    * under, which takes a touch aimed at the control's centre. The list is
    * dragged up just far enough, and the control found again once the drag
-   * settled. Only a control the snapshot lists once is lifted: finding one of
-   * several alike after a scroll would pick whichever moved into its old
-   * place. The check reads the snapshot the control was just resolved from,
-   * so an uncovered control costs nothing.
+   * settled, near where the drag carried it. Only a control the snapshot
+   * lists once is lifted, since a scroll could swap it for one alike, and
+   * lifting stops once a lift leaves it in place: the list is at its end. The
+   * check reads the snapshot the control was just resolved from, so an
+   * uncovered control costs nothing.
    */
   private async clearOfChrome(entry: NodeBinding, operation: OperationContext): Promise<NodeBinding> {
     let current = entry;
@@ -1083,7 +1092,12 @@ export class AgentDeviceSurface {
       const pan = liftClearOf(found.node.rect, covering);
       await this.command('pan', (client) => client.interactions.pan(pan), operation.signal);
       await sleep(this.transitionMs, operation.signal);
-      current = await this.relocated(current, operation);
+      // Found again where the lift carried it: a row a virtualized list mounts
+      // in its old place reads the same and would win on the old position.
+      const lifted = await this.relocated(shiftedBy(this.bind(found, index), pan.dy), operation);
+      // A list at its end does not move, and neither will another lift.
+      if (sameRect(lifted.node.rect, found.node.rect)) return lifted;
+      current = lifted;
     }
     return current;
   }
@@ -1147,10 +1161,12 @@ export class AgentDeviceSurface {
     if ((action.kind === 'check' || action.kind === 'uncheck') && entry.node.states?.checked === (action.kind === 'check')) {
       return;
     }
-    const before = this.latestIndex;
+    let before = this.latestIndex;
     const run = async (): Promise<unknown> => {
       const arrived = deterministic ? await this.settled(entry, operation) : entry;
       const target = TOUCH_ACTIONS.has(action.kind) ? await this.clearOfChrome(arrived, operation) : arrived;
+      // A lift already settled the screen: the control is not arriving with it.
+      if (target !== arrived) before = this.latestIndex;
       switch (action.kind) {
         case 'tap':
           return client.interactions.press({ ...this.actionTarget(target, true), ...settle });

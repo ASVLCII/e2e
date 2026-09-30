@@ -1920,6 +1920,65 @@ describe('deterministic actions', () => {
     expect(h.fake.methods().filter((method) => method === 'interactions.pan')).toHaveLength(1);
   });
 
+  it('lifts a control once when its list is at its end, finds it where the lift carried it, and lifts a field before a character press', async () => {
+    const h = harness({ transition: 0 });
+    await openAttempt(h);
+    const list = (rows: readonly Record<string, unknown>[]) => ({
+      nodes: [
+        { ref: '@e1', index: 0, depth: 0, type: 'application', label: 'Shop', rect: { x: 0, y: 0, width: 402, height: 874 } },
+        { ref: '@e2', index: 1, parentIndex: 0, depth: 1, type: 'scroll-view', rect: { x: 0, y: 116, width: 402, height: 758 } },
+        ...rows.map((row, offset) => ({ index: 2 + offset, parentIndex: 1, depth: 2, ...row })),
+        { ref: '@e9', index: 9, parentIndex: 0, depth: 1, type: 'other', label: 'Checkout', rect: { x: 16, y: 776, width: 370, height: 70 } },
+      ],
+    });
+    const add = (ref: string, y: number) => ({ ref, type: 'button', label: 'Add', rect: { x: 16, y, width: 370, height: 44 } });
+    const pans = () => h.fake.methods().filter((method) => method === 'interactions.pan').length;
+
+    // At its end the list does not move: one lift, then the tap.
+    h.fake.respond('capture.snapshot', () => list([add('@e3', 760)]));
+    await h.engine.perform!((await observed(h, 'Add')).ref, { kind: 'tap' }, test());
+    expect(pans()).toBe(1);
+
+    // The lift moves the row up 36 and the list mounts a row alike in its old place.
+    let lifted = false;
+    h.fake.respond('capture.snapshot', () => list(lifted ? [add('@e13', 724), add('@e14', 770)] : [add('@e3', 760)]));
+    h.fake.respond('interactions.pan', () => {
+      lifted = true;
+      return {};
+    });
+    await h.engine.perform!((await observed(h, 'Add')).ref, { kind: 'tap' }, test());
+    expect(h.fake.lastArgs('interactions.press')).toEqual({ ref: '@e13' });
+
+    // An unfocused field is tapped before a character goes into it.
+    lifted = false;
+    const field = (y: number) => ({ ref: lifted ? '@e15' : '@e5', type: 'text-field', label: 'Note', rect: { x: 16, y, width: 370, height: 44 } });
+    h.fake.respond('capture.snapshot', () => list([field(lifted ? 724 : 760)]));
+    const before = pans();
+    await h.engine.perform!((await observed(h, 'Note')).ref, { kind: 'press', key: 'a' }, test());
+    expect(pans()).toBe(before + 1);
+  });
+
+  it('acts at once on a control it just lifted, since the lift already settled the screen', async () => {
+    const h = harness({ transition: 120 });
+    await openAttempt(h);
+    await sleep(150);
+    let lifted = false;
+    h.fake.respond('capture.snapshot', () => ({
+      nodes: [
+        { ref: '@e1', index: 0, depth: 0, type: 'application', label: 'Sticky', rect: { x: 0, y: 0, width: 402, height: 874 } },
+        { ref: '@e2', index: 1, parentIndex: 0, depth: 1, type: 'scroll-view', rect: { x: 0, y: 116, width: 402, height: 758 } },
+        { ref: '@e3', index: 2, parentIndex: 1, depth: 2, type: 'other', label: 'Accept terms', rect: { x: 16, y: lifted ? 714 : 750, width: 370, height: 44 } },
+        { ref: '@e4', index: 3, parentIndex: 0, depth: 1, type: 'other', label: 'Continue', rect: { x: 16, y: 776, width: 370, height: 70 } },
+      ],
+    }));
+    h.fake.respond('interactions.pan', () => {
+      lifted = true;
+      return {};
+    });
+    await h.engine.perform!((await observed(h, 'Accept terms')).ref, { kind: 'tap' }, test());
+    await tapsAtOnce(h, await observed(h, 'Accept terms'), { ref: '@e3' });
+  });
+
   it('leaves one of several alike controls under a footer where it is, since a scroll could swap it for another', async () => {
     const h = harness({ transition: 0 });
     await openAttempt(h);
