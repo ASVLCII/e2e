@@ -150,8 +150,7 @@ export interface E2EConfig {
   secrets?: Readonly<Record<string, SecretConfig>>;
   /**
    * Where the `email` fixture's and the agent's email addresses come from:
-   * `maildev()` for a local app, `agentMail()` from `@e2e-dev/agentmail` for
-   * a remote site, or any `MailProvider`.
+   * `maildev()` for a local app, or any `MailProvider`.
    */
   email?: MailProvider;
 }
@@ -907,7 +906,7 @@ See [Secrets that are not passwords](/authentication#secrets-that-are-not-passwo
 A `MailProvider` gives tests real email addresses through the `email`
 fixture, and gives the built-in agent (and `e2e mcp` sessions)
 `new_email_address` and `wait_for_email`. `maildev()` from `e2e` reads a
-local MailDev; `agentMail()` from `@e2e-dev/agentmail` gives real inboxes.
+local MailDev; any other service plugs in as a [provider](/email#other-email-services).
 
 A value with no `name`, or without `acquire`, `release`, `list`, and `read`
 functions, is `INVALID_CONFIG`. The two tool names are reserved for project

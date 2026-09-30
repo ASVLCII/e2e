@@ -84,10 +84,10 @@ describe('email.inbox()', () => {
   });
 
   it('is EMAIL_PROVIDER_FAILED when the provider cannot create an address', async () => {
-    const failing: MailProvider = { ...provider, acquire: async () => Promise.reject(new Error('AGENTMAIL_API_KEY is not set')) };
+    const failing: MailProvider = { ...provider, acquire: async () => Promise.reject(new Error('MAIL_API_KEY is not set')) };
     await expect(open({ provider: failing }).email.inbox()).rejects.toMatchObject({
       code: 'EMAIL_PROVIDER_FAILED',
-      message: 'email provider "memory" failed creating an address: AGENTMAIL_API_KEY is not set',
+      message: 'email provider "memory" failed creating an address: MAIL_API_KEY is not set',
     });
   });
 
@@ -171,10 +171,10 @@ describe('waitForMessage', () => {
     provider.deliver(inbox.address, { subject: 'Hi' });
     await expect(inbox.waitForMessage({ timeout: 10_000 })).resolves.toMatchObject({ subject: 'Hi' });
 
-    const rejected: MailProvider = { ...provider, list: async () => Promise.reject(Object.assign(new Error('AgentMail rejected AGENTMAIL_API_KEY'), { retryable: false })) };
+    const rejected: MailProvider = { ...provider, list: async () => Promise.reject(Object.assign(new Error('the service rejected MAIL_API_KEY'), { retryable: false })) };
     const refused = await open({ provider: rejected }).email.inbox();
     const started = Date.now();
-    await expect(refused.waitForMessage({ timeout: 10_000 })).rejects.toMatchObject({ code: 'EMAIL_PROVIDER_FAILED', message: expect.stringContaining('rejected AGENTMAIL_API_KEY') });
+    await expect(refused.waitForMessage({ timeout: 10_000 })).rejects.toMatchObject({ code: 'EMAIL_PROVIDER_FAILED', message: expect.stringContaining('rejected MAIL_API_KEY') });
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 

@@ -1359,8 +1359,7 @@ export interface E2EConfig {
   secrets?: Readonly<Record<string, SecretConfig>>;
   /**
    * Where the `email` fixture's and the agent's email addresses come from:
-   * `maildev()` for a local app, `agentMail()` from `@e2e-dev/agentmail` for
-   * a remote site, or any `MailProvider`. With it
+   * `maildev()` for a local app, or any `MailProvider`. With it
    * set, the built-in agent is offered `new_email_address` and
    * `wait_for_email`.
    */

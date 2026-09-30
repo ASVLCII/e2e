@@ -8,17 +8,13 @@ them to test sign-up verification, magic links, password resets, invitations,
 and anything else your app sends by email. The agent gets tools for the same
 addresses.
 
-## Pick a provider
+## Set up MailDev
 
-Where the addresses come from depends on where the app under test sends its
-mail:
-
-| The app | Use | Why |
-| --- | --- | --- |
-| Runs locally or in CI, and you set its SMTP server | [`maildev()`](#maildev-for-a-local-app) | Catches every email the app sends. No account, no key, and delivery takes milliseconds. |
-| Is a deployed site that sends through its real mail service | [`agentMail()`](#agentmail-for-a-remote-site) | Real inboxes that receive mail from anywhere on the internet. |
-
-### MailDev, for a local app
+For an app that runs locally or in CI, and whose SMTP server you set,
+`maildev()` catches every email the app sends. No account,
+no key, and delivery takes milliseconds. A deployed site that sends through
+its real mail service needs inboxes that receive mail from the internet: plug
+in a [provider](#other-email-services) for one.
 
 [MailDev](https://github.com/maildev/maildev) is an SMTP server that keeps
 every email sent to it, whatever the address, and serves it over a REST API.
@@ -80,32 +76,6 @@ switched on for tests. Common settings:
 | Rails | `config.action_mailer.smtp_settings = { address: '127.0.0.1', port: 1025 }` |
 | Django | `EMAIL_HOST=127.0.0.1`, `EMAIL_PORT=1025` |
 | Laravel | `MAIL_MAILER=smtp`, `MAIL_HOST=127.0.0.1`, `MAIL_PORT=1025` |
-
-### AgentMail, for a remote site
-
-`@e2e-dev/agentmail` gives you real addresses from
-[AgentMail](https://agentmail.to):
-
-```bash
-npm install --save-dev @e2e-dev/agentmail
-```
-
-```ts title="e2e.config.ts"
-import type { E2EConfig } from 'e2e';
-import { web } from '@e2e-dev/web';
-import { agentMail } from '@e2e-dev/agentmail';
-
-export default {
-  targets: [{ engine: web({ url: 'https://staging.example.com' }) }],
-  email: agentMail(),
-} satisfies E2EConfig;
-```
-
-Create an API key in the [AgentMail console](https://console.agentmail.to) and
-set `AGENTMAIL_API_KEY` in the environment `e2e run` starts in, for example as
-a CI secret. Mail takes a few seconds to arrive, and the site must accept a
-`+` in an address. See
-[AgentMail options](#agentmail-options).
 
 ## Read an email in a test
 
@@ -224,36 +194,12 @@ came from an email tool, records a gap as well
 signs up with the address an earlier step got is never replayed with the old
 one.
 
-## AgentMail options
-
-```ts
-agentMail(); // aliases of a shared inbox (default)
-agentMail({ inboxId: 'qa@agentmail.to' }); // aliases of an inbox you already have
-agentMail({ isolation: 'inbox', domain: 'mail.acme.dev' }); // a new inbox per address
-```
-
-| Option | Meaning |
-| --- | --- |
-| `isolation: 'alias'` | The default. Every address is a plus-address of one shared inbox, like `<inbox>+e2e-3f9a2c1b7d@agentmail.to`. No inbox is created per test, so any number of workers fit the free plan's three inboxes. An address reads only mail whose To or Cc names it exactly, and its mail is deleted when its attempt ends. The app under test must accept a `+` in an address. |
-| `inboxId` | The inbox aliases come from. By default, an `e2e` inbox is created in your organization the first time it is needed, and every run after that reuses it. |
-| `isolation: 'inbox'` | A new inbox for every address, deleted when its attempt ends. Use it when the app rejects `+` addresses. Every live inbox counts against your plan's inbox limit. One left behind by a run that was killed is deleted by a later run six hours on. |
-| `domain`, `displayName` | For `isolation: 'inbox'`: a verified custom domain (default `agentmail.to`) and a sender name. |
-
-Things to know about AgentMail:
-
-- In alias mode, mail sent to an address in Bcc only is not seen: nothing in the message says
-  which alias it went to.
-- Mail from development SMTP servers often fails SPF or DMARC checks, and spam
-  filters flag it. The provider returns it anyway, because in a test that is
-  usually the email you are waiting for.
-- Anyone with the API key can read every alias of the shared inbox. Use a key
-  and an organization meant for testing.
-
 ## Other email services
 
-`email` takes any `MailProvider`; `maildev()` and `agentMail()` are two. A
-provider hands out addresses and lists what arrived. The runner does everything else: filtering, waiting, retries,
-what the model is shown, the tools, and giving addresses back.
+`email` takes any `MailProvider`; `maildev()` is one. A provider hands out
+addresses, lists and reads what arrived, and gives addresses back. The runner
+does everything else: filtering, waiting, retries, what the model is shown,
+the tools, and when addresses go back.
 
 ```ts
 export interface MailProvider<Lease extends MailLease = MailLease> {

@@ -324,25 +324,6 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  packages/agentmail:
-    dependencies:
-      agentmail:
-        specifier: 0.5.31
-        version: 0.5.31
-    devDependencies:
-      '@types/node':
-        specifier: 26.6.2
-        version: 26.6.2
-      e2e:
-        specifier: workspace:*
-        version: link:../e2e
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: 5.0.1
-        version: 5.0.1(@types/node@26.6.2)(jsdom@26.1.0(supports-color@8.1.1))(vite@8.1.5(@types/node@26.6.2)(esbuild@0.28.2)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.14)(yaml@2.9.0))
-
   packages/e2e:
     dependencies:
       '@ai-sdk/provider':
@@ -3124,15 +3105,6 @@ packages:
       ai: ^6.0.0 || ^7.0.0
     peerDependenciesMeta:
       ai:
-        optional: true
-
-  agentmail@0.5.31:
-    resolution: {integrity: sha512-wBH5xwO2bIS8mhV+S/4ciwIhH0XFnrvfAubircTfWInCGSo/DP/i6/IZ+cYA4aZTStMEDecGxwhIkIAgzwKjpA==}
-    engines: {node: '>=18.0.0'}
-    peerDependencies:
-      '@x402/fetch': ^2
-    peerDependenciesMeta:
-      '@x402/fetch':
         optional: true
 
   aggregate-error@4.0.1:
@@ -10897,13 +10869,6 @@ snapshots:
   agent-device@0.21.16(ai@7.0.107(zod@4.6.1)):
     optionalDependencies:
       ai: 7.0.107(zod@4.6.1)
-
-  agentmail@0.5.31:
-    dependencies:
-      ws: 8.21.3
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
 
   aggregate-error@4.0.1:
     dependencies:

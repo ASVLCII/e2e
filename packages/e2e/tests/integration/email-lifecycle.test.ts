@@ -37,7 +37,7 @@ interface StressOptions {
   /** Delay before release resolves. */
   releaseDelayMs?: number;
   releaseThrows?: boolean;
-  /** Reject a call whose signal is aborted, as a fetch-based provider (AgentMail) does. */
+  /** Reject a call whose signal is aborted, as a fetch-based provider does. */
   honorSignal?: boolean;
 }
 
@@ -353,7 +353,7 @@ test('passes then release hangs', async ({ email }) => {
 
 describe('interrupt', () => {
   it('releases leased addresses when the run is interrupted', async () => {
-    // Honors its signal like AgentMail's fetch-based client does.
+    // Honors its signal like a fetch-based client does.
     const provider = stressProvider({ honorSignal: true });
     const controller = new AbortController();
     const interrupting = (async () => {

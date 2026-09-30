@@ -7,7 +7,7 @@ import type { MailProvider } from './types.ts';
 export function asMailProvider(value: unknown): MailProvider {
   const candidate = (typeof value === 'object' && value !== null ? value : {}) as Partial<Record<keyof MailProvider, unknown>>;
   if (typeof candidate.name !== 'string' || candidate.name.trim() === '') {
-    throw new ConfigurationError('INVALID_CONFIG', 'email must be a mail provider with a non-empty name, such as maildev() from e2e or agentMail() from @e2e-dev/agentmail');
+    throw new ConfigurationError('INVALID_CONFIG', 'email must be a mail provider with a non-empty name, such as maildev() from e2e');
   }
   for (const member of ['acquire', 'release', 'list', 'read'] as const) {
     if (typeof candidate[member] !== 'function') {
