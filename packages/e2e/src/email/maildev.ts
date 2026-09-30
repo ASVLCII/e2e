@@ -79,20 +79,24 @@ export function maildev(options: MaildevOptions = {}): MailProvider<MailLease> {
     return all.filter((email) => recipients(email).includes(address));
   };
 
+  /** MailDev's health endpoint, under a budget of its own; a MailDev that never answers is named as not running. */
+  const checkHealth = async (): Promise<void> => {
+    const health = AbortSignal.timeout(HEALTH_CHECK_MS);
+    try {
+      await call('healthz', health);
+    } catch (cause) {
+      reachable = undefined;
+      if (!health.aborted) throw cause;
+      throw new Error(`MailDev is not answering at ${url} (no answer to GET /api/healthz within ${HEALTH_CHECK_MS}ms); start it before the run, e.g. npx maildev, or pass maildev({ url })`, { cause });
+    }
+  };
+
   return {
     name: 'maildev',
     async acquire({ signal }) {
       // One look before the first address, so a MailDev nobody started fails here, naming the fix, rather than as a wait that times out.
       // Shared by every caller, so it runs under a budget of its own rather than the first caller's signal.
-      const health = AbortSignal.timeout(HEALTH_CHECK_MS);
-      reachable ??= call('healthz', health).then(
-        () => undefined,
-        (cause: unknown) => {
-          reachable = undefined;
-          if (!health.aborted) throw cause;
-          throw new Error(`MailDev is not answering at ${url} (no answer to GET /api/healthz within ${HEALTH_CHECK_MS}ms); start it before the run, e.g. npx maildev, or pass maildev({ url })`, { cause });
-        },
-      );
+      reachable ??= checkHealth();
       await withAbort(reachable, signal, () => signal.reason as Error);
       const address = `e2e-${randomBytes(6).toString('hex')}@${domain}`.toLowerCase();
       live.add(address);
