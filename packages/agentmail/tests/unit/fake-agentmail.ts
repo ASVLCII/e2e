@@ -1,9 +1,10 @@
 /**
  * An in-memory AgentMail organization behind the SDK's surface: `sdk` is what
  * `vi.mock('agentmail', ...)` hands the provider, `org` what the test reads.
- * Inboxes are created by `clientId`; received mail is listed oldest first
- * from `after`, the way the API serves it, two per page; `failNext` makes the next call
- * fail with a status and body, as `AgentMailError` carries them.
+ * Inboxes are created by `clientId`; inboxes and received mail (after
+ * `after` or before `before`, oldest first) are listed two per page, the way
+ * the API pages them; `failNext` makes the next call, or the next one of a
+ * kind, fail with a status and body, as `AgentMailError` carries them.
  */
 
 interface FakeMessage {
@@ -42,8 +43,10 @@ export const org = {
   created: [] as { clientId?: string; domain?: string; displayName?: string; metadata?: Record<string, unknown> }[],
   deleted: [] as string[],
   deletedMessages: [] as string[],
-  listedAfter: [] as (Date | undefined)[],
-  failures: [] as AgentMailError[],
+  listedAfter: [] as Date[],
+  failures: [] as { readonly call: string | undefined; readonly error: AgentMailError }[],
+  /** How many inbox listings started (first pages). */
+  inboxListings: 0,
   counter: 0,
   clock: 1_790_000_000_000,
   reset(): void {
@@ -54,12 +57,13 @@ export const org = {
     this.deletedMessages = [];
     this.listedAfter = [];
     this.failures = [];
+    this.inboxListings = 0;
     this.counter = 0;
     this.clock = Date.now();
   },
-  /** The next SDK call fails with this status and body. */
-  failNext(statusCode: number, body: unknown = {}): void {
-    this.failures.push(new AgentMailError(statusCode, body));
+  /** The next SDK call, or the next one to `call` (`inboxes.delete`), fails with this status and body. */
+  failNext(statusCode: number, body: unknown = {}, call?: string): void {
+    this.failures.push({ call, error: new AgentMailError(statusCode, body) });
   },
   /** Delivers an email into `inbox` with these headers, stamped now. */
   deliver(inboxId: string, message: { to: string[]; cc?: string[]; from?: string; subject?: string; text?: string; html?: string }): FakeMessage {
@@ -85,9 +89,11 @@ export const org = {
   },
 };
 
-function failing(): void {
-  const failure = org.failures.shift();
-  if (failure !== undefined) throw failure;
+function failing(call: string): void {
+  const index = org.failures.findIndex((failure) => failure.call === undefined || failure.call === call);
+  if (index === -1) return;
+  const [failure] = org.failures.splice(index, 1);
+  throw failure!.error;
 }
 
 function inboxOf(inboxId: string): FakeInbox {
@@ -98,7 +104,7 @@ function inboxOf(inboxId: string): FakeInbox {
 
 type Options = object | undefined;
 
-/** Messages per listing page, small so a test's few emails already span pages. */
+/** Messages and inboxes per listing page, small so a test's few already span pages. */
 const PAGE_SIZE = 2;
 
 class AgentMailClient {
@@ -108,7 +114,7 @@ class AgentMailClient {
 
   inboxes = {
     create: async (request: { clientId?: string; domain?: string; displayName?: string; metadata?: Record<string, unknown> } = {}, _options?: Options) => {
-      failing();
+      failing('inboxes.create');
       org.created.push(request);
       for (const [inboxId, inbox] of org.inboxes) {
         if (request.clientId !== undefined && inbox.clientId === request.clientId) return { inboxId, email: inboxId };
@@ -119,21 +125,28 @@ class AgentMailClient {
       return { inboxId, email: inboxId };
     },
     delete: async (inboxId: string, _options?: Options) => {
-      failing();
+      failing('inboxes.delete');
       inboxOf(inboxId);
       org.inboxes.delete(inboxId);
       org.deleted.push(inboxId);
     },
-    list: async (_request: unknown, _options?: Options) => {
-      failing();
-      return { count: org.inboxes.size, inboxes: [...org.inboxes].map(([inboxId, inbox]) => ({ inboxId, email: inboxId, metadata: inbox.metadata })) };
+    list: async (request: { pageToken?: string }, _options?: Options) => {
+      failing('inboxes.list');
+      if (request.pageToken === undefined) org.inboxListings += 1;
+      const all = [...org.inboxes].map(([inboxId, inbox]) => ({ inboxId, email: inboxId, metadata: inbox.metadata }));
+      const offset = Number(request.pageToken ?? 0);
+      const page = all.slice(offset, offset + PAGE_SIZE);
+      return { count: page.length, inboxes: page, ...(offset + PAGE_SIZE < all.length ? { nextPageToken: String(offset + PAGE_SIZE) } : {}) };
     },
     messages: {
-      list: async (inboxId: string, request: { labels?: string[]; after?: Date; ascending?: boolean; pageToken?: string }, _options?: Options) => {
-        failing();
-        org.listedAfter.push(request.after);
+      list: async (inboxId: string, request: { labels?: string[]; after?: Date; before?: Date; ascending?: boolean; pageToken?: string }, _options?: Options) => {
+        failing('messages.list');
+        if (request.after !== undefined) org.listedAfter.push(request.after);
         const messages = inboxOf(inboxId).messages.filter(
-          (message) => (request.labels ?? []).every((label) => message.labels.includes(label)) && (request.after === undefined || message.createdAt > request.after),
+          (message) =>
+            (request.labels ?? []).every((label) => message.labels.includes(label)) &&
+            (request.after === undefined || message.createdAt > request.after) &&
+            (request.before === undefined || message.createdAt < request.before),
         );
         const ordered = request.ascending === true ? messages : messages.toReversed();
         const offset = Number(request.pageToken ?? 0);
@@ -145,13 +158,13 @@ class AgentMailClient {
         };
       },
       get: async (inboxId: string, messageId: string, _options?: Options) => {
-        failing();
+        failing('messages.get');
         const message = inboxOf(inboxId).messages.find((candidate) => candidate.messageId === messageId);
         if (message === undefined) throw new AgentMailError(404, { message: 'Message not found' });
         return message;
       },
       delete: async (inboxId: string, messageId: string, _options?: Options) => {
-        failing();
+        failing('messages.delete');
         const inbox = inboxOf(inboxId);
         const index = inbox.messages.findIndex((candidate) => candidate.messageId === messageId);
         if (index === -1) throw new AgentMailError(404, { message: 'Message not found' });

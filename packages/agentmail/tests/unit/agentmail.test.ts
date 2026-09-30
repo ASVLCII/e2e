@@ -17,10 +17,13 @@ const context = { signal: new AbortController().signal, runId: 'run-1' };
 beforeEach(() => {
   org.reset();
   vi.stubEnv('AGENTMAIL_API_KEY', 'am_test_key');
+  // A call that got past the mock would reach the real API with the stub key.
+  vi.stubGlobal('fetch', () => Promise.reject(new Error('the unit tests never reach the network')));
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe('agentMail() aliases', () => {
@@ -74,15 +77,42 @@ describe('agentMail() aliases', () => {
 });
 
 describe('agentMail() releasing a message two aliases received', () => {
-  it('keeps it until the last of them is released', async () => {
-    const provider = agentMail();
-    const me = await provider.acquire(context);
-    const teammate = await provider.acquire(context);
+  it('keeps it for the other alias, whichever worker holds it, until the sweep of mail past its time', async () => {
+    const worker1 = agentMail();
+    const worker2 = agentMail();
+    const me = await worker1.acquire(context);
+    const teammate = await worker2.acquire(context);
     org.deliver(me.inboxId, { to: [teammate.address], cc: [me.address], subject: 'Invite' });
-    await provider.release(me, context);
+    await worker1.release(me, context);
+    expect((await worker2.list(teammate, context)).map((summary) => summary.subject)).toEqual(['Invite']);
+    await worker2.release(teammate, context);
     expect(org.inboxes.get(me.inboxId)!.messages.map((message) => message.subject)).toEqual(['Invite']);
-    await provider.release(teammate, context);
-    expect(org.inboxes.get(me.inboxId)!.messages).toEqual([]);
+  });
+
+  it('sweeps alias mail older than any attempt lives in the background, once per process, and nothing else', async () => {
+    org.inboxes.set('qa@agentmail.to', { clientId: undefined, metadata: undefined, messages: [] });
+    org.clock = Date.now() - 7 * 60 * 60 * 1000;
+    for (const n of [1, 2, 3]) org.deliver('qa@agentmail.to', { to: [`qa+e2e-00000000${n}0@agentmail.to`], subject: `Old ${n}` });
+    org.deliver('qa@agentmail.to', { to: ['qa@agentmail.to'], subject: 'Old, to the inbox itself' });
+    org.clock = Date.now();
+    org.deliver('qa@agentmail.to', { to: ['qa+e2e-0000000040@agentmail.to'], subject: 'Recent' });
+    const provider = agentMail({ inboxId: 'qa@agentmail.to' });
+    await provider.acquire(context);
+    await vi.waitFor(() => expect(org.inboxes.get('qa@agentmail.to')!.messages.map((message) => message.subject)).toEqual(['Old, to the inbox itself', 'Recent']));
+    const deleted = org.deletedMessages.length;
+    await provider.acquire(context);
+    expect(org.deletedMessages).toHaveLength(deleted);
+  });
+});
+
+describe('agentMail() reading', () => {
+  it('refuses, as not retryable, a message id its alias was not sent', async () => {
+    const provider = agentMail();
+    const mine = await provider.acquire(context);
+    const theirs = await provider.acquire(context);
+    const delivered = org.deliver(mine.inboxId, { to: [theirs.address], subject: 'Theirs' });
+    await expect(provider.read(mine, delivered.messageId, context)).rejects.toMatchObject({ retryable: false, message: `message ${delivered.messageId} was not sent to ${mine.address}` });
+    await expect(provider.read(theirs, delivered.messageId, context)).resolves.toMatchObject({ subject: 'Theirs' });
   });
 });
 
@@ -114,6 +144,20 @@ describe('agentMail({ isolation: "inbox" })', () => {
     expect(org.deleted).toEqual([]);
     await provider.acquire(context);
     expect(org.deleted).toEqual(['stale@agentmail.to']);
+  });
+
+  it('makes concurrent acquires wait on one sweep, and sweeps again when a deletion failed', async () => {
+    org.inboxes.set('stale@agentmail.to', { clientId: 'e2e-old', metadata: { e2e: true, e2e_expires_at: new Date(Date.now() - 1000).toISOString() }, messages: [] });
+    const provider = agentMail({ isolation: 'inbox' });
+    org.failNext(503, { message: 'Unavailable' }, 'inboxes.delete');
+    await Promise.all([provider.acquire(context), provider.acquire(context)]);
+    expect(org.inboxListings).toBe(1);
+    expect(org.deleted).toEqual([]);
+    await provider.acquire(context);
+    expect(org.inboxListings).toBe(2);
+    expect(org.deleted).toEqual(['stale@agentmail.to']);
+    await provider.acquire(context);
+    expect(org.inboxListings).toBe(2);
   });
 
   it('sweeps inboxes of its own a killed run left past their time, once per process', async () => {

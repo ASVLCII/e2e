@@ -10,8 +10,8 @@ export interface AgentMailApi {
   deleteInbox(inboxId: string, signal: AbortSignal): Promise<void>;
   /** The organization's inboxes whose metadata marks them as e2e's, with when each one may be swept. */
   e2eInboxes(signal: AbortSignal): Promise<{ readonly inboxId: string; readonly expiresAt: string }[]>;
-  /** Every message the inbox received since `after`, oldest first. */
-  received(inboxId: string, after: Date, signal: AbortSignal): Promise<MailSummary[]>;
+  /** Every message the inbox received after `after`, or before `before`, oldest first. */
+  received(inboxId: string, window: { readonly after: Date } | { readonly before: Date }, signal: AbortSignal): Promise<MailSummary[]>;
   message(inboxId: string, messageId: string, signal: AbortSignal): Promise<MailMessage>;
   /** Deletes a message; one AgentMail no longer knows counts as deleted. */
   deleteMessage(inboxId: string, messageId: string, signal: AbortSignal): Promise<void>;
@@ -48,11 +48,14 @@ export class AgentMailRejected extends Error {
   readonly retryable = false;
 }
 
+/** The SDK module, imported once per process by the first call of any client. */
+let sdkModule: Promise<typeof import('agentmail')> | undefined;
+
 /** AgentMail for one API key, through the SDK. */
 export function agentMailApi(apiKey: string): AgentMailApi {
   let sdk: Promise<{ client: InstanceType<typeof import('agentmail').AgentMailClient>; AgentMailError: typeof import('agentmail').AgentMailError }> | undefined;
-  /** The SDK and its client, loaded by the first call that needs them. */
-  const load = () => (sdk ??= import('agentmail').then((module) => ({ client: new module.AgentMailClient({ apiKey }), AgentMailError: module.AgentMailError })));
+  /** The SDK and this key's client, loaded by the first call that needs them. */
+  const load = () => (sdk ??= (sdkModule ??= import('agentmail')).then((module) => ({ client: new module.AgentMailClient({ apiKey }), AgentMailError: module.AgentMailError })));
   /** Runs one SDK call, its failure worded for a test log: the API's own message and fix, not its raw JSON. */
   const call = async <T>(run: (client: InstanceType<typeof import('agentmail').AgentMailClient>) => Promise<T>, notFound?: () => T): Promise<T> => {
     const { client, AgentMailError } = await load();
@@ -88,12 +91,12 @@ export function agentMailApi(apiKey: string): AgentMailApi {
         } while (pageToken !== undefined);
         return found;
       }),
-    received: (inboxId, after, signal) =>
+    received: (inboxId, window, signal) =>
       call(async (client) => {
         const summaries: MailSummary[] = [];
         let pageToken: string | undefined;
         do {
-          const page = await client.inboxes.messages.list(inboxId, { ...RECEIVED, after, ...(pageToken === undefined ? {} : { pageToken }) }, { ...READ, abortSignal: signal });
+          const page = await client.inboxes.messages.list(inboxId, { ...RECEIVED, ...window, ...(pageToken === undefined ? {} : { pageToken }) }, { ...READ, abortSignal: signal });
           summaries.push(...page.messages.map(summary));
           pageToken = page.nextPageToken;
         } while (pageToken !== undefined);

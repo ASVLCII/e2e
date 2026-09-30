@@ -244,7 +244,7 @@ agentMail({ isolation: 'inbox', domain: 'mail.acme.dev' }); // a new inbox per a
 
 | Option | Meaning |
 | --- | --- |
-| `isolation: 'alias'` | The default. Every address is a plus-address of one shared inbox, like `<inbox>+e2e-3f9a2c1b7d@agentmail.to`. No inbox is created per test, so any number of workers fit the free plan's three inboxes. An address reads only mail whose To or Cc names it exactly, and its mail is deleted when its attempt ends. The app under test must accept a `+` in an address. |
+| `isolation: 'alias'` | The default. Every address is a plus-address of one shared inbox, like `<inbox>+e2e-3f9a2c1b7d@agentmail.to`. No inbox is created per test, so any number of workers fit the free plan's three inboxes. An address reads only mail whose To or Cc names it exactly, and its mail is deleted when its attempt ends; mail sent to several aliases at once stays for the others, and a later run deletes alias mail older than six hours. The app under test must accept a `+` in an address. |
 | `inboxId` | The inbox aliases come from. By default, an `e2e` inbox is created in your organization the first time it is needed, and every run after that reuses it. |
 | `isolation: 'inbox'` | A new inbox for every address, deleted when its attempt ends. Use it when the app rejects `+` addresses. Every live inbox counts against your plan's inbox limit. One left behind by a run that was killed is deleted by a later run six hours on. |
 | `domain`, `displayName` | For `isolation: 'inbox'`: a verified custom domain (default `agentmail.to`) and a sender name. |
@@ -262,8 +262,9 @@ Things to know about AgentMail:
 ## Other email services
 
 `email` takes any `MailProvider`; `maildev()` and `agentMail()` are two. A
-provider hands out addresses and lists what arrived. The runner does everything else: filtering, waiting, retries,
-what the model is shown, the tools, and giving addresses back.
+provider hands out addresses, lists and reads what arrived, and gives
+addresses back. The runner does everything else: filtering, waiting, retries,
+what the model is shown, the tools, and when addresses go back.
 
 ```ts
 export interface MailProvider<Lease extends MailLease = MailLease> {

@@ -11,15 +11,19 @@ const AGENTMAIL_API_KEY = 'AGENTMAIL_API_KEY';
 const SHARED_INBOX_CLIENT_ID = 'e2e-shared-inbox';
 
 /**
- * How long an inbox of its own may live before a later run sweeps it: a run
- * killed before it released one would otherwise hold the plan's inbox quota
- * for good. Far longer than an attempt, a serial group, or an `e2e mcp`
+ * How long an inbox of its own, or alias mail, may live before a later run
+ * sweeps it: a run killed before it released an inbox would otherwise hold
+ * the plan's inbox quota for good, and mail several aliases received stays on
+ * release for the others. Far longer than an attempt, a serial group, or an `e2e mcp`
  * session runs.
  */
 const INBOX_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** The budget of creating the shared inbox, which every caller waits on, whoever asked first. */
 const SHARED_INBOX_MS = 30_000;
+
+/** The budget of a sweep, which every caller waits on (or, for alias mail, nobody does), whoever started it. */
+const SWEEP_MS = 30_000;
 
 /**
  * How far before its lease an alias's listing starts: AgentMail stamps a
@@ -34,8 +38,9 @@ export type AgentMailOptions =
        * inbox, `<inbox>+e2e-3f9a2c1b7d@agentmail.to`. Nothing is created per
        * address, so any number of workers fit the free plan's three inboxes.
        * An address reads only mail whose To or Cc names it exactly, and its
-       * mail is deleted when its attempt ends. The app under test must accept
-       * a `+` in an address.
+       * mail is deleted when its attempt ends (mail another alias also
+       * received once it is six hours old). The app under test must accept a
+       * `+` in an address.
        */
       readonly isolation?: 'alias' | undefined;
       /** The inbox aliases come from; default an `e2e` inbox created in the organization on first use and reused by every run. */
@@ -73,9 +78,10 @@ interface AgentMailLease extends MailLease {
 export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMailLease> {
   const clients = new Map<string, AgentMailApi>();
   const sharedInboxes = new Map<AgentMailApi, Promise<string>>();
-  const swept = new Set<AgentMailApi>();
-  /** Aliases handed out and not yet given back: one delivery to several of them is one message, kept until the last goes. */
-  const live = new Set<string>();
+  /** The sweep of each client, shared by every acquire while it runs and kept once it succeeded; a failed one is tried again. */
+  const sweeps = new Map<AgentMailApi, Promise<void>>();
+  /** The shared inboxes whose old alias mail this process already set out to delete. */
+  const aliasSweeps = new Set<string>();
   const clientFor = (): AgentMailApi => {
     const apiKey = process.env[AGENTMAIL_API_KEY]?.trim();
     if (apiKey === undefined || apiKey === '') throw new AgentMailRejected(`${AGENTMAIL_API_KEY} is not set; create a key at https://console.agentmail.to`);
@@ -96,25 +102,50 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
     }
     return raceAbort(inbox, signal, 'creating the shared inbox');
   };
-  /** Deletes the inboxes of their own that runs left behind past their time, once per process; best effort. */
+  /**
+   * Deletes the inboxes of their own that runs left behind past their time,
+   * once per process. Every acquire waits on the one sweep, so none creates an
+   * inbox while an expired one still holds the quota; a sweep that failed
+   * runs again on the next acquire, and never blocks creating an inbox.
+   */
   const sweep = async (client: AgentMailApi, signal: AbortSignal): Promise<void> => {
-    if (swept.has(client)) return;
-    let inboxes: Awaited<ReturnType<AgentMailApi['e2eInboxes']>>;
-    try {
-      inboxes = await client.e2eInboxes(signal);
-    } catch {
-      // A later acquire sweeps again; a failed sweep never blocks creating an inbox.
-      return;
+    let running = sweeps.get(client);
+    if (running === undefined) {
+      const budget = AbortSignal.timeout(SWEEP_MS);
+      running = (async () => {
+        const now = Date.now();
+        const expired = (await client.e2eInboxes(budget)).filter((inbox) => Date.parse(inbox.expiresAt) < now);
+        await Promise.all(expired.map((inbox) => client.deleteInbox(inbox.inboxId, budget)));
+      })();
+      running.catch(() => sweeps.delete(client));
+      sweeps.set(client, running);
     }
-    swept.add(client);
-    const now = Date.now();
-    await Promise.allSettled(inboxes.filter((inbox) => Date.parse(inbox.expiresAt) < now).map((inbox) => client.deleteInbox(inbox.inboxId, signal)));
+    await raceAbort(running, signal, 'sweeping expired inboxes').catch(() => undefined);
+  };
+  /**
+   * Deletes alias mail older than any attempt lives, once per process and
+   * inbox, in the background: mail sent to several aliases at once is kept on
+   * release while another alias, in any worker, may still read it.
+   */
+  const sweepAliasMail = (client: AgentMailApi, inboxId: string): void => {
+    if (aliasSweeps.has(inboxId)) return;
+    aliasSweeps.add(inboxId);
+    const budget = AbortSignal.timeout(SWEEP_MS);
+    void (async () => {
+      const old = (await client.received(inboxId, { before: new Date(Date.now() - INBOX_TTL_MS) }, budget)).filter((summary) => recipients(summary).some((address) => isAlias(inboxId, address)));
+      await Promise.all(old.map((summary) => client.deleteMessage(inboxId, summary.id, budget)));
+    })().catch(() => aliasSweeps.delete(inboxId));
   };
   /** The recipients a listed message names, bare and lowercased. */
   const recipients = (summary: MailSummary): string[] =>
     [...summary.to, ...(summary.cc ?? [])].map((value) => (/<([^<>\s]+)>\s*$/u.exec(value)?.[1] ?? value).trim().toLowerCase());
+  /** Whether `address` is an alias this provider hands out of `inboxId`, from any worker or run. */
+  const isAlias = (inboxId: string, address: string): boolean => {
+    const at = inboxId.lastIndexOf('@');
+    return address.startsWith(`${inboxId.slice(0, at).toLowerCase()}+e2e-`) && address.endsWith(inboxId.slice(at).toLowerCase());
+  };
   const received = async (lease: AgentMailLease, signal: AbortSignal): Promise<MailSummary[]> => {
-    const listed = await clientFor().received(lease.inboxId, lease.since, signal);
+    const listed = await clientFor().received(lease.inboxId, { after: lease.since }, signal);
     return lease.alias ? listed.filter((summary) => recipients(summary).includes(lease.address)) : listed;
   };
   return {
@@ -141,7 +172,7 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
         throw new AgentMailRejected(`inboxId ${JSON.stringify(base)} is not an AgentMail inbox address; name the inbox itself, not an alias of it`);
       }
       const alias = `${base.slice(0, at)}+e2e-${randomBytes(5).toString('hex')}${base.slice(at)}`.toLowerCase();
-      live.add(alias);
+      sweepAliasMail(client, base);
       return { address: alias, inboxId: base, alias: true, since };
     },
     async release(lease, { signal }) {
@@ -150,12 +181,18 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
         await client.deleteInbox(lease.inboxId, signal);
         return;
       }
-      // An alias's codes and links would otherwise sit in the shared inbox for good.
-      live.delete(lease.address);
-      const mail = (await received(lease, signal)).filter((summary) => !recipients(summary).some((address) => live.has(address)));
+      // An alias's codes and links would otherwise sit in the shared inbox for
+      // good. Mail another alias also received stays for it: that alias may
+      // belong to another worker, and the alias sweep deletes it later.
+      const mail = (await received(lease, signal)).filter((summary) => recipients(summary).every((address) => address === lease.address || !isAlias(lease.inboxId, address)));
       await Promise.all(mail.map((summary) => client.deleteMessage(lease.inboxId, summary.id, signal)));
     },
     list: (lease, { signal }) => received(lease, signal),
-    read: (lease, id, { signal }) => clientFor().message(lease.inboxId, id, signal),
+    async read(lease, id, { signal }) {
+      const message = await clientFor().message(lease.inboxId, id, signal);
+      // An alias reads only what its own listing would return, whatever id it is handed.
+      if (lease.alias && !recipients(message).includes(lease.address)) throw new AgentMailRejected(`message ${id} was not sent to ${lease.address}`);
+      return message;
+    },
   };
 }

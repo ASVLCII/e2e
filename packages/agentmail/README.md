@@ -42,7 +42,8 @@ plus-address alias (`<inbox>+e2e-...@agentmail.to`, so the site must accept a
 `+`) of one shared `e2e` inbox, created in your organization on
 first use, so any number of workers fit the free plan's three inboxes. An alias
 reads only mail whose To or Cc names it exactly, and its mail is deleted when
-its attempt ends. `agentMail({ inboxId })` aliases an inbox you already have;
+its attempt ends (mail another alias also received, once it is six hours
+old). `agentMail({ inboxId })` aliases an inbox you already have;
 `agentMail({ isolation: 'inbox', domain, displayName })` creates an inbox per
 address, deletes it when the attempt ends, and sweeps one a killed run left
 behind six hours later.
