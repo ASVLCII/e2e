@@ -76,6 +76,13 @@ suites that consume the built packages the way a user would.
   hosted iOS simulators and Android emulators for the mobile engine
   (`DeviceProvider`). Expo publishes no SDK for the sessions API, so it calls
   Expo's GraphQL API with `fetch`, and `@e2e-dev/mobile` is its only peer.
+- `packages/agentmail` - the published `@e2e-dev/agentmail` package:
+  AgentMail inboxes for `config.email`, with the `agentmail` SDK as its one
+  dependency and `e2e` as its peer. It implements core's `MailProvider`;
+  the `email` fixture, the agent's email tools, and every rule about waiting,
+  rendering, and releasing addresses live in core (`packages/e2e/src/email/`,
+  with `maildev()` for a local app), and a provider only hands out addresses
+  and lists what arrived.
 - `apps/testbed` (`@e2e-dev/testbed`, private) — dogfood project that
   consumes the **built** packages like a real user would: the playground app
   where every runner feature (sessions, routes, downloads, frames, uploads,
@@ -89,10 +96,13 @@ suites that consume the built packages the way a user would.
   `tests-agent/` both gate PRs; the agentic one runs from its committed
   recordings, see "Committed recordings" under Gotchas). Scenario files are
   copies: keep diffs against the source minimal so scenarios port both ways,
-  and never fix a planted bug. The one exception is Control Inventory, ours
-  like the mobile benchmark's: plain controls, one exercise per agent verb the
-  hard scenarios never reach, with one agentic test per verb in
-  `tests-agent/control-inventory.e2e.ts`.
+  and never fix a planted bug. Two scenarios are ours, not copies. Control
+  Inventory, like the mobile benchmark's: plain controls, one exercise per
+  agent verb the hard scenarios never reach, with one agentic test per verb in
+  `tests-agent/control-inventory.e2e.ts`. Email Verification: it sends real
+  mail over SMTP (`app/src/app/api/email/route.ts`) to the MailDev the config
+  starts as a service, and `tests/email-verification.e2e.ts` exercises
+  `config.email` through `maildev()`.
 - `apps/mobile-benchmark` (`@e2e-dev/mobile-benchmark`, private) — an Expo
   app of hard mobile surfaces (merged or hidden accessibility trees, native
   alerts over modals, keyboard-covered submits, virtualized lists, a WebView,

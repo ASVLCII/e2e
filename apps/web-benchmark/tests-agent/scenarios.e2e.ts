@@ -28,6 +28,12 @@ interface Scenario {
 
 const SCENARIOS: readonly Scenario[] = [
   {
+    slug: 'email-verification',
+    goal: 'create an account with a new email address and verify it with the code from the email',
+    success: 'Email verified',
+    gap: 'the email tools record a replay gap, so every run would call the model; tests/email-verification.e2e.ts covers the flow',
+  },
+  {
     slug: 'shadow-dom-form',
     goal: 'fill the form buried in the nested shadow roots and submit it to get access',
     success: 'Access granted',

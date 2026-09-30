@@ -52,6 +52,8 @@ export const HARNESS_TOOL_NAMES: ReadonlyMap<string, string> = new Map([
   ['start_recording', 'an e2e mcp session'],
   ['stop_recording', 'an e2e mcp session'],
   ['report_finding', 'e2e explore'],
+  ['new_email_address', 'an agent step when config.email is set'],
+  ['wait_for_email', 'an agent step when config.email is set'],
 ]);
 
 /**
@@ -85,3 +87,14 @@ export const GRAMMAR_TOOL_NAMES: ReadonlySet<string> = new Set([
   'select_at',
   'dismiss_keyboard',
 ]);
+
+/**
+ * The names of the agent's email tools, offered when `config.email` is set.
+ * Reserved whether or not it is, like the grammar's, so a project tool keeps
+ * its name when a config adds email later.
+ */
+const EMAIL_TOOLS = ['new_email_address', 'wait_for_email'] as const;
+export const EMAIL_TOOL_NAMES: ReadonlySet<string> = new Set<string>(EMAIL_TOOLS);
+
+/** One of the email tools' names; the pack is typed by it, so a tool and its reserved name cannot drift apart. */
+export type EmailToolName = (typeof EMAIL_TOOLS)[number];

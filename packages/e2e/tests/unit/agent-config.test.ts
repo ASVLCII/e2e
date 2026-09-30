@@ -245,8 +245,8 @@ describe('the built-in agent options', () => {
     }
   });
 
-  it('rejects the names of the tools the harness adds in an agent step, an e2e mcp session, and explore', () => {
-    const where = { complete_step: 'every agent step', locate: 'an e2e mcp session', start_recording: 'an e2e mcp session', stop_recording: 'an e2e mcp session', report_finding: 'e2e explore' };
+  it('rejects the names of the tools the harness adds in an agent step, an e2e mcp session, explore, and an attempt with email', () => {
+    const where = { complete_step: 'every agent step', locate: 'an e2e mcp session', start_recording: 'an e2e mcp session', stop_recording: 'an e2e mcp session', report_finding: 'e2e explore', new_email_address: 'an agent step when config.email is set', wait_for_email: 'an agent step when config.email is set' };
     for (const [name, surface] of Object.entries(where)) {
       expect(() => resolve({ agents: { ux: { tools: { [name]: readOnlyTool() } } } })).toThrow(
         `agents.ux.tools.${name}: the ${name} tool name is reserved for the tool the harness adds in ${surface}; rename it`,

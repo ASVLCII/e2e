@@ -44,6 +44,8 @@ Maestro, and the full reference.
   engine.
 - [`@e2e-dev/eas`](./packages/eas): EAS Simulators hosted iOS simulators and
   Android emulators for the mobile engine.
+- [`@e2e-dev/agentmail`](./packages/agentmail): real email inboxes from
+  AgentMail for `config.email`.
 
 ## Contributing
 
