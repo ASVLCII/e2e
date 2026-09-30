@@ -257,17 +257,33 @@ function collapse(line: string): string {
   return line.replace(INVISIBLE, '').replace(/[^\S\n]+/gu, ' ').trim();
 }
 
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', copy: '©', reg: '®', trade: '™',
-  rsquo: '\u2019', lsquo: '\u2018', rdquo: '\u201D', ldquo: '\u201C', mdash: '\u2014', ndash: '\u2013',
-  hellip: '\u2026', middot: '\u00B7', bull: '\u2022', zwnj: '', zwj: '', shy: '', euro: '€', pound: '£',
-};
+/** The Latin-1 entities by name, in code point order from U+00A0: what European templates spell accents and symbols with. */
+const LATIN1_ENTITIES = 'nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml'.split(' ');
+
+/** Named entities as HTML spells them (case matters: `Eacute` is not `eacute`), the Latin-1 set plus the typography templates use. */
+const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
+  ...LATIN1_ENTITIES.map((name, index): [string, string] => [name, String.fromCodePoint(0xa0 + index)]),
+  ['nbsp', ' '],
+  ['shy', ''],
+  ['amp', '&'], ['lt', '<'], ['gt', '>'], ['quot', '"'], ['apos', "'"],
+  ['AMP', '&'], ['LT', '<'], ['GT', '>'], ['QUOT', '"'], ['COPY', '\u00A9'], ['REG', '\u00AE'],
+  ['rsquo', '\u2019'], ['lsquo', '\u2018'], ['sbquo', '\u201A'], ['rdquo', '\u201D'], ['ldquo', '\u201C'], ['bdquo', '\u201E'],
+  ['mdash', '\u2014'], ['ndash', '\u2013'], ['hellip', '\u2026'], ['bull', '\u2022'], ['prime', '\u2032'],
+  ['lsaquo', '\u2039'], ['rsaquo', '\u203A'], ['dagger', '\u2020'], ['Dagger', '\u2021'], ['permil', '\u2030'],
+  ['trade', '\u2122'], ['euro', '\u20AC'], ['OElig', '\u0152'], ['oelig', '\u0153'], ['Scaron', '\u0160'], ['scaron', '\u0161'],
+  ['Yuml', '\u0178'], ['fnof', '\u0192'], ['circ', '\u02C6'], ['tilde', '\u02DC'],
+  ['ensp', ' '], ['emsp', ' '], ['thinsp', ' '], ['zwnj', ''], ['zwj', ''], ['lrm', ''], ['rlm', ''],
+]);
+
+/** An entity: a numeric one, a named one with its `;`, or one of the five a browser also reads without it (`&amp` in an old template), never before `=` so a query string's `&lt=4` stays. */
+const ENTITY = /&(?:#[xX]([\da-fA-F]+);?|#(\d+);?|([a-zA-Z][a-zA-Z0-9]*);|(amp|lt|gt|quot|nbsp)(?![a-zA-Z0-9;=]))/gu;
 
 function decodeEntities(text: string): string {
-  return text.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/giu, (entity, name: string) => {
-    if (!name.startsWith('#')) return NAMED_ENTITIES[name.toLowerCase()] ?? entity;
-    const hex = name[1] === 'x' || name[1] === 'X';
-    const point = Number.parseInt(name.slice(hex ? 2 : 1), hex ? 16 : 10);
-    return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+  return text.replace(ENTITY, (entity, hex: string | undefined, decimal: string | undefined, name: string | undefined, bare: string | undefined) => {
+    if (hex !== undefined || decimal !== undefined) {
+      const point = hex === undefined ? Number.parseInt(decimal!, 10) : Number.parseInt(hex, 16);
+      return point <= 0x10ffff ? String.fromCodePoint(point) : entity;
+    }
+    return NAMED_ENTITIES.get(name ?? bare!) ?? entity;
   });
 }

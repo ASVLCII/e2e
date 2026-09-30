@@ -42,6 +42,7 @@ export function memoryProvider(): MemoryProvider {
     },
     async release(lease: MailLease) {
       provider.released.push(lease.address);
+      mail.delete(lease.address);
     },
     async list(lease) {
       return (mail.get(lease.address) ?? []).map(({ text: _text, html: _html, ...summary }) => summary);

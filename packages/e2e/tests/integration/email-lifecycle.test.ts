@@ -9,10 +9,10 @@
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import { installFakeLoopModel } from '../helpers/fake-loop-model.ts';
 import { memoryProvider, type MemoryProvider } from '../helpers/memory-mail.ts';
 import { resultByTitle, runProject, runProjectWithConfigFile, workerConfigSource, type FixtureProject, type RunOutcome } from '../helpers/run-project.ts';
@@ -357,7 +357,8 @@ describe('interrupt', () => {
     const provider = stressProvider({ honorSignal: true });
     const controller = new AbortController();
     const interrupting = (async () => {
-      while (!provider.log.some((entry) => entry.call === 'list')) await sleep(50);
+      const deadline = Date.now() + 30_000;
+      while (!provider.log.some((entry) => entry.call === 'list') && Date.now() < deadline) await sleep(50);
       controller.abort();
     })();
     const { outcome } = await runWith(
@@ -412,6 +413,8 @@ test('reads the invite after the agent did', async ({ app, agent, email }) => {
 describe('process workers', () => {
   it('re-imports a config holding a live provider in each worker', async () => {
     const logFile = path.join(process.cwd(), 'tests', 'tmp-projects', `stress-mail-${process.pid}.log`);
+    rmSync(logFile, { force: true });
+    onTestFinished(() => rmSync(logFile, { force: true }));
     const provider = `
   email: {
     name: 'file-log',

@@ -11,10 +11,9 @@ import { AgentMailClient } from 'agentmail';
 import { describe, expect, it } from 'vitest';
 import { agentMail } from '../../src/index.ts';
 
-const context = { signal: AbortSignal.timeout(90_000), runId: 'live' };
-
 describe.skipIf(process.env['AGENTMAIL_API_KEY'] === undefined)('agentMail() live', () => {
   it('delivers from an inbox to an alias, reads it, and deletes both on release', async () => {
+    const context = { signal: AbortSignal.timeout(110_000), runId: 'live' };
     const aliases = agentMail();
     const inboxes = agentMail({ isolation: 'inbox' });
     const recipient = await aliases.acquire(context);

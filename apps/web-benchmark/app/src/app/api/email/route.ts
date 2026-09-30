@@ -37,8 +37,8 @@ async function sendCode(email: string): Promise<void> {
     from: SENDER,
     to: email,
     subject: "Verify your email",
-    text: `Your verification code is ${code}.\n\nIt expires in 10 minutes.\n\nBenchmark Inc, 2026`,
-    html: `<div style="display:none">Preheader ${randomInt(100_000, 1_000_000)}</div><p>Your verification code is <b>${code}</b>.</p><p>It expires in 10 minutes.</p><p style="color:#999">Benchmark Inc, 2026</p>`,
+    text: `Your verification code is ${code}.\n\nBenchmark Inc, 2026`,
+    html: `<div style="display:none">Preheader ${randomInt(100_000, 1_000_000)}</div><p>Your verification code is <b>${code}</b>.</p><p style="color:#999">Benchmark Inc, 2026</p>`,
   });
 }
 
@@ -87,5 +87,7 @@ async function handle(request: Request): Promise<Response> {
         text: `${body.from} invited you to join their Benchmark workspace.`,
       });
       return Response.json({ sent: true });
+    default:
+      return Response.json({ error: "Unknown action" }, { status: 400 });
   }
 }

@@ -30,6 +30,12 @@ describe('renderHtml', () => {
     ).toBe('Hello Ada,\nHere’s your code: 482913.\n© Acme — A &bogus;');
   });
 
+  it('decodes Latin-1 names by case, and the five a browser reads without a semicolon', () => {
+    expect(renderHtml('<p>Caf&eacute; &Eacute;cole &szlig; &frac12; &AMP; &euml &lt 3</p><a href="https://acme.test/v?a=1&amp=2&b=3&lt=4">Go</a>')).toBe(
+      'Café École ß ½ & &euml < 3\nGo <https://acme.test/v?a=1&amp=2&b=3&lt=4>',
+    );
+  });
+
   it('keeps table cells apart and runs inline elements together, as a browser draws them', () => {
     expect(renderHtml('<table><tr><td>Code:</td><td>482913</td></tr></table><p><span>48</span><span>29</span><b>13</b></p>')).toBe('Code: 482913\n482913');
   });

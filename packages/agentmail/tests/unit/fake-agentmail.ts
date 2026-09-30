@@ -2,7 +2,7 @@
  * An in-memory AgentMail organization behind the SDK's surface: `sdk` is what
  * `vi.mock('agentmail', ...)` hands the provider, `org` what the test reads.
  * Inboxes are created by `clientId`; received mail is listed oldest first
- * from `after`, the way the API serves it; `failNext` makes the next call
+ * from `after`, the way the API serves it, two per page; `failNext` makes the next call
  * fail with a status and body, as `AgentMailError` carries them.
  */
 
@@ -98,6 +98,9 @@ function inboxOf(inboxId: string): FakeInbox {
 
 type Options = object | undefined;
 
+/** Messages per listing page, small so a test's few emails already span pages. */
+const PAGE_SIZE = 2;
+
 class AgentMailClient {
   constructor({ apiKey }: { apiKey: string }) {
     org.apiKeys.push(apiKey);
@@ -133,11 +136,12 @@ class AgentMailClient {
           (message) => (request.labels ?? []).every((label) => message.labels.includes(label)) && (request.after === undefined || message.createdAt > request.after),
         );
         const ordered = request.ascending === true ? messages : messages.toReversed();
-        const page = request.pageToken === undefined ? ordered.slice(0, 2) : ordered.slice(2);
+        const offset = Number(request.pageToken ?? 0);
+        const page = ordered.slice(offset, offset + PAGE_SIZE);
         return {
           count: page.length,
           messages: page.map(({ text: _text, html: _html, ...item }) => item),
-          ...(request.pageToken === undefined && ordered.length > 2 ? { nextPageToken: 'next' } : {}),
+          ...(offset + PAGE_SIZE < ordered.length ? { nextPageToken: String(offset + PAGE_SIZE) } : {}),
         };
       },
       get: async (inboxId: string, messageId: string, _options?: Options) => {

@@ -41,7 +41,9 @@ export function emailTools(attempt: ExecutorAttempt): Readonly<Partial<Record<Em
       return await body(options.abortSignal ?? attempt.signal);
     } catch (cause) {
       const message = mail.redact(errorMessage(cause));
-      throw cause instanceof E2EError ? new E2EError(cause.category, cause.code, message, { cause, retryable: cause.retryable }) : new Error(message, { cause });
+      throw cause instanceof E2EError
+        ? new E2EError(cause.category, cause.code, message, { cause, retryable: cause.retryable, ...(cause.details === undefined ? {} : { details: cause.details }) })
+        : new Error(message, { cause });
     }
   };
 

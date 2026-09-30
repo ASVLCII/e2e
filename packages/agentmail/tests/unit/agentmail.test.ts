@@ -45,10 +45,11 @@ describe('agentMail() aliases', () => {
     org.deliver(mine.inboxId, { to: [`"${mine.address}" <${theirs.address}>`], subject: 'Display name names mine, sent to theirs' });
     org.deliver(mine.inboxId, { to: ['someone@acme.test'], cc: [`Me <${mine.address.toUpperCase()}>`], subject: 'Cc, uppercased' });
     for (const subject of ['One', 'Two']) org.deliver(mine.inboxId, { to: [mine.address], subject, text: `${subject} body` });
+    org.listedAfter = [];
     const listed = await provider.list(mine, context);
     expect(listed.map((summary) => summary.subject)).toEqual(['Cc, uppercased', 'One', 'Two']);
+    expect(org.listedAfter).toEqual([mine.since, mine.since, mine.since]);
     expect((await provider.list(theirs, context)).map((summary) => summary.subject)).toEqual(['Display name names mine, sent to theirs']);
-    expect(org.listedAfter.at(-1)).toEqual(mine.since);
     expect(listed[1]).toMatchObject({ id: expect.any(String), receivedAt: expect.any(Date), cc: [] });
     await expect(provider.read(mine, listed[1]!.id, context)).resolves.toMatchObject({ subject: 'One', text: 'One body' });
   });

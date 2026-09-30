@@ -590,9 +590,12 @@ export class ActionDispatcher {
     // not. The email spelled it absolute; the model may open it as a path.
     if (!this.accounting.replayingTrace && action.name === 'navigate' && mailed.size > 0) {
       const absolute = resolveNavigationUrl(action.url, this.runtime.app.base).url;
+      // Only a whole URL an email spelled counts: an app origin that merely
+      // prefixes one (`http://localhost:3000` before `/verify?token=...`) is
+      // the flow's own navigation and replays.
       const derived = [action.url, absolute]
         .map((url) => derivedReason(url, this.options.instruction, this.options.params, { shown: mailed }))
-        .find((reason) => reason !== undefined);
+        .find((reason) => reason === 'whole-node');
       if (derived !== undefined) {
         trace.recordDerivedGap(derived);
         return;

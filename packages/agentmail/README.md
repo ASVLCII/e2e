@@ -48,7 +48,7 @@ address, deletes it when the attempt ends, and sweeps one a killed run left
 behind six hours later.
 
 `pnpm --filter @e2e-dev/agentmail run test:live` runs the provider against the
-real API with `AGENTMAIL_API_KEY` set; it sends two emails.
+real API with `AGENTMAIL_API_KEY` set; it sends one email.
 
 Full documentation lives at [e2e.tester.army/docs/email](https://e2e.tester.army/docs/email).
 
