@@ -19,6 +19,7 @@ import type { StepProgress } from './steps.ts';
 import type { SpawnUnitRunner, UnitRunner } from './unit-runner.ts';
 import {
   INTERRUPTED_BEFORE_START,
+  countsTowardFailureLimit,
   failureLimitSkip,
   nonRunResult,
   pairResult,
@@ -29,6 +30,7 @@ import {
   pairKey,
 } from './units.ts';
 import {
+  type FailureLimit,
   type OutputMessage,
   type PairStart,
   type WirePair,
@@ -90,6 +92,11 @@ const MAX_INIT_FAILURES = 2;
 /** How long a retiring or draining worker gets before it is force-killed. */
 const SHUTDOWN_GRACE_MS = 10_000;
 
+/** Whether a worker process died of a signal that interrupts the run, as a Ctrl-C to its process group does. */
+function isInterruptSignal(signal: NodeJS.Signals | null): boolean {
+  return signal === 'SIGINT' || signal === 'SIGTERM' || signal === 'SIGHUP';
+}
+
 /** Runs every planned unit and streams records. */
 export async function runUnits(options: RunUnitsOptions): Promise<void> {
   await new Scheduler(options).run();
@@ -134,19 +141,19 @@ class SchedulerWorker {
     readonly workerSlot: number,
     spawn: SpawnUnitRunner,
     onMessage: (worker: SchedulerWorker, message: WorkerToMain) => void,
-    onExit: (worker: SchedulerWorker, detail: string) => void,
+    onExit: (worker: SchedulerWorker, detail: string, signal: NodeJS.Signals | null) => void,
   ) {
     this.runner = spawn(targetName, workerSlot, {
       onMessage: (message) => onMessage(this, message),
-      onExit: (detail) => {
+      onExit: (detail, signal) => {
         this.clearKillTimer();
-        onExit(this, detail);
+        onExit(this, detail, signal ?? null);
       },
     });
   }
 
-  /** Sends a unit and starts tracking it. */
-  dispatch(unit: WorkUnit): void {
+  /** Sends a unit, with the run's failure limit when it has one, and starts tracking it. */
+  dispatch(unit: WorkUnit, failureLimit: FailureLimit | undefined): void {
     this.state = 'busy';
     this.unit = unit;
     this.reported.clear();
@@ -165,6 +172,7 @@ class SchedulerWorker {
       file: unit.file,
       absolutePath: unit.absolutePath,
       pairs,
+      ...(failureLimit === undefined ? {} : { failureLimit }),
     });
   }
 
@@ -215,6 +223,8 @@ class Scheduler {
    * run; from then on the scheduler interrupts as if the signal had fired.
    */
   private stopSkip: SkipInfo | undefined;
+  /** The workers alive when the first one died of an interrupt signal before it was ready; see `excusedSignal`. */
+  private signalledWave: Set<SchedulerWorker> | undefined;
 
   constructor(private readonly options: RunUnitsOptions) {}
 
@@ -230,7 +240,7 @@ class Scheduler {
    */
   private report(result: ResultRecord): void {
     this.options.events.onResult(result);
-    if (result.status !== 'failed' && result.status !== 'timed-out') return;
+    if (!countsTowardFailureLimit(result.status)) return;
     this.failures += 1;
     const limit = this.options.maxFailures;
     if (limit !== undefined && this.stopSkip === undefined && this.failures >= limit) this.stopEarly(limit);
@@ -247,6 +257,12 @@ class Scheduler {
     for (const state of this.targets.values()) this.skipQueues(state, skip);
     this.options.events.onFailureLimit?.(this.failures, limit);
     this.wakeUp();
+  }
+
+  /** The failure limit a unit dispatched now carries, when the run has one. */
+  private get failureLimit(): FailureLimit | undefined {
+    const limit = this.options.maxFailures;
+    return limit === undefined ? undefined : { limit, failures: this.failures };
   }
 
   /** Empties a target's queues, reporting every pair they held as skipped for `skip`. */
@@ -377,7 +393,7 @@ class Scheduler {
         this.returnUnit(state, unit);
         return;
       }
-      if (worker.state === 'idle') worker.dispatch(unit);
+      if (worker.state === 'idle') worker.dispatch(unit, this.failureLimit);
       else worker.queued = unit;
     }
   }
@@ -520,7 +536,7 @@ class Scheduler {
       workerSlot,
       this.options.spawn,
       (target, message) => this.onMessage(target, message),
-      (target, detail) => this.onExit(target, detail),
+      (target, detail, signal) => this.onExit(target, detail, signal),
     );
     this.workers.push(worker);
     return worker;
@@ -559,7 +575,7 @@ class Scheduler {
         worker.state = 'idle';
         const queued = worker.queued;
         worker.queued = undefined;
-        if (queued !== undefined) worker.dispatch(queued);
+        if (queued !== undefined) worker.dispatch(queued, this.failureLimit);
         this.wakeUp();
         break;
       }
@@ -652,7 +668,7 @@ class Scheduler {
     }
   }
 
-  private onExit(worker: SchedulerWorker, detail: string): void {
+  private onExit(worker: SchedulerWorker, detail: string, signal: NodeJS.Signals | null): void {
     const tracked = this.workers.includes(worker);
     this.forget(worker);
     const state = this.targetState(worker);
@@ -680,13 +696,28 @@ class Scheduler {
         });
       }
       this.synthesizeCrashResults(state, worker, unit);
-    } else if (tracked && !worker.becameReady && !this.interrupting) {
+    } else if (tracked && !worker.becameReady && !this.interrupting && !this.excusedSignal(worker, signal)) {
       // The interrupt retires every worker still starting; those exits were
       // asked for and say nothing about whether the target can boot.
       state.initFailures += 1;
       if (state.initFailures >= MAX_INIT_FAILURES) this.failTarget(state);
     }
     this.wakeUp();
+  }
+
+  /**
+   * Whether a worker that died of `signal` before it was ready is excused as
+   * interrupted: a terminal Ctrl-C reaches every worker still loading before
+   * it ignores the signal, and the runner's own interrupt may land only after
+   * those exits. One signal reaches the workers alive at that moment, so only
+   * they are excused; a replacement that dies of a signal too is a boot
+   * failure like any other, and a target that kills its own workers still
+   * fails after `MAX_INIT_FAILURES`.
+   */
+  private excusedSignal(worker: SchedulerWorker, signal: NodeJS.Signals | null): boolean {
+    if (!isInterruptSignal(signal)) return false;
+    this.signalledWave ??= new Set([...this.workers, worker]);
+    return this.signalledWave.has(worker);
   }
 
   /** Emits records for a unit whose worker died before reporting it done. */

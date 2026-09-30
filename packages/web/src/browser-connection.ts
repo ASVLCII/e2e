@@ -7,6 +7,18 @@ import { SELECTOR_ENGINES } from './selector-engines.ts';
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
 
 /**
+ * Playwright's default SIGINT handler closes the browser and exits the
+ * process, and its SIGTERM handler closes the browser. A terminal Ctrl-C
+ * reaches the worker's whole process group, so they would end the test
+ * mid-step before the runner's interrupt reports it. The runner owns those
+ * interrupts; the browser runs in its own process group, so the signal never
+ * reaches it, and the engine's `dispose` closes it. SIGHUP stays Playwright's:
+ * the runner does not handle a hangup, and its handler is what closes the
+ * browser when the terminal goes away.
+ */
+const RUNNER_OWNS_SIGNALS = { handleSIGINT: false, handleSIGTERM: false } as const;
+
+/**
  * Launching a browser process costs hundreds of milliseconds; per-attempt
  * isolation lives in browser contexts, so every attempt a worker runs can
  * share the process. The connection relaunches a browser that crashed or
@@ -38,7 +50,7 @@ export class BrowserConnection {
     }
     await registerSelectorEngines();
     const launching =
-      connect !== undefined ? connect() : browserType(name).launch({ headless: !headed, timeout: timeoutMs });
+      connect !== undefined ? connect() : browserType(name).launch({ headless: !headed, timeout: timeoutMs, ...RUNNER_OWNS_SIGNALS });
     this.pending = launching;
     try {
       return await launching;
