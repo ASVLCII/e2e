@@ -91,6 +91,30 @@ describe('manifest', () => {
     expect(Object.keys(free.session!)).toEqual(['back']);
   });
 
+  it('rejects an option it does not know, naming the nearest', () => {
+    expect(() => harness({ sesion: 'e2e-ios' } as never)).toThrow(
+      expect.objectContaining({ code: 'INVALID_CONFIG', message: 'mobile() has unknown key "sesion"; did you mean "session"?' }),
+    );
+    expect(() => harness({ bundleId: 'com.example' } as never)).toThrow(
+      /^mobile\(\) has unknown key "bundleId"; expected one of platform, app, appPath, identity/,
+    );
+  });
+
+  it('rejects a permission name or state it does not know, naming the nearest name', () => {
+    expect(() => harness({ permissions: { camerra: 'grant' } } as never)).toThrow(
+      expect.objectContaining({ code: 'INVALID_CONFIG', message: 'mobile({ permissions }) has unknown key "camerra"; did you mean "camera"?' }),
+    );
+    expect(() => harness({ permissions: { camera: 'granted' } } as never)).toThrow(
+      expect.objectContaining({ code: 'INVALID_CONFIG', message: 'mobile({ permissions }).camera must be one of grant, deny, reset, got "granted"' }),
+    );
+    for (const permissions of ['camera', null, ['camera'], new Map([['camera', 'grant']])]) {
+      expect(() => harness({ permissions } as never)).toThrow(
+        expect.objectContaining({ code: 'INVALID_CONFIG', message: 'mobile({ permissions }) must be a plain object of permission names to grant, deny, reset' }),
+      );
+    }
+    expect(() => harness({ permissions: { camera: 'grant', 'media-library': 'deny', photos: undefined } } as never)).not.toThrow();
+  });
+
   it('declares the app identity from the option, the build path, or an explicit identity', () => {
     expect(harness({ appPath: './build/App.app' }, false).engine.app).toMatchObject({ identity: './build/App.app' });
     expect(harness({ identity: 'com.example.app', environment: 'staging' }).engine.app).toMatchObject({
@@ -1564,6 +1588,22 @@ describe('device fixture', () => {
       ['apps.open', { platform: 'ios', app: 'com.other' }],
       ['apps.open', { platform: 'ios', app: 'com.other' }],
     ]);
+  });
+
+  it('refuses an openApp permission name or state it does not know before any device command', async () => {
+    const h = harness();
+    await openAttempt(h);
+    const device = fixture(h);
+    const before = h.fake.calls.length;
+    await expect(device.openApp('com.other', { relaunch: true, permissions: { notification: 'grant' } } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      message: 'device.openApp({ permissions }) has unknown key "notification"; did you mean "notifications"?',
+    });
+    await expect(device.openApp('com.other', { permissions: { camera: 'allow' } } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      message: 'device.openApp({ permissions }).camera must be one of grant, deny, reset, got "allow"',
+    });
+    expect(h.fake.calls.length).toBe(before);
   });
 
   it('resets the simulator keychain on iOS and refuses on Android before any device command', async () => {

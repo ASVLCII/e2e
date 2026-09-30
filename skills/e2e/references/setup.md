@@ -109,7 +109,7 @@ export default {
 | Key | Default | Notes |
 | --- | --- | --- |
 | `targets` | required | Non-empty. UI targets set `engine`; `platform` defaults to the engine's platform and `name` defaults to that platform. Tools-only targets may omit `engine` and must set `platform`. Use `name` with `--target`. |
-| `tests` | `'tests/**/*.e2e.ts'` | A glob or an array of globs relative to the project root: `*`, `?`, and a whole `**` segment, `/` separators; a leading `./` is fine. An entry starting with `!` excludes (`['tests/**/*.e2e.ts', '!tests/wip/**']`), in any order; only exclusions is `INVALID_CONFIG`. Braces, character classes, extglobs, `..`, and absolute paths are `INVALID_GLOB`. Discovery enters only the directories a glob can match beneath and does not follow symlinks. |
+| `tests` | `'tests/**/*.e2e.ts'` | A glob or an array of globs relative to the project root: `*`, `?`, and a whole `**` segment, `/` separators; a leading `./` is fine. An entry starting with `!` excludes (`['tests/**/*.e2e.ts', '!tests/wip/**']`), in any order; only exclusions is `INVALID_CONFIG`. A wildcard-free entry naming a directory (`'!tests/wip'`: write `'!tests/wip/**'`) is `INVALID_GLOB`. Braces, character classes, extglobs, `..`, and absolute paths are `INVALID_GLOB`. Discovery enters only the directories a glob can match beneath and does not follow symlinks. |
 | `timeout` | `120000` | Per test attempt, in ms. Also the default `agent.act` deadline. |
 | `actionTimeout` | `30000` | Every locator action and engine operation, including each observation inside an agent step. Raise it for slow UI operations. |
 | `assertionTimeout` | `5000` | `expect` polling window. |
@@ -143,7 +143,7 @@ identity for cache and session keys. `web()` accepts:
 | `viewport` | `{ width, height }`, default 1280x720; `null` follows the browser window (a hosted browser's live view, a headed run). On a headed hosted browser such as Kernel's, use `null` and size the service's screen: there, a fixed size gets a smaller, unmaximized window. |
 | `connect` | `{ cdpEndpoint }` attaches to a remote Chromium over CDP. Adding `reconnectEndpoint` uses a dedicated persistent default context, provisions a fresh browser per attempt, and reconnects only to the original browser and page. |
 | `headers` | Request headers sent to the app's site only (a Vercel `x-vercel-protection-bypass`, ngrok's `ngrok-skip-browser-warning`). Reaches every path onto the page, `agent.act` included; turns the browser HTTP cache off and blocks service workers. |
-| `basicAuth` | `{ username, password }` answering a `401` challenge. `password` may be `secrets.get('name')` for a `secrets` entry: resolved per attempt and redacted like any secret; an undeclared name is `INVALID_CONFIG` at load. |
+| `basicAuth` | `{ username, password }` answering a `401` challenge. `password` may be `secrets.get('name')` for a `secrets` entry: resolved per attempt and redacted like any secret; an undeclared name is `INVALID_CONFIG` at load. The handle is a reference, not the value: in `command.env`, a template literal, or `context` it is `INVALID_CONFIG`; read such a value from `process.env`. |
 | `userAgent` | The `User-Agent` every attempt sends and `navigator.userAgent` reports, for an app that enters a test mode on a marker in it. |
 
 CDP recovery never repeats a dispatched operation. Endpoint resolution, attachment,

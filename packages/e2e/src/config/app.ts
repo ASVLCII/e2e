@@ -8,6 +8,8 @@ import type { EngineAppDeclaration, EngineHandle } from '../engine/index.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { obj } from '../internal/objects.ts';
 import { insideProjectRoot } from '../internal/paths.ts';
+import { rejectUnknownKeys } from '../internal/options.ts';
+import { isSecret } from '../secrets.ts';
 import {
   isImplicitTestHost,
   normalizeBaseUrl,
@@ -18,7 +20,7 @@ import {
   type NormalizedBaseUrl,
 } from '../internal/urls.ts';
 import type { CommandConfig, ServiceConfig } from '../types.ts';
-import { httpUrl, positiveInt } from './validate.ts';
+import { describeValue, httpUrl, positiveInt } from './validate.ts';
 
 /**
  * How a spawned process counts as ready: a URL that answers, or the process
@@ -184,8 +186,11 @@ function expandPort(value: string, port: number | undefined, label: string): str
 }
 
 /**
- * The command with `{port}` expanded in every `args` entry and `env` value.
- * Malformed shapes pass through untouched for `validateCommand` to name.
+ * The command with `{port}` expanded in every `args` entry and `env` value,
+ * and an `env` entry whose value is `undefined` dropped, as `spawn` drops
+ * it: `env: { KEY: process.env.KEY }` with the variable unset starts the app
+ * without it. Malformed shapes pass through untouched for `validateCommand`
+ * to name.
  */
 function expandCommandPort<T extends CommandConfig>(command: T, label: string, expand: PortExpander): T {
   if (typeof command !== 'object' || command === null) return command;
@@ -195,31 +200,71 @@ function expandCommandPort<T extends CommandConfig>(command: T, label: string, e
     ...(Array.isArray(args)
       ? { args: args.map((arg) => (typeof arg === 'string' ? expand(arg, `${label}.args`) : arg)) }
       : {}),
-    ...(typeof env === 'object' && env !== null
+    ...(typeof env === 'object' && env !== null && !Array.isArray(env)
       ? {
           env: Object.fromEntries(
-            Object.entries(env).map(([key, value]) => [
-              key,
-              typeof value === 'string' ? expand(value, `${label}.env.${key}`) : value,
-            ]),
+            Object.entries(env)
+              .filter(([, value]) => value !== undefined)
+              .map(([key, value]) => [key, typeof value === 'string' ? expand(value, `${label}.env.${key}`) : value]),
           ),
         }
       : {}),
   };
 }
 
+/** The keys of a `CommandConfig`: an app command and a service teardown take these only. */
+const COMMAND_KEYS: readonly string[] = Object.keys({
+  executable: true,
+  args: true,
+  cwd: true,
+  env: true,
+  startupTimeout: true,
+  shutdownTimeout: true,
+  log: true,
+  reuseExisting: true,
+} satisfies Record<keyof CommandConfig, true>);
+
+/** The keys of a `ServiceConfig`: a command's, plus what steers the service. */
+const SERVICE_KEYS: readonly string[] = [
+  ...COMMAND_KEYS,
+  ...Object.keys({
+    name: true,
+    readyUrl: true,
+    waitForExit: true,
+    teardown: true,
+  } satisfies Record<Exclude<keyof ServiceConfig, keyof CommandConfig>, true>),
+];
+
 /**
- * The shape every spawned command shares: a non-empty executable, when set
- * positive integer timeouts, and when set a `log` path inside the project
- * root. A NaN or infinite budget would otherwise make the readiness loop spin
- * without a deadline; a log outside the root would let config write anywhere.
+ * The shape every spawned command shares: only the `keys` it takes, a
+ * non-empty executable, string `args` and `env` values, when set positive
+ * integer timeouts, and when set a `log` path inside the project root. A
+ * misspelled key would otherwise be dropped without a word; a NaN or
+ * infinite budget would make the readiness loop spin without a deadline; a
+ * log outside the root would let config write anywhere.
  */
-function validateCommand(command: CommandConfig, label: string, projectRoot: string): void {
+function validateCommand(
+  command: CommandConfig,
+  label: string,
+  projectRoot: string,
+  keys: readonly string[] = COMMAND_KEYS,
+): void {
   if (typeof command !== 'object' || command === null) {
     throw new ConfigurationError('INVALID_CONFIG', `${label} must be an object`);
   }
+  rejectUnknownKeys(label, command, keys);
   if (typeof command.executable !== 'string' || command.executable.length === 0) {
     throw new ConfigurationError('INVALID_CONFIG', `${label}.executable is required`);
+  }
+  if (command.args !== undefined) {
+    if (!Array.isArray(command.args)) throw new ConfigurationError('INVALID_CONFIG', `${label}.args must be an array of strings`);
+    command.args.forEach((arg: unknown, index) => requireString(arg, `${label}.args[${index}]`));
+  }
+  if (command.env !== undefined) {
+    if (typeof command.env !== 'object' || command.env === null || Array.isArray(command.env)) {
+      throw new ConfigurationError('INVALID_CONFIG', `${label}.env must be an object of variable name to string`);
+    }
+    for (const [key, value] of Object.entries(command.env)) requireString(value, `${label}.env.${key}`);
   }
   positiveInt(command.startupTimeout, `${label}.startupTimeout`, 'milliseconds');
   positiveInt(command.shutdownTimeout, `${label}.shutdownTimeout`, 'milliseconds');
@@ -237,6 +282,22 @@ function validateCommand(command: CommandConfig, label: string, projectRoot: str
   if (command.reuseExisting !== undefined && typeof command.reuseExisting !== 'boolean') {
     throw new ConfigurationError('INVALID_CONFIG', `${label}.reuseExisting must be a boolean`);
   }
+}
+
+/**
+ * Refuses a command value that is not a string. A `secrets.get()` handle is
+ * named as one: the child process would receive `[object Object]`, and only
+ * an engine option that declares secrets resolves a handle to its value.
+ */
+function requireString(value: unknown, label: string): void {
+  if (typeof value === 'string') return;
+  if (isSecret(value)) {
+    throw new ConfigurationError(
+      'INVALID_CONFIG',
+      `${label} must be a string, got secrets.get(${JSON.stringify(value.name)}): only an engine option that declares secrets accepts a handle, such as web({ basicAuth: { password } }); pass the value itself, read from process.env`,
+    );
+  }
+  throw new ConfigurationError('INVALID_CONFIG', `${label} must be a string, got ${describeValue(value)}`);
 }
 
 /** Only a command with a URL to probe can find something already answering there. */
@@ -299,7 +360,7 @@ export function resolveServices(
   return raw.map((declaredService: ServiceConfig, index): ResolvedService => {
     const position = `${prefix}[${index}]`;
     const service = expandCommandPort(declaredService, position, expand);
-    validateCommand(service, position, projectRoot);
+    validateCommand(service, position, projectRoot, SERVICE_KEYS);
     const { name: _name, readyUrl: rawReadyUrl, waitForExit, teardown: declaredTeardown, ...command } = service;
     const readyUrl = httpUrl(
       rawReadyUrl === undefined ? undefined : expand(rawReadyUrl, `${position}.readyUrl`),

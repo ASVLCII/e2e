@@ -87,6 +87,31 @@ describe('resolveConfig', () => {
     ]);
   });
 
+  it('refuses a wildcard-free tests entry that names a directory, which a glob would read as a file', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-tests-dir-'));
+    const resolveIn = (tests: string[]) => resolveConfig({ targets: TARGETS, tests }, { projectRoot: root, env: BASE_ENV });
+    try {
+      fs.mkdirSync(path.join(root, 'tests', 'wip'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'tests', 'wip', 'a.e2e.ts'), '');
+      expect(() => resolveIn(['tests/**/*.e2e.ts', '!tests/wip'])).toThrow(
+        expect.objectContaining({
+          code: 'INVALID_GLOB',
+          message: 'tests entry "!tests/wip" names a directory, and a glob names files, so it excludes nothing; write "!tests/wip/**" to exclude everything under it',
+        }),
+      );
+      expect(() => resolveIn(['./tests'])).toThrow(
+        expect.objectContaining({
+          code: 'INVALID_GLOB',
+          message: 'tests entry "./tests" names a directory, and a glob names files, so it selects nothing; write "tests/**/*.e2e.ts" to select the test files under it',
+        }),
+      );
+      expect(resolveIn(['tests/**/*.e2e.ts', '!tests/wip/**']).tests).toEqual(['tests/**/*.e2e.ts', '!tests/wip/**']);
+      expect(resolveIn(['tests/**/*.e2e.ts', '!tests/wip/a.e2e.ts', '!tests/gone']).tests).toHaveLength(3);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('applies the config bounds to CLI overrides too', () => {
     expect(() =>
       resolveConfig({ targets: TARGETS }, { projectRoot: ROOT, env: BASE_ENV, cli: { workers: 0 } }),
@@ -182,6 +207,47 @@ describe('resolveConfig', () => {
     expect(() => resolveApp({ url: 'http://localhost:3000', command: { executable: '' } })).toThrow(
       /command.executable is required/,
     );
+  });
+
+  it('takes only strings in a command\'s args and env, naming secrets.get() for a handle', () => {
+    const url = 'http://localhost:3000';
+    expect(() => resolveApp({ url, command: { executable: 'node', args: ['server.mjs', 3000] } } as never)).toThrow(
+      expect.objectContaining({ code: 'INVALID_CONFIG', message: 'target "web" engine fake app.command.args[1] must be a string, got 3000' }),
+    );
+    expect(resolveApp({ url, command: { executable: 'node', env: { PORT: '3000', UNSET: undefined } } } as never).command?.env).toEqual({
+      PORT: '3000',
+    });
+    expect(() => resolveApp({ url, command: { executable: 'node', env: ['PORT=3000'] } } as never)).toThrow(
+      'target "web" engine fake app.command.env must be an object of variable name to string',
+    );
+    expect(() => resolveApp({ url, command: { executable: 'node', env: { PORT: 3000 } } } as never)).toThrow(
+      expect.objectContaining({ code: 'INVALID_CONFIG', message: 'target "web" engine fake app.command.env.PORT must be a string, got 3000' }),
+    );
+    expect(() => resolveApp({ url, command: { executable: 'node', env: { API_KEY: secrets.get('API_KEY') } } } as never)).toThrow(
+      expect.objectContaining({
+        code: 'INVALID_CONFIG',
+        message: expect.stringMatching(/^target "web" engine fake app\.command\.env\.API_KEY must be a string, got secrets\.get\("API_KEY"\): only an engine option that declares secrets/),
+      }),
+    );
+    expect(() =>
+      resolveApp({ url, services: [{ executable: 'db', waitForExit: true, env: { PASSWORD: secrets.get('db') } }] } as never),
+    ).toThrow(/app\.services\[0\]\.env\.PASSWORD must be a string, got secrets\.get\("db"\)/);
+  });
+
+  it('rejects a command, service, or teardown key the contract does not know, naming the nearest', () => {
+    const url = 'http://localhost:3000';
+    expect(() => resolveApp({ url, command: { executable: 'node', arg: ['server.mjs'] } } as never)).toThrow(
+      expect.objectContaining({ code: 'INVALID_CONFIG', message: 'target "web" engine fake app.command has unknown key "arg"; did you mean "args"?' }),
+    );
+    expect(() => resolveApp({ url, command: { executable: 'node', readyUrl: url } } as never)).toThrow(
+      /app\.command has unknown key "readyUrl"; expected one of executable, args, cwd, env, startupTimeout, shutdownTimeout, log, reuseExisting/,
+    );
+    expect(() => resolveApp({ url, services: [{ executable: 'db', readyURL: url }] } as never)).toThrow(
+      'target "web" engine fake app.services[0] has unknown key "readyURL"; did you mean "readyUrl"?',
+    );
+    expect(() =>
+      resolveApp({ url, services: [{ executable: 'db', waitForExit: true, teardown: { executable: 'db', waitForExit: true } }] } as never),
+    ).toThrow(/app\.services\[0\]\.teardown has unknown key "waitForExit"; expected one of executable, args/);
   });
 
   it('rejects specVersion, which the runner version replaced', () => {
