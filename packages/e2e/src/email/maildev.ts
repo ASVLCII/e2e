@@ -55,6 +55,8 @@ export function maildev(options: MaildevOptions = {}): MailProvider<MailLease> {
   const url = (options.url ?? DEFAULT_URL).replace(/\/+$/u, '');
   const domain = options.domain ?? DEFAULT_DOMAIN;
   let reachable: Promise<void> | undefined;
+  /** Addresses handed out and not yet given back: one SMTP delivery to several of them is one message, kept until the last goes. */
+  const live = new Set<string>();
 
   /** One REST call, its failure worded for a test log. */
   const call = async <T>(path: string, signal: AbortSignal, init: RequestInit = {}): Promise<T> => {
@@ -90,10 +92,13 @@ export function maildev(options: MaildevOptions = {}): MailProvider<MailLease> {
         },
       );
       await withAbort(reachable, signal, () => signal.reason as Error);
-      return { address: `e2e-${randomBytes(6).toString('hex')}@${domain}`.toLowerCase() };
+      const address = `e2e-${randomBytes(6).toString('hex')}@${domain}`.toLowerCase();
+      live.add(address);
+      return { address };
     },
     async release(lease, { signal }) {
-      const ids = (await delivered(lease.address, signal)).map((email) => email.id);
+      live.delete(lease.address);
+      const ids = (await delivered(lease.address, signal)).filter((email) => !recipients(email).some((address) => live.has(address))).map((email) => email.id);
       if (ids.length > 0) await call('email/delete', signal, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids }) });
     },
     list: async (lease, { signal }) => (await delivered(lease.address, signal)).map(summary),

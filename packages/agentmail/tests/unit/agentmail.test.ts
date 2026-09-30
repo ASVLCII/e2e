@@ -72,6 +72,19 @@ describe('agentMail() aliases', () => {
   });
 });
 
+describe('agentMail() releasing a message two aliases received', () => {
+  it('keeps it until the last of them is released', async () => {
+    const provider = agentMail();
+    const me = await provider.acquire(context);
+    const teammate = await provider.acquire(context);
+    org.deliver(me.inboxId, { to: [teammate.address], cc: [me.address], subject: 'Invite' });
+    await provider.release(me, context);
+    expect(org.inboxes.get(me.inboxId)!.messages.map((message) => message.subject)).toEqual(['Invite']);
+    await provider.release(teammate, context);
+    expect(org.inboxes.get(me.inboxId)!.messages).toEqual([]);
+  });
+});
+
 describe('agentMail({ isolation: "inbox" })', () => {
   it('creates a tagged inbox per lease and deletes it on release, one already gone included', async () => {
     const provider = agentMail({ isolation: 'inbox', domain: 'acme.test', displayName: 'QA' });
@@ -90,6 +103,16 @@ describe('agentMail({ isolation: "inbox" })', () => {
     await provider.release(lease, context);
     await provider.release(lease, context);
     expect(org.deleted).toEqual(['inbox1@acme.test']);
+  });
+
+  it('sweeps again on the next acquire when a sweep could not list the inboxes', async () => {
+    org.inboxes.set('stale@agentmail.to', { clientId: 'e2e-old', metadata: { e2e: true, e2e_expires_at: new Date(Date.now() - 1000).toISOString() }, messages: [] });
+    const provider = agentMail({ isolation: 'inbox' });
+    org.failNext(503, { message: 'Unavailable' });
+    await provider.acquire(context);
+    expect(org.deleted).toEqual([]);
+    await provider.acquire(context);
+    expect(org.deleted).toEqual(['stale@agentmail.to']);
   });
 
   it('sweeps inboxes of its own a killed run left past their time, once per process', async () => {

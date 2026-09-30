@@ -78,9 +78,9 @@ export class Mailbox {
   }
 
   /**
-   * Every email received so far that matches, oldest first. One the provider
-   * will not read (deleted between listing and reading) is left out rather
-   * than failing the read of every other.
+   * Every email received so far that matches, oldest first. One deleted
+   * between listing and reading is left out rather than failing the read of
+   * every other; a read the provider refuses for anything else fails.
    */
   async messages(filter: EmailFilter, signal: AbortSignal): Promise<EmailMessage[]> {
     const { provider } = this.mail;
@@ -94,8 +94,10 @@ export class Mailbox {
         try {
           email = toEmailMessage(await providerCall(provider, `reading ${summary.id}`, signal, () => provider.read(this.lease, summary.id, context)));
         } catch (cause) {
-          if (cause instanceof EmailProviderError && !cause.providerRetryable) continue;
-          throw cause;
+          if (!(cause instanceof EmailProviderError && !cause.providerRetryable)) throw cause;
+          const listed = await providerCall(provider, `listing ${this.address}`, signal, () => provider.list(this.lease, context));
+          if (listed.some((candidate) => candidate.id === summary.id)) throw cause;
+          continue;
         }
         this.emails.set(summary.id, email);
       }

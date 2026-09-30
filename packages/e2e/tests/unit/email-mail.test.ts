@@ -184,12 +184,24 @@ describe('waitForMessage', () => {
     await expect(inbox.waitForMessage({ timeout: 1_200 })).rejects.toMatchObject({ code: 'EMAIL_PROVIDER_FAILED', message: expect.stringContaining('503 Service Unavailable') });
   });
 
-  it('leaves out a message the provider will not read, and reads the rest', async () => {
-    const flaky: MailProvider = { ...provider, read: async (lease, id, context) => (id === 'm2' ? Promise.reject(Object.assign(new Error('404'), { retryable: false })) : provider.read(lease, id, context)) };
-    const inbox = await open({ provider: flaky }).email.inbox();
+  it('leaves out a message deleted between listing and reading, and reads the rest', async () => {
+    let deleted = false;
+    const racing: MailProvider = {
+      ...provider,
+      list: async (lease, context) => (await provider.list(lease, context)).filter((summary) => !(deleted && summary.id === 'm2')),
+      read: async (lease, id, context) => (id === 'm2' ? ((deleted = true), Promise.reject(Object.assign(new Error('404'), { retryable: false }))) : provider.read(lease, id, context)),
+    };
+    const inbox = await open({ provider: racing }).email.inbox();
     provider.deliver(inbox.address, { subject: 'Gone' });
     provider.deliver(inbox.address, { subject: 'Hello' });
     await expect(inbox.waitForMessage({ timeout: 0 })).resolves.toMatchObject({ subject: 'Hello' });
+  });
+
+  it('fails on a read the provider refuses while the message is still listed, rather than calling it missing', async () => {
+    const refusing: MailProvider = { ...provider, read: async () => Promise.reject(Object.assign(new Error('key rejected'), { retryable: false })) };
+    const inbox = await open({ provider: refusing }).email.inbox();
+    provider.deliver(inbox.address, { subject: 'Hello' });
+    await expect(inbox.waitForMessage({ timeout: 5_000 })).rejects.toMatchObject({ code: 'EMAIL_PROVIDER_FAILED', message: expect.stringContaining('key rejected') });
   });
 
   it('names what the last poll saw on a timeout, without listing again', async () => {

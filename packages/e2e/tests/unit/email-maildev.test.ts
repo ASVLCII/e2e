@@ -120,6 +120,17 @@ describe('maildev()', () => {
     expect(requests).toEqual(['GET /api/email']);
   });
 
+  it('keeps a message another live address also received until that address is released too', async () => {
+    const provider = maildev({ url });
+    const me = await provider.acquire(context);
+    const teammate = await provider.acquire(context);
+    catchMail('shared', { to: [teammate.address], envelope: [teammate.address, me.address], subject: 'Invite' });
+    await provider.release(me, context);
+    expect(store.map((email) => email.id)).toEqual(['shared']);
+    await provider.release(teammate, context);
+    expect(store).toEqual([]);
+  });
+
   it('names the fix when MailDev is not running, and marks a rejected request as not worth retrying', async () => {
     await expect(maildev({ url: 'http://127.0.0.1:9' }).acquire(context)).rejects.toThrow(/^MailDev is not answering at http:\/\/127\.0\.0\.1:9 \(.+\); start it before the run, e\.g\. npx maildev, or pass maildev\(\{ url \}\)$/u);
     const provider = maildev({ url });

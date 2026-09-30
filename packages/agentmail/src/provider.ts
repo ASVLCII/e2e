@@ -74,6 +74,8 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
   const clients = new Map<string, AgentMailApi>();
   const sharedInboxes = new Map<AgentMailApi, Promise<string>>();
   const swept = new Set<AgentMailApi>();
+  /** Aliases handed out and not yet given back: one delivery to several of them is one message, kept until the last goes. */
+  const live = new Set<string>();
   const clientFor = (): AgentMailApi => {
     const apiKey = process.env[AGENTMAIL_API_KEY]?.trim();
     if (apiKey === undefined || apiKey === '') throw new AgentMailRejected(`${AGENTMAIL_API_KEY} is not set; create a key at https://console.agentmail.to`);
@@ -97,10 +99,16 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
   /** Deletes the inboxes of their own that runs left behind past their time, once per process; best effort. */
   const sweep = async (client: AgentMailApi, signal: AbortSignal): Promise<void> => {
     if (swept.has(client)) return;
+    let inboxes: Awaited<ReturnType<AgentMailApi['e2eInboxes']>>;
+    try {
+      inboxes = await client.e2eInboxes(signal);
+    } catch {
+      // A later acquire sweeps again; a failed sweep never blocks creating an inbox.
+      return;
+    }
     swept.add(client);
     const now = Date.now();
-    const stale = (await client.e2eInboxes(signal).catch(() => [])).filter((inbox) => Date.parse(inbox.expiresAt) < now);
-    await Promise.allSettled(stale.map((inbox) => client.deleteInbox(inbox.inboxId, signal)));
+    await Promise.allSettled(inboxes.filter((inbox) => Date.parse(inbox.expiresAt) < now).map((inbox) => client.deleteInbox(inbox.inboxId, signal)));
   };
   /** The recipients a listed message names, bare and lowercased. */
   const recipients = (summary: MailSummary): string[] =>
@@ -133,6 +141,7 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
         throw new AgentMailRejected(`inboxId ${JSON.stringify(base)} is not an AgentMail inbox address; name the inbox itself, not an alias of it`);
       }
       const alias = `${base.slice(0, at)}+e2e-${randomBytes(5).toString('hex')}${base.slice(at)}`.toLowerCase();
+      live.add(alias);
       return { address: alias, inboxId: base, alias: true, since };
     },
     async release(lease, { signal }) {
@@ -142,7 +151,8 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
         return;
       }
       // An alias's codes and links would otherwise sit in the shared inbox for good.
-      const mail = await received(lease, signal);
+      live.delete(lease.address);
+      const mail = (await received(lease, signal)).filter((summary) => !recipients(summary).some((address) => live.has(address)));
       await Promise.all(mail.map((summary) => client.deleteMessage(lease.inboxId, summary.id, signal)));
     },
     list: (lease, { signal }) => received(lease, signal),
