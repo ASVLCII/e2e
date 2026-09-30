@@ -6,7 +6,7 @@ import { defineTool } from '../../src/agent/tool.ts';
 import { createToolLoopExecutor } from '../../src/agent/tool-loop.ts';
 import type { SdkLanguageModel } from '../../src/agent/ai-sdk.ts';
 import type { E2EConfig } from '../../src/types.ts';
-import { HARNESS_TOOL_NAMES } from '../../src/agent/action-names.ts';
+import { EMAIL_TOOL_NAMES, HARNESS_TOOL_NAMES } from '../../src/agent/action-names.ts';
 import { FINDING_TOOL_NAME } from '../../src/explore/executor.ts';
 import { recordingTools } from '../../src/mcp/recording.ts';
 
@@ -245,7 +245,7 @@ describe('the built-in agent options', () => {
     }
   });
 
-  it('rejects the names of the tools the harness adds in an agent step, an e2e mcp session, explore, and an attempt with email', () => {
+  it('rejects the names of the tools the harness adds in an agent step, an e2e mcp session, explore, and an email step', () => {
     const where = { complete_step: 'every agent step', locate: 'an e2e mcp session', start_recording: 'an e2e mcp session', stop_recording: 'an e2e mcp session', report_finding: 'e2e explore', new_email_address: 'an agent step when config.email is set', wait_for_email: 'an agent step when config.email is set' };
     for (const [name, surface] of Object.entries(where)) {
       expect(() => resolve({ agents: { ux: { tools: { [name]: readOnlyTool() } } } })).toThrow(
@@ -254,7 +254,7 @@ describe('the built-in agent options', () => {
     }
     // The list is the tools those surfaces really add.
     const sessionTools = Object.keys({ locate: true, ...recordingTools({} as never) });
-    expect([...HARNESS_TOOL_NAMES.keys()].toSorted()).toEqual(['complete_step', FINDING_TOOL_NAME, ...sessionTools].toSorted());
+    expect([...HARNESS_TOOL_NAMES.keys()].toSorted()).toEqual(['complete_step', FINDING_TOOL_NAME, ...sessionTools, ...EMAIL_TOOL_NAMES].toSorted());
   });
 
   it('refuses a model instance used as the entry itself, naming the model', () => {
