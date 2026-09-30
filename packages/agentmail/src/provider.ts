@@ -25,6 +25,9 @@ const SHARED_INBOX_MS = 30_000;
 /** The budget of a sweep, which every caller waits on (or, for alias mail, nobody does), whoever started it. */
 const SWEEP_MS = 30_000;
 
+/** How often a long-lived process (an `e2e mcp` server) sweeps again. */
+const SWEEP_EVERY_MS = 60 * 60 * 1000;
+
 /**
  * How far before its lease an alias's listing starts: AgentMail stamps a
  * message with its own clock, which may run behind this machine's.
@@ -78,10 +81,10 @@ interface AgentMailLease extends MailLease {
 export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMailLease> {
   const clients = new Map<string, AgentMailApi>();
   const sharedInboxes = new Map<AgentMailApi, Promise<string>>();
-  /** The sweep of each client, shared by every acquire while it runs and kept once it succeeded; a failed one is tried again. */
-  const sweeps = new Map<AgentMailApi, Promise<void>>();
-  /** The shared inboxes whose old alias mail this process already set out to delete. */
-  const aliasSweeps = new Set<string>();
+  /** The latest sweep of each client, shared by every acquire while it runs; a failed one is tried again, a done one after an hour. */
+  const sweeps = new Map<AgentMailApi, { readonly running: Promise<void>; readonly at: number }>();
+  /** When this process last set out to delete each shared inbox's old alias mail. */
+  const aliasSweeps = new Map<string, number>();
   const clientFor = (): AgentMailApi => {
     const apiKey = process.env[AGENTMAIL_API_KEY]?.trim();
     if (apiKey === undefined || apiKey === '') throw new AgentMailRejected(`${AGENTMAIL_API_KEY} is not set; create a key at https://console.agentmail.to`);
@@ -104,32 +107,37 @@ export function agentMail(options: AgentMailOptions = {}): MailProvider<AgentMai
   };
   /**
    * Deletes the inboxes of their own that runs left behind past their time,
-   * once per process. Every acquire waits on the one sweep, so none creates an
+   * once an hour at most. Every acquire waits on the one sweep, so none creates an
    * inbox while an expired one still holds the quota; a sweep that failed
    * runs again on the next acquire, and never blocks creating an inbox.
    */
   const sweep = async (client: AgentMailApi, signal: AbortSignal): Promise<void> => {
-    let running = sweeps.get(client);
-    if (running === undefined) {
+    let latest = sweeps.get(client);
+    if (latest === undefined || Date.now() - latest.at > SWEEP_EVERY_MS) {
       const budget = AbortSignal.timeout(SWEEP_MS);
-      running = (async () => {
+      const running = (async () => {
         const now = Date.now();
         const expired = (await client.e2eInboxes(budget)).filter((inbox) => Date.parse(inbox.expiresAt) < now);
         await Promise.all(expired.map((inbox) => client.deleteInbox(inbox.inboxId, budget)));
       })();
-      running.catch(() => sweeps.delete(client));
-      sweeps.set(client, running);
+      latest = { running, at: Date.now() };
+      const started = latest;
+      running.catch(() => {
+        if (sweeps.get(client) === started) sweeps.delete(client);
+      });
+      sweeps.set(client, latest);
     }
-    await raceAbort(running, signal, 'sweeping expired inboxes').catch(() => undefined);
+    await raceAbort(latest.running, signal, 'sweeping expired inboxes').catch(() => undefined);
   };
   /**
-   * Deletes alias mail older than any attempt lives, once per process and
+   * Deletes alias mail older than any attempt lives, once an hour at most per
    * inbox, in the background: mail sent to several aliases at once is kept on
    * release while another alias, in any worker, may still read it.
    */
   const sweepAliasMail = (client: AgentMailApi, inboxId: string): void => {
-    if (aliasSweeps.has(inboxId)) return;
-    aliasSweeps.add(inboxId);
+    const last = aliasSweeps.get(inboxId);
+    if (last !== undefined && Date.now() - last <= SWEEP_EVERY_MS) return;
+    aliasSweeps.set(inboxId, Date.now());
     const budget = AbortSignal.timeout(SWEEP_MS);
     void (async () => {
       const old = (await client.received(inboxId, { before: new Date(Date.now() - INBOX_TTL_MS) }, budget)).filter((summary) => recipients(summary).some((address) => isAlias(inboxId, address)));

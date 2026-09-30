@@ -160,7 +160,22 @@ describe('agentMail({ isolation: "inbox" })', () => {
     expect(org.inboxListings).toBe(2);
   });
 
-  it('sweeps inboxes of its own a killed run left past their time, once per process', async () => {
+  it('sweeps again an hour on, for a long-lived process such as an e2e mcp server', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const provider = agentMail({ isolation: 'inbox' });
+      await provider.acquire(context);
+      await provider.acquire(context);
+      expect(org.inboxListings).toBe(1);
+      vi.setSystemTime(Date.now() + 61 * 60 * 1000);
+      await provider.acquire(context);
+      expect(org.inboxListings).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sweeps inboxes of its own a killed run left past their time, then not again within the hour', async () => {
     org.inboxes.set('stale@agentmail.to', { clientId: 'e2e-old', metadata: { e2e: true, e2e_expires_at: new Date(Date.now() - 1000).toISOString() }, messages: [] });
     org.inboxes.set('live@agentmail.to', { clientId: 'e2e-new', metadata: { e2e: true, e2e_expires_at: new Date(Date.now() + 60_000).toISOString() }, messages: [] });
     org.inboxes.set('mine@agentmail.to', { clientId: undefined, metadata: undefined, messages: [] });
