@@ -1,4 +1,4 @@
-<a href="https://tester.army/e2e?utm_source=e2e&utm_medium=github&utm_campaign=readme_banner"><img src="./.github/assets/readme-banner.png" alt="e2e by TesterArmy" width="100%" /></a>
+<a href="https://tester.army/e2e?utm_source=e2e&utm_medium=github&utm_campaign=readme_banner"><img src="./.github/assets/readme-banner.png" alt="e2e, the open source AI testing framework by TesterArmy" width="100%" /></a>
 
 <p align="center">
   <a href="https://tester.army?utm_source=e2e&utm_medium=github&utm_campaign=readme_badge"><img alt="Made by TesterArmy" src="./.github/assets/made-by-testerarmy.svg" /></a>
@@ -9,8 +9,7 @@
 
 # e2e
 
-[e2e](https://tester.army/e2e?utm_source=e2e&utm_medium=github&utm_campaign=readme_intro) is an end-to-end testing framework for web and mobile apps. Describe a goal in natural language and an agent interacts with the app to complete it. Use locators and assertions in the same test to check exact results. Customize anything from agent to the engine.
-
+[e2e](https://tester.army/e2e?utm_source=e2e&utm_medium=github&utm_campaign=readme_intro) is an end-to-end testing framework for web and mobile apps. Describe a goal in natural language and an agent drives the app to reach it. Check the result with locators and assertions in the same test.
 
 ```ts
 // tests/checkout.e2e.ts
@@ -26,39 +25,65 @@ test('a member upgrades to Pro', async ({ app, agent, screen }) => {
 });
 ```
 
-```bash
-npx e2e init
-```
-
 An agent step that a later assertion verifies records its actions, and the
 next run replays them with no model calls until the app changes. Tests
 without agent steps need no model. Bring your own subscription, API key, or
 local model.
 
-## Documentation
+## Quick start
 
-[e2e.tester.army/docs](https://e2e.tester.army/docs): quickstart, writing
-tests, mobile, migrating from Playwright, Cypress, Selenium, Detox, or
-Maestro, and the full reference. The `e2e` package ships every page, so
-coding agents can read them offline from its `docs/` directory
-(`node_modules/e2e/docs`).
+```bash
+npx e2e init
+```
+
+`init` asks for an engine, web or mobile, and a model provider, then writes a
+config and an example test. The
+[quickstart](https://e2e.tester.army/docs/quickstart) covers the rest.
 
 ## Packages
 
-- [`e2e`](https://www.npmjs.com/package/e2e): SDK, runner, and CLI.
-- [`@e2e-dev/web`](https://www.npmjs.com/package/@e2e-dev/web): the browser engine.
-- [`@e2e-dev/mobile`](https://www.npmjs.com/package/@e2e-dev/mobile): the iOS and Android engine.
-- [`@e2e-dev/github`](https://www.npmjs.com/package/@e2e-dev/github): the pull request comment reporter.
-- [`@e2e-dev/kernel`](https://www.npmjs.com/package/@e2e-dev/kernel): Kernel hosted browsers for the web
-  engine.
-- [`@e2e-dev/eas`](https://www.npmjs.com/package/@e2e-dev/eas): EAS Simulators hosted iOS simulators and
-  Android emulators for the mobile engine.
+| Package | What it does |
+| --- | --- |
+| [`e2e`](https://www.npmjs.com/package/e2e) | The SDK, runner, and CLI. |
+| [`@e2e-dev/web`](https://www.npmjs.com/package/@e2e-dev/web) | Browser engine: Chromium, Firefox, and WebKit through Playwright. |
+| [`@e2e-dev/mobile`](https://www.npmjs.com/package/@e2e-dev/mobile) | iOS and Android engine: simulators and emulators through agent-device. |
+| [`@e2e-dev/github`](https://www.npmjs.com/package/@e2e-dev/github) | Reporter that posts results as a pull request comment. |
+| [`@e2e-dev/kernel`](https://www.npmjs.com/package/@e2e-dev/kernel) | Kernel hosted browsers for the web engine. |
+| [`@e2e-dev/eas`](https://www.npmjs.com/package/@e2e-dev/eas) | EAS Simulators hosted iOS simulators and Android emulators for the mobile engine. |
+
+## Documentation
+
+[e2e.tester.army/docs](https://e2e.tester.army/docs). The `e2e` package ships
+every page, so coding agents can read them offline in `node_modules/e2e/docs`.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and [SECURITY.md](./SECURITY.md).
-Apache-2.0.
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Questions go to
+[Discord](https://tester.army/discord).
 
-Built by [TesterArmy](https://tester.army/?utm_source=e2e&utm_medium=github&utm_campaign=readme_footer),
-the agentic testing platform that runs plain-English tests on web and mobile
-apps and reports back with screenshots and recordings.
+## Security
+
+Please don't open public issues for security vulnerabilities. Follow
+[SECURITY.md](./SECURITY.md) and report them to
+[security@tester.army](mailto:security@tester.army).
+
+## Telemetry
+
+The CLI sends anonymous usage data, such as which commands and engines run and
+where runs fail, but no test content, app content, or credentials. Opt out with
+`npx e2e telemetry disable` or `E2E_TELEMETRY_DISABLED=1`.
+[Telemetry](https://e2e.tester.army/docs/telemetry) lists every field.
+
+## Status
+
+> [!NOTE]
+> e2e is in active development on the way to 1.0. APIs and config can still
+> change between minor releases.
+
+## Made by TesterArmy
+
+e2e is built by [TesterArmy](https://tester.army/?utm_source=e2e&utm_medium=github&utm_campaign=readme_footer),
+the agentic testing platform that runs plain-language tests on web and mobile
+apps, on every pull request or on a schedule.
+
+Apache-2.0.
