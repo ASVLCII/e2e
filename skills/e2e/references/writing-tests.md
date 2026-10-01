@@ -224,8 +224,9 @@ attributes is `POLICY_DENIED`, as is `toHaveAttribute` on one, negated too.
 
 `expect(locator)` polls up to `config.assertionTimeout` (5 s) or
 `{ timeout }`; `.not` inverts and passes once the negation has held 1 s
-continuously, so it never returns in under a second. `expect(value,
-message?)` is synchronous.
+continuously, or at the deadline when every sample held it, so it returns in
+under a second only under a shorter budget. `expect(value, message?)` is
+synchronous.
 `expect.poll(read, { timeout?, interval?, message? })` re-reads until a value
 matcher passes (`assertionTimeout` and 100 ms by default, stopping with the
 attempt); a throwing read keeps polling, and it is not a report step.

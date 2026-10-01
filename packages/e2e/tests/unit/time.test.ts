@@ -139,6 +139,96 @@ describe('pollCondition', () => {
     await promise;
   });
 
+  it('negated: a short budget held throughout passes at the deadline however long the first sample took', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    let settled: 'passed' | 'failed' | undefined;
+    const promise = pollCondition(
+      makeOptions({
+        negated: true,
+        timeoutMs: 350,
+        evaluate: async () => {
+          calls += 1;
+          if (calls === 1) await sleep(60);
+          return false;
+        },
+      }),
+    );
+    promise.then(
+      () => {
+        settled = 'passed';
+      },
+      () => {
+        settled = 'failed';
+      },
+    );
+    await vi.advanceTimersByTimeAsync(350 + POLL_INTERVAL_MS);
+    expect(settled).toBe('passed');
+  });
+
+  it('negated: a budget of exactly the grace window passes at the deadline when every read is slow', async () => {
+    vi.useFakeTimers();
+    let settled: 'passed' | 'failed' | undefined;
+    const promise = pollCondition(
+      makeOptions({
+        negated: true,
+        timeoutMs: NEGATION_GRACE_MS,
+        evaluate: async () => {
+          await sleep(60);
+          return false;
+        },
+      }),
+    );
+    promise.then(
+      () => {
+        settled = 'passed';
+      },
+      () => {
+        settled = 'failed';
+      },
+    );
+    await vi.advanceTimersByTimeAsync(NEGATION_GRACE_MS + 2 * (POLL_INTERVAL_MS + 60));
+    expect(settled).toBe('passed');
+  });
+
+  it('negated: a short budget whose negation broke once fails at the deadline', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const promise = pollCondition(
+      makeOptions({
+        negated: true,
+        timeoutMs: 350,
+        evaluate: async () => {
+          calls += 1;
+          return calls === 2;
+        },
+      }),
+    );
+    const assertion = expect(promise).rejects.toThrow('poll timed out');
+    await vi.advanceTimersByTimeAsync(350 + POLL_INTERVAL_MS);
+    await assertion;
+  });
+
+  it('negated: one sample slower than the grace window does not satisfy it alone', async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const promise = pollCondition(
+      makeOptions({
+        negated: true,
+        timeoutMs: 3000,
+        evaluate: async () => {
+          calls += 1;
+          if (calls > 1) return true;
+          await sleep(NEGATION_GRACE_MS + POLL_INTERVAL_MS);
+          return false;
+        },
+      }),
+    );
+    const assertion = expect(promise).rejects.toThrow('poll timed out');
+    await vi.advanceTimersByTimeAsync(3000 + POLL_INTERVAL_MS);
+    await assertion;
+  });
+
   it('negated: passes only after the grace window holds continuously', async () => {
     vi.useFakeTimers();
     let resolved = false;

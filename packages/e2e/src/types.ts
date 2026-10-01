@@ -741,7 +741,7 @@ export interface TestAPI<Fixtures = TestFixtures> {
 }
 
 export interface AsyncExpectation {
-  /** Inverts the matcher. A negated matcher passes after 1000 ms of continuous truth. */
+  /** Inverts the matcher. A negated matcher passes after 1000 ms of continuous truth, or at the deadline when every sample held it. */
   readonly not: AsyncExpectation;
   /** Waits for visibility. */
   toBeVisible(options?: { timeout?: number }): Promise<void>;

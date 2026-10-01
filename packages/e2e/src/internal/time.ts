@@ -59,8 +59,9 @@ export interface PollConditionOptions {
   readonly negated: boolean;
   /**
    * Evaluates the positive condition once. Returns undefined when the
-   * condition cannot be evaluated yet: the positive poll keeps waiting and
-   * the negation grace window resets.
+   * condition cannot be evaluated yet: the positive poll keeps waiting, and a
+   * negated poll counts it as a break, the same as true. The negation grace
+   * window resets and the poll can no longer pass at the deadline.
    */
   evaluate(): Promise<boolean | undefined>;
   onTimeout(): Error | Promise<Error>;
@@ -68,25 +69,29 @@ export interface PollConditionOptions {
 
 /**
  * Polls a condition until it holds (or, when negated, until its negation has
- * held continuously for the negation grace window), throwing the caller's
- * error at the deadline.
+ * held continuously for the negation grace window, or until the deadline when
+ * every sample held it), throwing the caller's error at the deadline.
  */
 export async function pollCondition(options: PollConditionOptions): Promise<void> {
-  // A budget shorter than the grace window still has to be satisfiable: the
-  // negation then only needs to hold for the budget itself.
-  const grace = Math.min(NEGATION_GRACE_MS, Math.max(0, options.deadline.remaining()));
   let negatedTrueSince: number | undefined;
+  let heldThroughout = true;
   for (;;) {
     const value = await options.evaluate();
+    const now = Date.now();
     if (!options.negated) {
       if (value === true) return;
     } else if (value === false) {
-      negatedTrueSince ??= Date.now();
-      if (Date.now() - negatedTrueSince >= grace) return;
+      negatedTrueSince ??= now;
+      if (now - negatedTrueSince >= NEGATION_GRACE_MS) return;
+      // The window is timed from the first sample's return, so under a budget
+      // shorter than the window, or one a slow first read ate into, it ends
+      // after the deadline. A negation every sample held passes there instead.
+      if (heldThroughout && options.deadline.expired(now)) return;
     } else {
       negatedTrueSince = undefined;
+      heldThroughout = false;
     }
-    if (options.deadline.expired()) throw await options.onTimeout();
+    if (options.deadline.expired(now)) throw await options.onTimeout();
     await sleep(POLL_INTERVAL_MS, options.signal);
   }
 }
