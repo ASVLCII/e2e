@@ -43,13 +43,13 @@ Maestro, and the full reference.
 
 ## Packages
 
-- [`e2e`](./packages/e2e): SDK, runner, and CLI.
-- [`@e2e-dev/web`](./packages/web): the browser engine.
-- [`@e2e-dev/mobile`](./packages/mobile): the iOS and Android engine.
-- [`@e2e-dev/github`](./packages/github): the pull request comment reporter.
-- [`@e2e-dev/kernel`](./packages/kernel): Kernel hosted browsers for the web
+- [`e2e`](https://www.npmjs.com/package/e2e): SDK, runner, and CLI.
+- [`@e2e-dev/web`](https://www.npmjs.com/package/@e2e-dev/web): the browser engine.
+- [`@e2e-dev/mobile`](https://www.npmjs.com/package/@e2e-dev/mobile): the iOS and Android engine.
+- [`@e2e-dev/github`](https://www.npmjs.com/package/@e2e-dev/github): the pull request comment reporter.
+- [`@e2e-dev/kernel`](https://www.npmjs.com/package/@e2e-dev/kernel): Kernel hosted browsers for the web
   engine.
-- [`@e2e-dev/eas`](./packages/eas): EAS Simulators hosted iOS simulators and
+- [`@e2e-dev/eas`](https://www.npmjs.com/package/@e2e-dev/eas): EAS Simulators hosted iOS simulators and
   Android emulators for the mobile engine.
 
 ## Contributing

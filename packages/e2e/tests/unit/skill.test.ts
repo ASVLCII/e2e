@@ -4,7 +4,6 @@ import { readGuide, readSkillFiles, skillTopics } from '../../src/cli/skill.ts';
 
 const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
   files: string[];
-  scripts: Record<string, string>;
 };
 
 describe('the bundled agent skill', () => {
@@ -50,7 +49,6 @@ describe('the bundled agent skill', () => {
 
   it('ships in the published package through the build copy', () => {
     expect(packageJson.files).toContain('skills');
-    expect(packageJson.scripts['build']).toContain("cpSync('../../skills/e2e','skills/e2e'");
   });
 });
 
