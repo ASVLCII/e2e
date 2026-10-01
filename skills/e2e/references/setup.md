@@ -40,7 +40,9 @@ existing configs and tests alone. On pnpm 11+ it adds `esbuild: false` to
 undecided build script (`ERR_PNPM_IGNORED_BUILDS`), and tsx's esbuild needs
 none. In a pnpm monorepo package, or with an inline `allowBuilds: { ... }`,
 it warns instead; add the entry to the root file's `allowBuilds` (inside the
-braces for an inline one). Re-run after upgrading to refresh skill and
+braces for an inline one). With `esbuild@<version>` keys it also only
+warns: a bare `esbuild: false` overrides a versioned `true`, so add the
+version pnpm reports as ignored (`esbuild@0.28.2: false`). Re-run after upgrading to refresh skill and
 MCP entries.
 
 Without the wizard (`ai`, Vercel AI SDK v7, only for `agent.*` steps):

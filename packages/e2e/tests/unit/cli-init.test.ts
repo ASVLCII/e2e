@@ -569,6 +569,31 @@ describe('e2e init', () => {
     expect(read('pnpm-workspace.yaml')).toContain('esbuild: false');
   });
 
+  // pnpm applies a name-level `esbuild: false` over `esbuild@<version>: true`, so adding one would revoke a versioned approval.
+  it.each([
+    'allowBuilds:\n  esbuild@0.25.0: true\n',
+    "allowBuilds:\n  'esbuild@0.28.2 || 0.25.0': true\n",
+    'allowBuilds:\n  esbuild: set this to true or false\n  esbuild@0.25.0: true\n',
+    'allowBuilds: { esbuild@0.28.2: true }\n',
+  ])('leaves esbuild decided by version in %j to the project, naming the versioned entry to add', async (before) => {
+    vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
+    writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), before);
+    await init(dir, { yes: true });
+    expect(read('pnpm-workspace.yaml')).toBe(before);
+    expect(output()).toContain('decides esbuild by version, and a bare "esbuild: false" would override those');
+    expect(output()).toContain('"esbuild@0.28.2: false"');
+    expect(output()).not.toContain('Add "esbuild: false" to allowBuilds');
+  });
+
+  it('keeps a bare esbuild decision next to versioned ones', async () => {
+    vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
+    const before = 'allowBuilds:\n  esbuild@0.25.0: true\n  esbuild: false\n';
+    writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), before);
+    await init(dir, { yes: true });
+    expect(read('pnpm-workspace.yaml')).toBe(before);
+    expect(output()).not.toContain('decides esbuild by version');
+  });
+
   it('does not call a project initialized while pnpm-workspace.yaml still needs the esbuild entry', async () => {
     vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
     writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'allowBuilds: { sharp: false }\n');

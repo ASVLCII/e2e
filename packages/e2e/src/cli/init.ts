@@ -235,6 +235,8 @@ export async function init(cwd: string, options: InitOptions = {}): Promise<Init
   }
   if (pnpmBuilds?.kind === 'write') {
     clack.log.info(`Skip esbuild's build script in ${pnpmBuilds.relative} (allowBuilds); pnpm fails an install that has not decided it`);
+  } else if (pnpmBuilds?.kind === 'manual' && pnpmBuilds.byVersion) {
+    clack.log.warn(`allowBuilds in ${pnpmBuilds.relative} decides esbuild by version, and a bare "esbuild: false" would override those; if pnpm install fails with ERR_PNPM_IGNORED_BUILDS, add the esbuild version it names, e.g. "esbuild@0.28.2: false"`);
   } else if (pnpmBuilds?.kind === 'manual') {
     clack.log.warn(`Add "esbuild: false" to allowBuilds in ${pnpmBuilds.relative}; pnpm install fails with ERR_PNPM_IGNORED_BUILDS until esbuild's build script is decided`);
   }
@@ -249,9 +251,11 @@ export async function init(cwd: string, options: InitOptions = {}): Promise<Init
   ];
 
   if (files.length === 0 && skillInstalls.length === 0 && mcpRegistrations.length === 0 && missingIgnore.length === 0) {
-    clack.outro(pnpmBuilds?.kind === 'manual'
-      ? `Nothing to create; add esbuild to allowBuilds in ${pnpmBuilds.relative} before pnpm install`
-      : 'Nothing to create; project already initialized');
+    clack.outro(pnpmBuilds?.kind === 'manual' && pnpmBuilds.byVersion
+      ? `Nothing to create; check that allowBuilds in ${pnpmBuilds.relative} covers the esbuild version pnpm installs`
+      : pnpmBuilds?.kind === 'manual'
+        ? `Nothing to create; add esbuild to allowBuilds in ${pnpmBuilds.relative} before pnpm install`
+        : 'Nothing to create; project already initialized');
     return done('already-initialized', 0);
   }
 

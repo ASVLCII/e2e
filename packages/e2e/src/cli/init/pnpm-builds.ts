@@ -31,7 +31,12 @@ const BLOCK = [
 
 type PnpmBuildsPlan =
   | { readonly kind: 'write'; readonly relative: string; readonly existing: boolean; readonly content: string }
-  | { readonly kind: 'manual'; readonly relative: string };
+  | {
+    readonly kind: 'manual';
+    readonly relative: string;
+    /** `allowBuilds` names esbuild versions, which a name-level entry would override. */
+    readonly byVersion: boolean;
+  };
 
 /**
  * What init does so `pnpm install` accepts esbuild: nothing when the nearest
@@ -57,10 +62,11 @@ export function planPnpmBuilds(
     throw new Error(`${found} could not be read (${cause instanceof Error ? cause.message : String(cause)}); fix it before running e2e init`, { cause });
   }
   const relative = path.relative(cwd, found).split(path.sep).join('/');
-  const content = withEsbuildDecided(original);
-  if (content === original) return undefined;
-  if (content === undefined || path.dirname(found) !== path.resolve(cwd)) return { kind: 'manual', relative };
-  return { kind: 'write', relative, existing: true, content };
+  const decided = withEsbuildDecided(original);
+  if (decided === 'by-version') return { kind: 'manual', relative, byVersion: true };
+  if (decided === original) return undefined;
+  if (decided === undefined || path.dirname(found) !== path.resolve(cwd)) return { kind: 'manual', relative, byVersion: false };
+  return { kind: 'write', relative, existing: true, content: decided };
 }
 
 /**
@@ -92,10 +98,13 @@ function findWorkspaceFile(cwd: string): string | undefined {
  * esbuild to true or false or every build is allowed. Otherwise the entry is
  * set to false (over the placeholder a failed pnpm install writes), added to
  * a block-style `allowBuilds`, or appended in a new block. Undefined for an
- * inline `allowBuilds` this line-based edit cannot extend. A byte order mark
- * is kept and never read as part of the first key.
+ * inline `allowBuilds` this line-based edit cannot extend. `by-version` when
+ * `allowBuilds` names `esbuild@<versions>` keys without a bare one set to a
+ * boolean: pnpm lets a name-level false override a versioned true, so adding
+ * `esbuild: false` would revoke builds the project approved by version. A
+ * byte order mark is kept and never read as part of the first key.
  */
-function withEsbuildDecided(text: string): string | undefined {
+function withEsbuildDecided(text: string): string | 'by-version' | undefined {
   const bom = text.startsWith('\uFEFF') ? '\uFEFF' : '';
   const body = text.slice(bom.length);
   const newline = body.includes('\r\n') ? '\r\n' : '\n';
@@ -107,17 +116,21 @@ function withEsbuildDecided(text: string): string | undefined {
     return `${bom}${body.trim() === '' ? '' : body}${separator}${BLOCK.join(newline)}${newline}`;
   }
   const inline = lines[header]!.replace(ALLOW_BUILDS, '').replace(/#.*$/, '').trim();
-  if (inline !== '') return /(?:^|[{,\s])(['"]?)esbuild\1\s*:\s*(?:true|True|TRUE|false|False|FALSE)\s*(?:[,}]|$)/.test(inline) ? text : undefined;
+  if (inline !== '') {
+    if (/(?:^|[{,\s])(['"]?)esbuild\1\s*:\s*(?:true|True|TRUE|false|False|FALSE)\s*(?:[,}]|$)/.test(inline)) return text;
+    return /(?:^|[{,\s])['"]?esbuild@/.test(inline) ? 'by-version' : undefined;
+  }
   // The block runs until the next top-level key; blank lines and comments at any indentation stay inside it.
   let end = header + 1;
   while (end < lines.length && /^(?:\s|#|$)/.test(lines[end]!)) end += 1;
   const entry = lines.findIndex((line, index) => index > header && index < end && /^\s+(['"]?)esbuild\1\s*:/.test(line));
+  const decided = entry !== -1 && /:\s*(?:true|True|TRUE|false|False|FALSE)\s*(?:#.*)?$/.test(lines[entry]!);
+  if (decided) return text;
+  if (lines.slice(header + 1, end).some((line) => /^\s+['"]?esbuild@/.test(line))) return 'by-version';
   const edited = [...lines];
   if (entry === -1) {
     const indent = lines.slice(header + 1, end).find((line) => line.trim() !== '' && !line.trimStart().startsWith('#'))?.match(/^\s+/)?.[0] ?? '  ';
     edited.splice(header + 1, 0, `${indent}${ENTRY}`);
-  } else if (/:\s*(?:true|True|TRUE|false|False|FALSE)\s*(?:#.*)?$/.test(lines[entry]!)) {
-    return text;
   } else {
     edited[entry] = lines[entry]!.replace(/:.*$/, ': false');
   }
