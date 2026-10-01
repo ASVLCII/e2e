@@ -3,6 +3,8 @@
  * `eas simulator:*` uses, so the integration installs no SDK.
  */
 
+import type { ExpoCredentials } from './credentials.ts';
+
 const GRAPHQL_URL = 'https://api.expo.dev/graphql';
 
 /** What the provider asks EAS for: one agent-device session on one platform. */
@@ -92,13 +94,15 @@ const QUEUED_JOB = new Set(['NEW', 'IN_QUEUE']);
 /** Job run states after which the session never becomes ready. */
 const ENDED_JOB = new Set(['ERRORED', 'CANCELED', 'FINISHED', 'PENDING_CANCEL']);
 
-/** EAS Simulators sessions for one Expo access token. */
-export function easSessions(token: string): EasSessions {
+/** EAS Simulators sessions for one Expo access token or eas-cli session. */
+export function easSessions(credentials: ExpoCredentials): EasSessions {
+  const auth: Record<string, string> =
+    'accessToken' in credentials ? { Authorization: `Bearer ${credentials.accessToken}` } : { 'expo-session': credentials.sessionSecret };
   /** Runs one operation; a GraphQL error throws with EAS's message and error code. */
   const graphql = async <T>(query: string, variables: Record<string, unknown>, signal: AbortSignal): Promise<T> => {
     const response = await fetch(GRAPHQL_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { ...auth, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),
       signal,
     });

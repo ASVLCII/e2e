@@ -32,7 +32,8 @@ export default {
 } satisfies E2EConfig;
 ```
 
-`EXPO_TOKEN` comes from the run's environment. Each worker slot gets its own
+It authenticates with `EXPO_TOKEN` from the run's environment, else with the
+session `eas login` stored, as eas-cli does. Each worker slot gets its own
 EAS Simulators session, started when the run starts and stopped when it ends,
 and the engine drives it through the agent-device daemon EAS runs beside it.
 Tests start once every slot has a simulator.

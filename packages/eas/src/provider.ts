@@ -3,10 +3,8 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { DeviceLease, DeviceProvider, DeviceReleaseContext, DeviceRequest } from '@e2e-dev/mobile';
 import { ConfigurationError, rejectUnknownKeys } from 'e2e/engine';
-import { envValue } from './env.ts';
 import { easSessions, type EasSessionState, type EasSessions } from './client.ts';
-
-const EXPO_TOKEN = 'EXPO_TOKEN';
+import { EXPO_TOKEN, expoCredentials } from './credentials.ts';
 
 /**
  * EAS stops a session no agent-device command reached for this long: the
@@ -85,7 +83,8 @@ export interface EasSimulatorsOptions {
  * simulator per worker slot, started when the run starts and stopped when it
  * ends, each driven through the agent-device daemon EAS runs beside it.
  * Every session is named after its target and slot and tagged with the run.
- * `EXPO_TOKEN` comes from the run's environment.
+ * It authenticates with `EXPO_TOKEN` from the run's environment, else with
+ * the session `eas login` stored, as eas-cli does.
  */
 export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
   rejectUnknownKeys('easSimulators()', options, OPTION_KEYS);
@@ -100,13 +99,16 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
   // EAS takes no idle limit of zero; a session that short runs to its duration.
   const maxIdleTimeMinutes = idleMinutes >= 1 ? idleMinutes : undefined;
   const clients = new Map<string, EasSessions>();
-  const clientFor = (env: DeviceRequest['env']): EasSessions => {
-    const token = envValue(env, EXPO_TOKEN);
-    if (token === undefined) throw new Error(`${EXPO_TOKEN} is not set`);
-    let client = clients.get(token);
+  /** The client each lease was created with, so `release` stops it as the same account even if the eas-cli login changed during the run. */
+  const leaseClients = new Map<string, EasSessions>();
+  const clientFor = async (env: DeviceRequest['env']): Promise<EasSessions> => {
+    const credentials = await expoCredentials(env);
+    if (credentials === undefined) throw new Error(`${EXPO_TOKEN} is not set and eas-cli is not logged in; run \`eas login\` or set ${EXPO_TOKEN}`);
+    const key = 'accessToken' in credentials ? `token:${credentials.accessToken}` : `session:${credentials.sessionSecret}`;
+    let client = clients.get(key);
     if (client === undefined) {
-      client = easSessions(token);
-      clients.set(token, client);
+      client = easSessions(credentials);
+      clients.set(key, client);
     }
     return client;
   };
@@ -116,7 +118,7 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
       if (request.appPath !== undefined && (buildId !== undefined || applicationArchiveUrl !== undefined)) {
         throw new Error("EAS installs the app from `buildId` or `applicationArchiveUrl`; leave the target's `app.appPath` out");
       }
-      const client = clientFor(request.env);
+      const client = await clientFor(request.env);
       // Not the request's signal: an interrupt that lands after EAS created the session would leave it unknown, and billed.
       const created = await client.create(
         {
@@ -145,6 +147,7 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
           }
           held.set(created.id, Date.now() + maxIdleTimeMinutes * 60_000);
         }
+        leaseClients.set(created.id, client);
         return { id: created.id, daemon: { baseUrl: session.daemonUrl, authToken: session.daemonToken } };
       } catch (cause) {
         // EAS bills a session from the moment it starts, and the engine holds only leases `acquire` returned.
@@ -160,7 +163,9 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
       const held = idleDeadlines.get(context.runId);
       held?.delete(lease.id);
       if (held?.size === 0) idleDeadlines.delete(context.runId);
-      await clientFor(context.env).stop(lease.id, context.signal);
+      const client = leaseClients.get(lease.id) ?? (await clientFor(context.env));
+      await client.stop(lease.id, context.signal);
+      leaseClients.delete(lease.id);
     },
   };
 }

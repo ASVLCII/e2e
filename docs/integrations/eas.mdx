@@ -56,11 +56,28 @@ export default {
 ```
 
 `projectId` is the Expo project's id, `extra.eas.projectId` in the app
-config, not its slug. Set `EXPO_TOKEN`, an
-[access token](https://expo.dev/settings/access-tokens) of an account or robot
-with access to the project, in the environment `e2e run` starts in, such as a
-CI secret. The package calls Expo's API with `fetch`, so there is no SDK to
-install.
+config, not its slug. The package calls Expo's API with `fetch`, so there is
+no SDK to install.
+
+## Authenticate
+
+The provider authenticates the way eas-cli does:
+
+* **`EXPO_TOKEN`**, an [access token](https://expo.dev/settings/access-tokens)
+  of an account or robot with access to the project, in the environment
+  `e2e run` starts in. Use it in CI, as a secret.
+* **The eas-cli login**, when `EXPO_TOKEN` is not set. On a machine where you
+  ran `eas login`, the provider reads the session eas-cli keeps in
+  `~/.expo/state.json` and needs no token. The home is the run's `HOME`, or
+  `USERPROFILE` on Windows.
+
+`EXPO_TOKEN` wins when both are there. Its account is the one that starts the
+sessions, so set it to run as a robot on a machine signed in as yourself.
+Sessions always go to production `api.expo.dev`: eas-cli's staging and local
+logins (`EXPO_STAGING`, `EXPO_LOCAL`) are not read.
+
+On a CI runner or shared machine, set `EXPO_TOKEN`. Without it, a login someone
+left in the runner's home starts billed sessions as their account.
 
 ## Install the app
 
@@ -172,6 +189,8 @@ Without the indicator, stopping takes about two seconds.
 - Rides out up to three failed status polls in a row, a blip at
   api.expo.dev, before giving a session up.
 
-A missing `EXPO_TOKEN`, an account without EAS Simulators, or a session that
-fails to start fails the lease with EAS's message. That ends the run before
-any test, and the run's other sessions, started or queued, are still stopped.
+No `EXPO_TOKEN` and no eas-cli login fails the lease before any request to
+EAS, with a message to run `eas login` or set `EXPO_TOKEN`. An account without
+EAS Simulators, or a session that fails to start, fails the lease with EAS's
+message. Either ends the run before any test, and the run's other sessions,
+started or queued, are still stopped.

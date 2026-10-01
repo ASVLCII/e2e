@@ -2,11 +2,14 @@
  * `easSimulators()` against a fake Expo GraphQL API behind a stubbed
  * `fetch`: the create input, polling to ready and the queue line, the lease
  * and its log lines, stopping on release and after a failed or cancelled
- * start, the token, and the target's `app.appPath`.
+ * start, the token or eas-cli login, and the target's `app.appPath`.
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { DeviceReleaseContext, DeviceRequest } from '@e2e-dev/mobile';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { easSimulators } from '../../src/index.ts';
 
 vi.mock('node:timers/promises', () => ({
@@ -21,6 +24,7 @@ type Operation = 'create' | 'state' | 'stop' | 'cancel';
 interface Call {
   readonly operation: Operation;
   readonly authorization: string | undefined;
+  readonly session: string | undefined;
   readonly variables: Record<string, unknown>;
 }
 
@@ -62,7 +66,8 @@ beforeEach(() => {
         : query.includes('cancelJobRun')
           ? 'cancel'
           : 'state';
-    eas.calls.push({ operation, authorization: (init.headers as Record<string, string>)['Authorization'], variables });
+    const headers = init.headers as Record<string, string>;
+    eas.calls.push({ operation, authorization: headers['Authorization'], session: headers['expo-session'], variables });
     init.signal?.throwIfAborted();
     const error = eas.errors[operation];
     if (error !== undefined) return Response.json({ errors: [error], data: null });
@@ -84,7 +89,31 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const env = { EXPO_TOKEN: 'expo-test' };
+/** A home with no eas-cli login, so no test reads the real `~/.expo`. */
+const emptyHome = mkdtempSync(join(tmpdir(), 'e2e-eas-home-'));
+const homes: string[] = [emptyHome];
+
+afterAll(() => {
+  for (const path of homes) rmSync(path, { recursive: true, force: true });
+});
+
+/** A home where eas-cli keeps `state` under `directory`, as `eas login` writes it. */
+function homeWith(state: string, directory = '.expo'): string {
+  const path = mkdtempSync(join(tmpdir(), 'e2e-eas-home-'));
+  homes.push(path);
+  mkdirSync(join(path, directory));
+  writeFileSync(join(path, directory, 'state.json'), state);
+  return path;
+}
+
+const login = JSON.stringify({ auth: { sessionSecret: 'session-secret', userId: 'u1', username: 'ada', currentConnection: 'Browser-Flow-Authentication' } });
+
+/** The run's home as the provider reads it on every platform: `HOME`, or `USERPROFILE` on Windows. */
+function home(path: string): { HOME: string; USERPROFILE: string } {
+  return { HOME: path, USERPROFILE: path };
+}
+
+const env = { EXPO_TOKEN: 'expo-test', ...home(emptyHome) };
 
 /** Each test's own run: the provider tracks the ready sessions of a run across its instances. */
 let runs = 0;
@@ -321,8 +350,62 @@ describe('easSimulators()', () => {
     await expect(easSimulators({ projectId: 'p1' }).acquire(request())).rejects.toThrow('EAS: HTTP 502, Bad gateway');
   });
 
-  it('fails without EXPO_TOKEN in the run environment', async () => {
-    await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: { EXPO_TOKEN: ' ' } }))).rejects.toThrow('EXPO_TOKEN is not set');
+  it('fails without EXPO_TOKEN or an eas-cli login', async () => {
+    await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: { EXPO_TOKEN: ' ', ...home(emptyHome) } }))).rejects.toThrow(
+      'EXPO_TOKEN is not set and eas-cli is not logged in; run `eas login` or set EXPO_TOKEN',
+    );
+    await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: home(homeWith(JSON.stringify({ auth: null }))) }))).rejects.toThrow('eas-cli is not logged in');
+    expect(eas.calls).toEqual([]);
+  });
+
+  it('authenticates with the eas-cli login when EXPO_TOKEN is not set', async () => {
+    const loggedIn = home(homeWith(login));
+    const provider = easSimulators({ projectId: 'p1' });
+    const lease = await provider.acquire(request({ env: loggedIn }));
+    await provider.release(lease, { ...releaseContext('run-login'), env: loggedIn });
+    expect(eas.calls.map(({ operation, authorization, session }) => ({ operation, authorization, session }))).toEqual([
+      { operation: 'create', authorization: undefined, session: 'session-secret' },
+      { operation: 'state', authorization: undefined, session: 'session-secret' },
+      { operation: 'stop', authorization: undefined, session: 'session-secret' },
+    ]);
+  });
+
+  it('prefers EXPO_TOKEN to the eas-cli login', async () => {
+    await easSimulators({ projectId: 'p1' }).acquire(request({ env: { EXPO_TOKEN: 'expo-test', ...home(homeWith(login)) } }));
+    expect(eas.calls[0]).toMatchObject({ authorization: 'Bearer expo-test', session: undefined });
+  });
+
+  it("reads only eas-cli's production login, the one api.expo.dev accepts", async () => {
+    const staging = home(homeWith(login, '.expo-staging'));
+    await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: { EXPO_STAGING: '1', ...staging } }))).rejects.toThrow('eas-cli is not logged in');
+    await easSimulators({ projectId: 'p1' }).acquire(request({ env: { EXPO_STAGING: '1', ...home(homeWith(login)) } }));
+    expect(eas.calls[0]).toMatchObject({ operation: 'create', session: 'session-secret' });
+  });
+
+  it('stops a session as the login that started it, after eas logout', async () => {
+    const provider = easSimulators({ projectId: 'p1' });
+    const lease = await provider.acquire(request({ env: home(homeWith(login)) }));
+    await provider.release(lease, { ...releaseContext('run-logout'), env: home(emptyHome) });
+    expect(eas.calls.at(-1)).toMatchObject({ operation: 'stop', session: 'session-secret' });
+  });
+
+  it('keeps the login that started a session for a release that is tried again', async () => {
+    const provider = easSimulators({ projectId: 'p1' });
+    const lease = await provider.acquire(request({ env: home(homeWith(login)) }));
+    eas.errors.stop = { message: 'Internal server error', extensions: { errorCode: 'INTERNAL_SERVER_ERROR' } };
+    await expect(provider.release(lease, { ...releaseContext('run-retry'), env: home(emptyHome) })).rejects.toThrow('Internal server error');
+    delete eas.errors.stop;
+    await provider.release(lease, { ...releaseContext('run-retry'), env: home(emptyHome) });
+    expect(eas.calls.filter((call) => call.operation === 'stop').map((call) => call.session)).toEqual(['session-secret', 'session-secret']);
+  });
+
+  it('names an eas-cli state file that is not JSON', async () => {
+    const brokenHome = homeWith('{ "auth": "session-secret');
+    await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: home(brokenHome) }))).rejects.toThrow(
+      `the eas-cli login at ${join(brokenHome, '.expo', 'state.json')} is not valid JSON; run \`eas login\` again, or set EXPO_TOKEN`,
+    );
+    // The parse error quotes the text it failed on, the secret included, so it is not kept as the cause.
+    await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: home(brokenHome) }))).rejects.toSatisfy((error: Error) => error.cause === undefined);
     expect(eas.calls).toEqual([]);
   });
 
