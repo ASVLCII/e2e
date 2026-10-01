@@ -232,6 +232,112 @@ html.dark body .code-block-fade-overlay {
   margin-right: auto;
 }
 
+#content .setup-prompt {
+  position: relative;
+  margin-block: 1.25rem;
+  border: 1px solid var(--e2e-hairline);
+  border-radius: 0;
+  background: transparent;
+}
+
+#content .setup-prompt-header {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding-inline: 1rem;
+  border-bottom: 1px solid var(--e2e-hairline);
+  color: var(--e2e-muted);
+  font-size: 0.8125rem;
+}
+
+#content .setup-prompt .prompt {
+  display: block;
+  margin: 0;
+  padding: 1rem 1rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--e2e-ink);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+#content .setup-prompt [data-component-part='prompt-description'] {
+  max-height: 132px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 45%, transparent);
+}
+
+#content .setup-prompt[data-expanded='true'] [data-component-part='prompt-description'] {
+  max-height: none;
+  mask-image: none;
+}
+
+#content .setup-prompt [data-component-part='prompt-action-copy-button'] {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--e2e-hairline);
+  border-radius: 0;
+  background: transparent;
+  color: var(--e2e-muted);
+}
+
+#content .setup-prompt [data-component-part='prompt-action-copy-button'] > [aria-hidden] {
+  font-size: 0;
+}
+
+#content .setup-prompt [data-component-part='prompt-action-copy-button'] > [aria-hidden] > span {
+  gap: 0;
+}
+
+#content .setup-prompt [data-component-part='prompt-action-copy-button'] svg {
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+
+#content .setup-prompt [data-component-part='prompt-action-copy-button'] > [aria-hidden] > span:last-child::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5'%3E%3Crect x='8' y='8' width='12' height='12' rx='2'/%3E%3Cpath d='M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+#content .setup-prompt [data-component-part='prompt-actions-wrapper'] {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  justify-content: flex-end;
+}
+
+#content .setup-prompt [data-component-part='prompt-action-cursor-button'] {
+  display: inline-flex;
+  height: 24px;
+  border-color: var(--e2e-hairline);
+  border-radius: 0;
+  background: transparent;
+}
+
+#content .setup-prompt-toggle {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 1rem 0.75rem;
+  color: var(--e2e-muted);
+  font-size: 0.8125rem;
+  text-align: center;
+  cursor: pointer;
+}
+
+#content .setup-prompt-toggle:hover {
+  color: var(--e2e-ink);
+}
+
+#content .setup-prompt button:focus-visible {
+  outline: 2px solid var(--e2e-ink);
+  outline-offset: 3px;
+}
+
 /* The "Copy page" menu shows titles only. docs.json requires a description on
    every custom option and Mintlify renders one under each title, so the second
    line is hidden here, on the built-in items too. The menu has no id; the
