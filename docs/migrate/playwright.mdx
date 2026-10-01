@@ -180,7 +180,8 @@ what to do today.
 | `expect(page).toHaveURL()`, `toHaveTitle()` | `expect(browser).toHaveURL()`, `toHaveTitle()` | web only |
 | `toHaveScreenshot()`, `toMatchSnapshot()` | not yet; `agent.assert('...', { vision: true })` is a judgment, not a pixel diff | missing |
 | `toMatchAriaSnapshot()` | not yet | missing |
-| `expect(value).toBe()`, `toEqual()`, `toContain()`, `toMatch()`, `toBeTruthy()`, `toBeCloseTo()` and the rest | the same 17, see [value matchers](/reference/expect#value-matchers) | same |
+| `expect(value).toBe()`, `toEqual()`, `toMatch()`, `toBeTruthy()`, `toBeCloseTo()` and the rest | the same, except `toContain`, below, see [value matchers](/reference/expect#value-matchers) | same |
+| `expect(collection).toContain()` | compares items by deep equality, as `toContainEqual` does in Playwright: `toContain({ id: 1 })` passes on `[{ id: 1 }]`, where Playwright's strict match fails. Containment in a string is the same | by design |
 | `toHaveLength()`, `toMatchObject()`, `toHaveProperty()` | the same | same |
 | `toStrictEqual()`, `toThrow()`, `toBeInstanceOf()` | not yet; `toEqual` on the shape you need | missing |
 | `expect.any()`, `objectContaining()`, `arrayContaining()`, `stringMatching()` | the same, plus `anything()` and `stringContaining()`, see [asymmetric matchers](/reference/expect#asymmetric-matchers) | same |
