@@ -500,6 +500,102 @@ describe('e2e init', () => {
     expect(spawnSync).toHaveBeenCalledWith('pnpm', ['install'], expect.objectContaining({ cwd: dir }));
   });
 
+  it('lets pnpm skip the esbuild build script tsx needs none of, and leaves other managers alone', async () => {
+    await init(dir, { yes: true });
+    expect(existsSync(path.join(dir, 'pnpm-workspace.yaml'))).toBe(false);
+
+    rmSync(dir, { recursive: true, force: true });
+    vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
+    await init(dir, { yes: true });
+    expect(read('pnpm-workspace.yaml')).toMatch(/^# .*tsx.*\n.*\nallowBuilds:\n {2}esbuild: false\n$/);
+    expect(output()).toContain('Created pnpm-workspace.yaml');
+    expect((await init(dir, { yes: true })).result).toBe('already-initialized');
+  });
+
+  it.each([
+    ['without allowBuilds', 'packages:\n  - apps/*\n', 'packages:\n  - apps/*\n\n# '],
+    ['with a block allowBuilds', 'allowBuilds:\n    sharp: false\nminimumReleaseAge: 0\n', 'allowBuilds:\n    esbuild: false\n    sharp: false\nminimumReleaseAge: 0\n'],
+    ['holding the placeholder a failed pnpm install writes', 'allowBuilds:\n  esbuild: set this to true or false\n', 'allowBuilds:\n  esbuild: false\n'],
+    ['with a comment in allowBuilds', 'allowBuilds:\n# native\n  sharp: true\n', 'allowBuilds:\n  esbuild: false\n# native\n  sharp: true\n'],
+    ['with a quoted allowBuilds key', "'allowBuilds':\n  sharp: false\n", "'allowBuilds':\n  esbuild: false\n  sharp: false\n"],
+    ['with a byte order mark','\uFEFFallowBuilds:\n  sharp: false\n', '\uFEFFallowBuilds:\n  esbuild: false\n  sharp: false\n'],
+  ])('adds esbuild to a pnpm-workspace.yaml %s and keeps the rest', async (_, before, after) => {
+    writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+    writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), before);
+    await init(dir, { yes: true });
+    expect(read('pnpm-workspace.yaml').startsWith(after)).toBe(true);
+    expect(read('pnpm-workspace.yaml').match(/esbuild: false/g)).toHaveLength(1);
+    expect(output()).toContain('Updated pnpm-workspace.yaml');
+  });
+
+  it.each([
+    ['allowBuilds:\n  esbuild: true\n', false],
+    ["allowBuilds:\n  'esbuild': false\n", false],
+    ['dangerouslyAllowAllBuilds: true\n', false],
+    ['allowBuilds:\n# native\n  esbuild: true\n', false],
+    ['allowBuilds:\n  esbuild: True\n', false],
+    ["'allowBuilds':\n  esbuild: FALSE\n", false],
+    ['"allowBuilds": { esbuild: false }\n', false],
+    ['allowBuilds: { esbuild: true }\n', false],
+    ['\uFEFFdangerouslyAllowAllBuilds: true\n', false],
+    ['allowBuilds: { sharp: false }\n', true],
+    ['allowBuilds: { esbuild-wasm: true }\n', true],
+  ])('keeps a pnpm-workspace.yaml that reads %j (warns: %s)', async (before, warns) => {
+    writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+    writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), before);
+    await init(dir, { yes: true });
+    expect(read('pnpm-workspace.yaml')).toBe(before);
+    expect(output().includes('Add "esbuild: false" to allowBuilds in pnpm-workspace.yaml')).toBe(warns);
+  });
+
+  it.each([
+    ['pinned by packageManager', () => writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module', packageManager: 'pnpm@10.2.1' }))],
+    ['running init', () => vi.stubEnv('npm_config_user_agent', 'pnpm/9.15.0 npm/? node/v24.19.0 darwin arm64')],
+    ['on the PATH', () => {
+      writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+      vi.mocked(spawnSync).mockReturnValueOnce({ ...spawnResult(0), stdout: '10.34.6\n' });
+    }],
+  ])('leaves a pnpm older than 11 %s alone: it only warns, and early ones refuse a workspace file without packages', async (_, setup) => {
+    setup();
+    await init(dir, { yes: true });
+    expect(existsSync(path.join(dir, 'pnpm-workspace.yaml'))).toBe(false);
+  });
+
+  it('asks the pnpm on the PATH for its version only when neither the pin nor the invoking agent names one', async () => {
+    writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+    vi.mocked(spawnSync).mockReturnValueOnce({ ...spawnResult(0), stdout: '12.6.0\n' });
+    await init(dir, { yes: true });
+    expect(spawnSync).toHaveBeenCalledExactlyOnceWith('pnpm', ['--version'], expect.objectContaining({ cwd: dir }));
+    expect(read('pnpm-workspace.yaml')).toContain('esbuild: false');
+  });
+
+  it('does not call a project initialized while pnpm-workspace.yaml still needs the esbuild entry', async () => {
+    vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
+    writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'allowBuilds: { sharp: false }\n');
+    await init(dir, { yes: true });
+    expect(await init(dir, { yes: true })).toMatchObject({ exitCode: 0, result: 'already-initialized' });
+    expect(output()).toContain('Nothing to create; add esbuild to allowBuilds in pnpm-workspace.yaml before pnpm install');
+    expect(output()).not.toContain('project already initialized');
+  });
+
+  it('stops before any write when pnpm-workspace.yaml cannot be read', async () => {
+    vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
+    mkdirSync(path.join(dir, 'pnpm-workspace.yaml'));
+    expect(await init(dir, { yes: true })).toMatchObject({ exitCode: 2, result: 'invalid-project' });
+    expect(output()).toContain('pnpm-workspace.yaml could not be read');
+    expect(existsSync(path.join(dir, 'e2e.config.ts'))).toBe(false);
+  });
+
+  it('never edits the workspace root above a pnpm project, and names what to add there', async () => {
+    vi.stubEnv('npm_config_user_agent', 'pnpm/12.3.4 npm/? node/v24.19.0 darwin arm64');
+    writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n');
+    const app = path.join(dir, 'apps', 'web');
+    await init(app, { yes: true, directory: 'apps/web' });
+    expect(read('pnpm-workspace.yaml')).toBe('packages:\n  - apps/*\n');
+    expect(existsSync(path.join(app, 'pnpm-workspace.yaml'))).toBe(false);
+    expect(output()).toContain('Add "esbuild: false" to allowBuilds in ../../pnpm-workspace.yaml');
+  });
+
   it('keeps the scaffold and returns a failure when installation fails', async () => {
     vi.mocked(spawnSync).mockReturnValueOnce(spawnResult(1));
     vi.mocked(clack.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(true);

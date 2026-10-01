@@ -66,7 +66,11 @@ need Xcode with an iOS simulator runtime, or the Android SDK with an emulator.
   Choose **Web (Playwright)** or **Mobile (iOS/Android)**, then a
   subscription or model provider, or **None** for tests without AI. The
   wizard writes a config and an example test, adds dependencies, and offers
-  to set up your coding agent. Existing files stay intact.
+  to set up your coding agent. Existing files stay intact. With pnpm 11 or
+  later it also records in `pnpm-workspace.yaml` that esbuild's build script
+  can be skipped; pnpm will not install until that script is decided. In a
+  package of a pnpm monorepo it warns instead with the line to add to the root
+  `pnpm-workspace.yaml`; add it before installing.
 
   <Tabs>
     <Tab title="Web">
