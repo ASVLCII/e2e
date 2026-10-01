@@ -583,6 +583,9 @@ describe('e2e init', () => {
     expect(output()).toContain('decides esbuild by version, and a bare "esbuild: false" would override those');
     expect(output()).toContain('"esbuild@0.28.2: false"');
     expect(output()).not.toContain('Add "esbuild: false" to allowBuilds');
+    expect(await init(dir, { yes: true })).toMatchObject({ exitCode: 0, result: 'already-initialized' });
+    expect(output()).toContain('Nothing to create; check that allowBuilds in pnpm-workspace.yaml covers the esbuild version pnpm installs');
+    expect(read('pnpm-workspace.yaml')).toBe(before);
   });
 
   it('keeps a bare esbuild decision next to versioned ones', async () => {
