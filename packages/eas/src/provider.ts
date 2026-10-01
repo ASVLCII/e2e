@@ -5,6 +5,7 @@ import type { DeviceLease, DeviceProvider, DeviceReleaseContext, DeviceRequest }
 import { ConfigurationError, rejectUnknownKeys } from 'e2e/engine';
 import { easSessions, type EasSessionState, type EasSessions } from './client.ts';
 import { EXPO_TOKEN, expoCredentials } from './credentials.ts';
+import { appConfigProjectId } from './project.ts';
 
 /**
  * EAS stops a session no agent-device command reached for this long: the
@@ -32,6 +33,13 @@ const POLL_FAILURES_TOLERATED = 3;
  */
 const idleDeadlines = new Map<string, Map<string, number>>();
 
+/**
+ * The project id each run reads from an app config, by run and project root,
+ * across every `easSimulators()` of the run, so two targets of one app read it
+ * once. A failed read is not kept.
+ */
+const projectIds = new Map<string, Promise<string>>();
+
 /** Every option `easSimulators()` takes, kept equal to `EasSimulatorsOptions` by the compiler. */
 const OPTION_KEYS: readonly string[] = Object.keys({
   projectId: true,
@@ -46,8 +54,13 @@ const OPTION_KEYS: readonly string[] = Object.keys({
 
 /** What `easSimulators()` takes: the Expo project, the app each simulator starts with, and the simulator itself. */
 export interface EasSimulatorsOptions {
-  /** The Expo project the sessions belong to: its id (`extra.eas.projectId` in the app config), not its slug. */
-  readonly projectId: string;
+  /**
+   * The Expo project the sessions belong to: its id, not its slug. Absent,
+   * `extra.eas.projectId` of the app config in the project root, the id
+   * `eas init` writes: `app.json` or `app.config.json` as written, a dynamic
+   * `app.config.ts` or `.js` as the project's `expo config` evaluates it.
+   */
+  readonly projectId?: string | undefined;
   /**
    * EAS Build EAS installs and launches on every simulator before the session
    * is ready: a simulator build (`ios.simulator: true`) or an APK. Pair it
@@ -82,11 +95,12 @@ export interface EasSimulatorsOptions {
  * EAS Simulators for `mobile({ device: easSimulators() })`: one hosted
  * simulator per worker slot, started when the run starts and stopped when it
  * ends, each driven through the agent-device daemon EAS runs beside it.
- * Every session is named after its target and slot and tagged with the run.
+ * Every session is named after its target and slot and tagged with the run,
+ * in the project `projectId` names or the app config links.
  * It authenticates with `EXPO_TOKEN` from the run's environment, else with
  * the session `eas login` stored, as eas-cli does.
  */
-export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
+export function easSimulators(options: EasSimulatorsOptions = {}): DeviceProvider {
   rejectUnknownKeys('easSimulators()', options, OPTION_KEYS);
   const { projectId, buildId, applicationArchiveUrl, device, maxDurationMinutes, agentDeviceVersion, tags = [] } = options;
   if (buildId !== undefined && applicationArchiveUrl !== undefined) {
@@ -98,6 +112,21 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
   const idleMinutes = options.maxIdleTimeMinutes ?? (maxDurationMinutes === undefined ? DEFAULT_MAX_IDLE_TIME_MINUTES : Math.min(DEFAULT_MAX_IDLE_TIME_MINUTES, maxDurationMinutes - 1));
   // EAS takes no idle limit of zero; a session that short runs to its duration.
   const maxIdleTimeMinutes = idleMinutes >= 1 ? idleMinutes : undefined;
+  const projectIdFor = (request: DeviceRequest): Promise<string> => {
+    if (projectId !== undefined) return Promise.resolve(projectId);
+    // The peer range admits an @e2e-dev/mobile from before providers were told the project root.
+    if (typeof request.projectRoot !== 'string') {
+      return Promise.reject(new Error('reading `projectId` from the app config needs an @e2e-dev/mobile that passes `projectRoot` to device providers; upgrade it, or pass `projectId`'));
+    }
+    const key = `${request.runId}\0${request.projectRoot}`;
+    let resolved = projectIds.get(key);
+    if (resolved === undefined) {
+      resolved = appConfigProjectId(request.projectRoot, request.env, request.signal);
+      projectIds.set(key, resolved);
+      resolved.catch(() => projectIds.delete(key));
+    }
+    return resolved;
+  };
   const clients = new Map<string, EasSessions>();
   /** The client each lease was created with, so `release` stops it as the same account even if the eas-cli login changed during the run. */
   const leaseClients = new Map<string, EasSessions>();
@@ -118,11 +147,12 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
       if (request.appPath !== undefined && (buildId !== undefined || applicationArchiveUrl !== undefined)) {
         throw new Error("EAS installs the app from `buildId` or `applicationArchiveUrl`; leave the target's `app.appPath` out");
       }
+      const appId = await projectIdFor(request);
       const client = await clientFor(request.env);
       // Not the request's signal: an interrupt that lands after EAS created the session would leave it unknown, and billed.
       const created = await client.create(
         {
-          appId: projectId,
+          appId,
           platform: request.platform,
           name: `e2e ${request.targetName} ${request.slot + 1} of ${request.slots}`,
           tags: [...tags, 'e2e', `e2e-run:${request.runId}`, `e2e-target:${request.targetName}`],
@@ -160,6 +190,7 @@ export function easSimulators(options: EasSimulatorsOptions): DeviceProvider {
       }
     },
     async release(lease: DeviceLease, context: DeviceReleaseContext): Promise<void> {
+      for (const key of projectIds.keys()) if (key.startsWith(`${context.runId}\0`)) projectIds.delete(key);
       const held = idleDeadlines.get(context.runId);
       held?.delete(lease.id);
       if (held?.size === 0) idleDeadlines.delete(context.runId);

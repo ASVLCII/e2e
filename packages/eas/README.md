@@ -1,7 +1,7 @@
 # @e2e-dev/eas
 
 [EAS Simulators](https://expo.dev/services/simulators) for [`e2e`](https://www.npmjs.com/package/e2e):
-`mobile({ device: easSimulators({ projectId }) })` runs a mobile target on
+`mobile({ device: easSimulators() })` runs a mobile target on
 Expo's hosted iOS simulators and Android emulators.
 
 ## Install
@@ -22,7 +22,7 @@ export default {
     {
       engine: mobile({
         platform: 'ios',
-        device: easSimulators({ projectId: '<expo project id>', buildId: process.env.EAS_BUILD_ID }),
+        device: easSimulators({ buildId: process.env.EAS_BUILD_ID }),
         videoTouches: false,
       }),
       app: { bundleId: 'com.example.app' },
@@ -32,6 +32,9 @@ export default {
 } satisfies E2EConfig;
 ```
 
+The sessions belong to the Expo project the app config beside
+`e2e.config.ts` links (`extra.eas.projectId`, from `app.json` or as
+`expo config` evaluates `app.config.ts`); `projectId` names another.
 It authenticates with `EXPO_TOKEN` from the run's environment, else with the
 session `eas login` stored, as eas-cli does. Each worker slot gets its own
 EAS Simulators session, started when the run starts and stopped when it ends,

@@ -78,6 +78,7 @@ describe('device provider', () => {
       [1, 2, 'ios', 'Settings', undefined],
     ]);
     expect(cloud.acquired[0]!.env).toEqual({ DEVICE_SERVICE_TOKEN: 't' });
+    expect(cloud.acquired[0]!.projectRoot).toBe(PROJECT_ROOT);
     // The agent-device the package pins, so a provider can start a daemon of the same version.
     expect(cloud.acquired[0]!.agentDeviceVersion).toBe((JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> }).dependencies['agent-device']);
     expect(lines).toEqual([

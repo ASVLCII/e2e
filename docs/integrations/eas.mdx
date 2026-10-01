@@ -45,10 +45,7 @@ export default {
       name: 'ios',
       engine: mobile({
         platform: 'ios',
-        device: easSimulators({
-          projectId: '<your-expo-project-id>',
-          buildId: process.env.EAS_BUILD_ID,
-        }),
+        device: easSimulators({ buildId: process.env.EAS_BUILD_ID }),
         videoTouches: false,
       }),
       app: { bundleId: 'com.example.app' },
@@ -58,9 +55,26 @@ export default {
 } satisfies E2EConfig;
 ```
 
-`projectId` is the Expo project's id, `extra.eas.projectId` in the app
-config, not its slug. The package calls Expo's API with `fetch`, so there is
-no SDK to install.
+The sessions belong to the Expo project the app config links:
+`extra.eas.projectId`, the id `eas init` writes. The provider reads it from
+the app config beside `e2e.config.ts`:
+
+- **`app.json` or `app.config.json`**: read as JSON, from under `expo` when
+  the file has that key.
+- **A dynamic config** (`app.config.ts`, `.js`, `.mjs`, `.cjs`, `.mts`, or
+  `.cts`): evaluated with the project's own `expo config --type public`,
+  in the run's environment, since the config can compute the id. As with
+  eas-cli, `.env` files are not loaded (`EXPO_NO_DOTENV=1`), so a variable
+  the config reads must be in the environment `e2e run` starts in. It needs
+  `expo` installed in the project.
+
+It reads the config once per run, before the first session starts, and it
+needs an `@e2e-dev/mobile` that passes `projectRoot` to device providers; an
+older one fails the lease and asks for an upgrade or `projectId`. When
+`e2e.config.ts` is not in the app's directory, or the app config links no
+project, pass the id as `projectId` (the project's id, not its slug).
+
+The package calls Expo's API with `fetch`, so there is no SDK to install.
 
 ## Authenticate
 
@@ -100,17 +114,17 @@ The simulator boots with no apps. Pick one way to put yours on it:
 
 ```ts
 // EAS installs the build.
-{ engine: mobile({ platform: 'ios', device: easSimulators({ projectId, buildId }) }), app: { bundleId: 'com.example.app' } }
+{ engine: mobile({ platform: 'ios', device: easSimulators({ buildId }) }), app: { bundleId: 'com.example.app' } }
 
 // A fixture uploads the build with device.installApp().
-{ engine: mobile({ platform: 'ios', device: easSimulators({ projectId }) }), app: { bundleId: 'com.example.app', appPath: 'build/App.app' } }
+{ engine: mobile({ platform: 'ios', device: easSimulators() }), app: { bundleId: 'com.example.app', appPath: 'build/App.app' } }
 ```
 
 ## Options
 
 | Option                  | Default     | Meaning |
 | ----------------------- | ----------- | ------- |
-| `projectId`             | required    | The Expo project the sessions belong to. |
+| `projectId`             | the app config's | The Expo project the sessions belong to. Absent, `extra.eas.projectId` of the app config. See [Setup](#setup). |
 | `buildId`               | none        | EAS Build EAS installs and launches on every simulator. |
 | `applicationArchiveUrl` | none        | App archive URL EAS installs in place of a build. Excludes `buildId`. |
 | `device`                | EAS's pick  | iOS device name or UDID (`'iPhone 17 Pro'`), or an Android AVD hardware profile (`'pixel_9'`). |
@@ -177,6 +191,9 @@ Without the indicator, stopping takes about two seconds.
 
 ## What the provider does
 
+- Reads the project id from the app config once, before the first session,
+  when `projectId` is absent. A config that links no project fails the
+  lease before any session starts, naming the file.
 - Starts each `agent-device` session and waits until its daemon is
   reachable, then hands the engine the daemon's URL and token.
 - Defaults `maxIdleTimeMinutes` to 10. A run that dies before the engine

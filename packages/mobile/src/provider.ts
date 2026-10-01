@@ -54,6 +54,8 @@ export interface DeviceRequest {
    * and the engine skips its own install.
    */
   readonly appPath?: string | undefined;
+  /** The directory the config's relative paths resolve against: where a provider reads project files, never `process.cwd()`. */
+  readonly projectRoot: string;
   /** The run's environment: where a provider reads its token from, never `process.env`. */
   readonly env: Readonly<Record<string, string | undefined>>;
   /** Aborts on interrupt only; acquiring has no budget of its own. */
@@ -261,6 +263,7 @@ export class LeasedDevices implements DeviceSource {
           agentDeviceVersion: AGENT_DEVICE_VERSION,
           app,
           appPath,
+          projectRoot: info.projectRoot,
           env: info.env,
           signal: info.signal,
           log: (line) => info.log(`${provider.name} (${slot + 1} of ${info.slots}): ${line}`),

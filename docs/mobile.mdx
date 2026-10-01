@@ -180,10 +180,11 @@ export interface DeviceLease {
 `acquire` receives the platform, run id, target, slot, the target's
 `app.bundleId` as `app` and its resolved `app.appPath` as `appPath`, the
 agent-device version the engine's client speaks (`agentDeviceVersion`, for a
-service that starts a daemon of a chosen version), the run's environment, an
+service that starts a daemon of a chosen version), the directory the config's
+relative paths resolve against (`projectRoot`), the run's environment, an
 interrupt signal, and a `log` that reaches the reporter. Read tokens from
-`request.env`, not
-`process.env`. A target with nothing to run leases nothing. Every lease
+`request.env`, not `process.env`, and project files under
+`request.projectRoot`, not `process.cwd()`. A target with nothing to run leases nothing. Every lease
 granted is held by the engine, one it then refuses included: a slot that
 fails to lease ends the run before any test, and the leases that succeeded
 are still released. Release happens after the last worker exits, on every

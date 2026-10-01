@@ -2,10 +2,11 @@
  * `easSimulators()` against a fake Expo GraphQL API behind a stubbed
  * `fetch`: the create input, polling to ready and the queue line, the lease
  * and its log lines, stopping on release and after a failed or cancelled
- * start, the token or eas-cli login, and the target's `app.appPath`.
+ * start, the token or eas-cli login, the project id from the app config,
+ * and the target's `app.appPath`.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DeviceReleaseContext, DeviceRequest } from '@e2e-dev/mobile';
@@ -113,6 +114,35 @@ function home(path: string): { HOME: string; USERPROFILE: string } {
   return { HOME: path, USERPROFILE: path };
 }
 
+/** An e2e project root holding `files`, each path relative to it; removed with the homes. */
+function projectWith(files: Record<string, string> = {}): string {
+  const root = mkdtempSync(join(tmpdir(), 'e2e-eas-project-'));
+  homes.push(root);
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(root, path, '..'), { recursive: true });
+    writeFileSync(join(root, path), text);
+  }
+  return root;
+}
+
+/** A project root with no app config, for the tests that pass `projectId`. */
+const emptyProject = projectWith();
+
+/**
+ * A stand-in for the project's `expo` package whose `expo config` logs its
+ * arguments and the `EXPO_NO_DOTENV` and `CI` it got to `expo-calls.txt`, then
+ * runs `script`: by default it prints a config with `SHOP_PROJECT_ID` from its
+ * environment as the project id.
+ */
+function fakeExpo(script = "process.stdout.write(JSON.stringify({ name: 'shop', extra: { eas: { projectId: process.env.SHOP_PROJECT_ID } } }));"): Record<string, string> {
+  return {
+    'node_modules/expo/package.json': JSON.stringify({ name: 'expo', version: '0.0.0' }),
+    'node_modules/expo/bin/cli': `require('node:fs').appendFileSync('expo-calls.txt', [...process.argv.slice(2), 'EXPO_NO_DOTENV=' + process.env.EXPO_NO_DOTENV, 'CI=' + process.env.CI].join(' ') + '\\n');\n${script}\n`,
+  };
+}
+
+const linked = (projectId: string) => JSON.stringify({ expo: { name: 'shop', extra: { eas: { projectId } } } });
+
 const env = { EXPO_TOKEN: 'expo-test', ...home(emptyHome) };
 
 /** Each test's own run: the provider tracks the ready sessions of a run across its instances. */
@@ -128,6 +158,7 @@ function request(overrides: Partial<DeviceRequest> = {}): DeviceRequest & { line
     slots: 2,
     app: 'com.example.app',
     agentDeviceVersion: '0.21.18',
+    projectRoot: emptyProject,
     env,
     signal: new AbortController().signal,
     log: (line) => lines.push(line),
@@ -406,6 +437,84 @@ describe('easSimulators()', () => {
     );
     // The parse error quotes the text it failed on, the secret included, so it is not kept as the cause.
     await expect(easSimulators({ projectId: 'p1' }).acquire(request({ env: home(brokenHome) }))).rejects.toSatisfy((error: Error) => error.cause === undefined);
+    expect(eas.calls).toEqual([]);
+  });
+
+  it('reads the project id from app.json when easSimulators() names none, once per run', async () => {
+    const projectRoot = projectWith({ 'app.json': linked('from-app-json') });
+    const provider = easSimulators({});
+    await provider.acquire(request({ projectRoot, runId: 'run-once' }));
+    writeFileSync(join(projectRoot, 'app.json'), linked('relinked'));
+    await provider.acquire(request({ projectRoot, runId: 'run-once', slot: 1 }));
+    await provider.acquire(request({ projectRoot, runId: 'run-next' }));
+    expect(eas.calls.filter((call) => call.operation === 'create').map((call) => (call.variables['input'] as { appId: string }).appId)).toEqual(['from-app-json', 'from-app-json', 'relinked']);
+  });
+
+  it('reads the app config again after a read that failed, in the same run', async () => {
+    const projectRoot = projectWith({ 'app.json': JSON.stringify({ expo: { name: 'shop' } }) });
+    const provider = easSimulators({});
+    await expect(provider.acquire(request({ projectRoot, runId: 'run-retry' }))).rejects.toThrow('has no `extra.eas.projectId`');
+    writeFileSync(join(projectRoot, 'app.json'), linked('after-eas-init'));
+    await provider.acquire(request({ projectRoot, runId: 'run-retry', slot: 1 }));
+    expect(eas.calls[0]?.variables['input']).toMatchObject({ appId: 'after-eas-init' });
+  });
+
+  it('stops reading the app config when the run is interrupted', async () => {
+    await expect(easSimulators({}).acquire(request({ projectRoot: projectWith({ 'app.json': linked('p1') }), signal: AbortSignal.abort() }))).rejects.toThrow(
+      'could not read the Expo app config at',
+    );
+    expect(eas.calls).toEqual([]);
+  });
+
+  it('names the engine to upgrade when it passes no project root', async () => {
+    await expect(easSimulators({}).acquire(request({ projectRoot: undefined as unknown as string }))).rejects.toThrow(
+      'reading `projectId` from the app config needs an @e2e-dev/mobile that passes `projectRoot` to device providers; upgrade it, or pass `projectId`',
+    );
+    expect(eas.calls).toEqual([]);
+  });
+
+  it('reads app.config.json before app.json, and a config without an expo key as the whole config', async () => {
+    const projectRoot = projectWith({ 'app.config.json': JSON.stringify({ extra: { eas: { projectId: ' flat ' } } }), 'app.json': linked('from-app-json') });
+    await easSimulators({}).acquire(request({ projectRoot }));
+    expect(eas.calls[0]?.variables['input']).toMatchObject({ appId: 'flat' });
+  });
+
+  it('prefers the projectId option to the app config', async () => {
+    await easSimulators({ projectId: 'p1' }).acquire(request({ projectRoot: projectWith({ 'app.json': linked('from-app-json') }) }));
+    expect(eas.calls[0]?.variables['input']).toMatchObject({ appId: 'p1' });
+  });
+
+  it("evaluates a dynamic app config with the project's own expo config, in the run's environment without .env files, once per run across targets", async () => {
+    const projectRoot = projectWith({ 'app.config.ts': 'export default {};', 'app.json': linked('stale'), ...fakeExpo() });
+    const runEnv = { ...env, SHOP_PROJECT_ID: 'from-expo-config' };
+    // Two targets of one run, each with its own provider, and two slots of the first.
+    const [ios, android] = [easSimulators({}), easSimulators({})];
+    await Promise.all([
+      ios.acquire(request({ projectRoot, env: runEnv, runId: 'run-dynamic', slot: 0 })),
+      ios.acquire(request({ projectRoot, env: runEnv, runId: 'run-dynamic', slot: 1 })),
+      android.acquire(request({ projectRoot, env: runEnv, runId: 'run-dynamic', platform: 'android', targetName: 'android' })),
+    ]);
+    expect(eas.calls.filter((call) => call.operation === 'create').map((call) => (call.variables['input'] as { appId: string }).appId)).toEqual(['from-expo-config', 'from-expo-config', 'from-expo-config']);
+    expect(readFileSync(join(projectRoot, 'expo-calls.txt'), 'utf8')).toBe('config --json --type public EXPO_NO_DOTENV=1 CI=undefined\n');
+  });
+
+  it('names what is missing when the app config links no project, and starts no session', async () => {
+    const pass = 'pass `projectId` to easSimulators(), or run `eas init` to link the app to an EAS project';
+    const empty = projectWith();
+    await expect(easSimulators({}).acquire(request({ projectRoot: empty }))).rejects.toThrow(`no Expo app config (app.json or app.config.*) in ${empty}; ${pass}`);
+    await expect(easSimulators({}).acquire(request({ projectRoot: projectWith({ 'app.json': JSON.stringify({ expo: { name: 'shop' } }) }) }))).rejects.toThrow(
+      `app.json has no \`extra.eas.projectId\`; ${pass}`,
+    );
+    await expect(easSimulators({}).acquire(request({ projectRoot: projectWith({ 'app.json': '{ "expo": ' }) }))).rejects.toThrow('could not read the Expo app config at');
+    await expect(easSimulators({}).acquire(request({ projectRoot: projectWith({ 'app.config.js': 'module.exports = {};' }) }))).rejects.toThrow(
+      'is dynamic and `expo` is not installed there to evaluate it',
+    );
+    await expect(easSimulators({}).acquire(request({ projectRoot: projectWith({ 'app.config.js': '', ...fakeExpo("process.stdout.write('{}');") }) }))).rejects.toThrow(
+      `app.config.js (through \`expo config\`) has no \`extra.eas.projectId\`; ${pass}`,
+    );
+    await expect(
+      easSimulators({}).acquire(request({ projectRoot: projectWith({ 'app.config.js': '', ...fakeExpo("process.stderr.write('Cannot find module ./secret'); process.exit(1);") }) })),
+    ).rejects.toThrow('`expo config` failed in');
     expect(eas.calls).toEqual([]);
   });
 
