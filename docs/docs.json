@@ -8,7 +8,10 @@
     "light": "#fafafa",
     "dark": "#171717"
   },
-  "logo": "/logo.png",
+  "logo": {
+    "light": "/logo-black.png",
+    "dark": "/logo-white.png"
+  },
   "favicon": {
     "light": "/favicon-black.png",
     "dark": "/favicon-white.png"
@@ -87,8 +90,7 @@
     }
   },
   "appearance": {
-    "default": "dark",
-    "strict": true
+    "default": "system"
   },
   "background": {
     "color": {

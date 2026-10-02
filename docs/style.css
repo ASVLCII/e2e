@@ -1,12 +1,14 @@
 /*
  * e2e on Mintlify: one foreground on paper, no accent color.
  *
- * docs.json carries the palette (near-white on near-black; the site is dark
- * only, `appearance.strict`) and the Geist type. This file adds what the
+ * docs.json carries the palette (near-black on white in light mode, near-white
+ * on near-black in dark; the reader's system picks, the navbar toggle
+ * overrides), a logo per mode, and the Geist type. This file adds what the
  * config cannot express: square corners, text weight capped at medium, a
  * foreground rule over the page title, hairlines above every h2, neutral code
- * surfaces and callouts, and Geist Mono in code. The light values stay so a
- * light mode needs no CSS work, only a dark logo. Mintlify includes every
+ * surfaces and callouts, and Geist Mono in code. Every color is a custom
+ * property below with a light value on :root and a dark one on .dark, so a
+ * rule names the property and works in both modes. Mintlify includes every
  * .css file next to docs.json on every page.
  */
 
@@ -24,6 +26,7 @@
   --e2e-ink: rgb(23 23 23);
   --e2e-muted: rgb(115 115 115);
   --e2e-hairline: rgb(232 232 232);
+  --e2e-surface: rgb(245 245 245);
   --e2e-ta-orange: rgb(255 128 1);
   --e2e-ta-orange-ink: rgb(22 22 22);
 }
@@ -200,14 +203,21 @@ samp {
   font-family: 'Geist Mono', ui-monospace, monospace;
 }
 
-/* The code surface is the page's own grey, not the GitHub theme's blue-grey.
-   Mintlify paints it from `html.dark .code-block-background`; the `body` in the
-   selector is what outranks that rule. */
+/* The code surface is the page's own grey, not the GitHub theme's blue-grey,
+   and one flat fill: Mintlify frames the code in a tinted 2px border around a
+   panel of another color (white in light mode), which square corners turn
+   into a box in a box. In dark mode it paints the panel from an !important
+   `html.dark .code-block-background`; the `body` in the dark selector is what
+   outranks that rule. */
+body .code-block,
+body .code-group,
+body .code-block-background,
 html.dark body .code-block-background {
   background-color: var(--e2e-surface) !important;
 }
 
 /* The fade behind a code block's floating copy button ends in that same grey. */
+body .code-block-fade-overlay,
 html.dark body .code-block-fade-overlay {
   background-image: linear-gradient(to right, transparent, var(--e2e-surface) 50%) !important;
 }
@@ -368,7 +378,7 @@ html.dark body .code-block-fade-overlay {
   /* 16:9 at least, taller when the text wraps, so the image always meets the border. */
   min-height: 112.5px;
   overflow: hidden;
-  background: var(--e2e-surface, var(--e2e-hairline));
+  background: var(--e2e-surface);
 }
 
 /* hqdefault.jpg is 4:3 with letterbox bars; cover crops them away. */
@@ -486,4 +496,11 @@ html.dark body .code-block-fade-overlay {
 
 [role='menuitem']:hover img[src*='/images/contextual/'] {
   opacity: 0.75;
+}
+
+/* Card icons from a file load as <img> too. The Expo mark is drawn black for
+   light mode and inverted to white for dark; Kernel's sits on its own green
+   square and reads on both. */
+.dark img[src*='/images/integrations/expo.svg'] {
+  filter: invert(1);
 }
