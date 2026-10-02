@@ -20,6 +20,7 @@ import {
   EngineError,
   matchesText,
   pollCondition,
+  rejectUnknownOptions,
   TestError,
   toTextPattern,
   urlMatches,
@@ -305,7 +306,10 @@ export function createBrowserFixture(surface: PlaywrightSurface, context: Engine
     url: currentUrl,
     title: currentTitle,
     // The same poll as `expect(browser).toHaveURL`, exposed as a wait.
-    waitForURL: (url, options) => expectation.toHaveURL(url, options),
+    waitForURL: (url, options) => {
+      rejectUnknownOptions('browser.waitForURL', options, ['timeout']);
+      return expectation.toHaveURL(url, options);
+    },
     locator: (selector) => context.locator({ kind: 'selector', selector: requireSelector('browser.locator', selector) }),
     frameLocator: (selector) => frameScreen(context, [requireSelector('browser.frameLocator', selector)]),
     async evaluate<T extends JsonValue>(
@@ -596,11 +600,14 @@ function createBrowserExpectation(deps: ExpectationDeps, negated = false): Brows
         ),
     });
   };
+  const validate = (api: string, options: object | undefined): void =>
+    rejectUnknownOptions(`expect.${negated ? 'not.' : ''}${api}`, options, ['timeout']);
   return {
     get not() {
       return createBrowserExpectation(deps, !negated);
     },
     toHaveURL(expected, options) {
+      validate('toHaveURL', options);
       const label = typeof expected === 'string' ? expected : String(expected);
       const target = deps.baseHref();
       return poll(
@@ -612,6 +619,7 @@ function createBrowserExpectation(deps: ExpectationDeps, negated = false): Brows
       );
     },
     toHaveTitle(expected, options) {
+      validate('toHaveTitle', options);
       const pattern = toTextPattern(expected, { exact: true });
       return poll(
         'toHaveTitle',
@@ -622,6 +630,7 @@ function createBrowserExpectation(deps: ExpectationDeps, negated = false): Brows
       );
     },
     toHaveClass(target, expected, options) {
+      validate('toHaveClass', options);
       const pattern = toTextPattern(expected, { exact: true });
       return poll(
         'toHaveClass',
