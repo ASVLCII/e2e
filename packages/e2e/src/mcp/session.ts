@@ -141,14 +141,20 @@ export class SessionHost {
   }
 
   private async teardown(live: LiveSession, reason: string): Promise<string> {
-    this.releasePorts(live.id);
     if (live.idleTimer !== undefined) clearTimeout(live.idleTimer);
-    const { value, cleanupErrors } = await this.closeAttempt(live.attempt, live.abort, async () => {
-      await live.step.end({ status: 'passed', summary: `session closed: ${reason}` });
-      const outcome = await live.step.done;
-      // The recorder runs this after a start or stop still in flight, even one the step's deadline abandoned.
-      return { outcome, saved: await this.saveRecording(live) };
-    });
+    let closed: Awaited<ReturnType<typeof this.closeAttempt<{ outcome: Awaited<InteractiveStep['done']>; saved: string | undefined }>>>;
+    try {
+      closed = await this.closeAttempt(live.attempt, live.abort, async () => {
+        await live.step.end({ status: 'passed', summary: `session closed: ${reason}` });
+        const outcome = await live.step.done;
+        // The recorder runs this after a start or stop still in flight, even one the step's deadline abandoned.
+        return { outcome, saved: await this.saveRecording(live) };
+      });
+    } finally {
+      // Only once the attempt's processes are stopped: a session opening meanwhile must keep binding the same ports.
+      this.releasePorts(live.id);
+    }
+    const { value, cleanupErrors } = closed;
     const lines = [`Session ${live.id} closed (${reason}); ${live.actions} tool calls ran.`];
     if (value.saved !== undefined) lines.push(value.saved);
     if (value.outcome.error !== undefined) lines.push(`The session step ended with: ${errorMessage(value.outcome.error)}`);
@@ -232,9 +238,6 @@ export class SessionHost {
     const configPath = this.options.locateConfig(options.config);
     this.sessions.claimConfig(id, configPath);
     const loaded = await this.options.loadConfig(configPath);
-    const config = await this.assignSessionPorts(id, loaded);
-    const target = this.resolveTarget(config, options.target);
-    this.sessions.claimEngine(id, target.name, target.engine);
     const ttlMs = this.options.ttlMs ?? SESSION_TTL_MS;
     const abort = new AbortController();
     // Until the session is live, the request and the server's shutdown can abort the open.
@@ -245,6 +248,10 @@ export class SessionHost {
     let attempt: StandaloneAttempt | undefined;
     let step: InteractiveStep | undefined;
     try {
+      // From here on a failure releases the ports this session was assigned.
+      const config = await this.assignSessionPorts(id, loaded);
+      const target = this.resolveTarget(config, options.target);
+      this.sessions.claimEngine(id, target.name, target.engine);
       attempt = await openStandaloneAttempt({
         // A session records video only between start_recording and
         // stop_recording: the configured video mode is for runs, and would
@@ -311,10 +318,11 @@ export class SessionHost {
       return text;
     } catch (cause) {
       opening.removeEventListener('abort', cancel);
-      this.releasePorts(id);
       await this.closeAttempt(attempt, abort, async () => {
         await step?.end({ status: 'failed', summary: 'opening the session failed' });
       }).catch(() => undefined);
+      // After the close: what this open started is stopped before another session may take its ports.
+      this.releasePorts(id);
       throw cause;
     }
   }
