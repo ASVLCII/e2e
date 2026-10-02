@@ -106,6 +106,46 @@ One test launches with its own through `device.openApp`:
 await device.openApp('com.example.app', { relaunch: true, permissions: { camera: 'deny' } });
 ```
 
+### Expo development builds
+
+A development build (`expo-dev-client`) opens on the dev launcher and loads
+its JavaScript from a dev server. On an iOS simulator, launch arguments open
+the server directly and turn off the dev menu, its onboarding sheet, and its
+floating action button, so nothing covers the app. `app.command` starts the
+server for the run:
+
+```ts title="e2e.config.ts"
+import type { E2EConfig } from 'e2e';
+import { mobile } from '@e2e-dev/mobile';
+
+export default {
+  targets: [
+    {
+      engine: mobile({ platform: 'ios' }),
+      app: {
+        bundleId: 'com.example.app',
+        launchArguments: [
+          '--initialUrl', 'http://localhost:8081',
+          '-EXDevMenuShowsAtLaunch', 'NO',
+          '-EXDevMenuIsOnboardingFinished', 'YES',
+          '-EXDevMenuShowFloatingActionButton', 'NO',
+        ],
+        command: { executable: 'npx', args: ['expo', 'start', '--port', '8081'] },
+        readyUrl: 'http://localhost:8081/status',
+      },
+    },
+  ],
+} satisfies E2EConfig;
+```
+
+Start each test with `app.open()`: the warm-up in `prepare` passes no launch
+arguments, so it rests on the dev launcher. The first launch waits for the dev
+server to bundle the app; a test's first check may need a longer timeout than
+the rest. A test that relaunches with its own `launchArguments` replaces the
+target's, so it lists these again. expo-dev-launcher on Android does not read
+`--initialUrl`: open the server there with `device.openLink` and the build's
+`exp+<slug>://expo-development-client/?url=<encoded server URL>` link.
+
 ## Several devices
 
 Add a target for each platform:
