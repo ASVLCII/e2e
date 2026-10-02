@@ -38,6 +38,8 @@ export interface SessionCatalog {
   readonly tools: ToolSet;
   /** The tools that change nothing on the app. */
   readonly readOnly: ReadonlySet<string>;
+  /** The project's own tools among them. */
+  readonly project: ReadonlySet<string>;
 }
 
 export interface CatalogOptions {
@@ -52,6 +54,8 @@ export interface CatalogOptions {
   /** The session's recorder, when the engine records video. */
   readonly recorder: SessionRecorder | undefined;
   readonly warn: (message: string) => void;
+  /** Told the cause of every grammar action that failed into a result. */
+  readonly onActionFailed?: ((cause: unknown) => void) | undefined;
 }
 
 /** Builds the session's catalog from the step context and the target. */
@@ -59,7 +63,7 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
   const { context, screen } = options;
   // The grammar's own observe reports a diff for the model loop; the
   // session's shows the whole screen, so it replaces the grammar's.
-  const { observe: _diffObserve, ...verbs } = createGrammarTools(context, { screen });
+  const { observe: _diffObserve, ...verbs } = createGrammarTools(context, { screen, onActionFailed: options.onActionFailed });
   const recording = options.recorder === undefined ? {} : recordingTools(options.recorder);
   const builtIn: ToolSet = {
     observe: fullObserveTool(context, screen),
@@ -78,7 +82,7 @@ export function createSessionCatalog(options: CatalogOptions): SessionCatalog {
     project[name] = tool;
     if (defined[name]?.annotations.mutates === false) readOnly.add(name);
   }
-  return { tools: { ...builtIn, ...project }, readOnly };
+  return { tools: { ...builtIn, ...project }, readOnly, project: new Set(Object.keys(project)) };
 }
 
 /**
