@@ -9,7 +9,8 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { SemanticNode } from 'e2e/engine';
 import { captureDocument } from '../../src/observation.ts';
-import { readManySemanticsFunction, SECURE_FIELD_SELECTOR } from '../../src/read-node.ts';
+import { readSemanticsFunction } from '../../src/in-page/read-semantics.ts';
+import { SECURE_FIELD_SELECTOR } from '../../src/read-node.ts';
 
 let browser: Browser;
 let page: Page;
@@ -32,8 +33,7 @@ const READ_OPTIONS = {
 /** The reader's `hidden` state for one element next to what Playwright says of the same element. */
 async function hiddenOf(selector: string): Promise<{ reader: boolean; playwright: boolean }> {
   const locator = page.locator(selector);
-  const [raw] = await locator.evaluateAll(readManySemanticsFunction, READ_OPTIONS);
-  if (raw === undefined || 'detached' in raw) throw new Error(`no connected element for ${selector}`);
+  const raw = await locator.evaluate(readSemanticsFunction<typeof READ_OPTIONS.mode>, READ_OPTIONS);
   return { reader: raw.states.hidden, playwright: await locator.isHidden() };
 }
 

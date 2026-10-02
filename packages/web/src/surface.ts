@@ -13,6 +13,7 @@ import type { Browser, BrowserContext, ElementHandle, FrameLocator, Page, Route 
 import {
   EngineError,
   raceAbort,
+  TestError,
   withinCleanupBudget,
   type EngineAppInfo,
   type EngineAttemptContext,
@@ -49,7 +50,8 @@ import { captureObservation } from './observation-capture.ts';
 import { maskOptions, secureFieldMasks } from './observe.ts';
 import { connectionAbort } from './operation-budget.ts';
 import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from './closed-shadow.ts';
-import { readHandlesSemanticsFunction, readManySemanticsFunction, SECURE_FIELD_SELECTOR, type RawNodeData } from './read-node.ts';
+import { SECURE_FIELD_SELECTOR, type RawNodeData } from './read-node.ts';
+import { readSelector, takeReadsFunction } from './read-selector.ts';
 import { httpCredentials, installSiteHeaders, lowercaseNames } from './protected-app.ts';
 import { RefRegistry } from './refs.ts';
 import {
@@ -619,44 +621,40 @@ export class PlaywrightSurface {
         await this.validateFrames(expression);
         const projected = projectExpression(page, expression, this.testIdAttribute);
         const { displayValue, name, steps } = projected;
-        const readOptions = {
-          testIdAttribute: this.testIdAttribute,
-          secureFieldSelector: SECURE_FIELD_SELECTOR,
-          mode: { kind: 'node' as const },
-        };
-        // A predicate-filtered match is one element among many candidates (every input with a
+        // Every match is read by the `e2e-read` selector engine in the task that finds it, so a
+        // page that replaces it a frame later cannot detach it before the read. A
+        // predicate-filtered match is one element among many candidates (every input with a
         // value, every control the label engine kept). Re-resolving it by position at action
         // time would act on a neighbor whenever the page inserted or removed an element in
-        // between, so such matches are pinned to element handles: the handles are taken first
-        // and the semantics are read from those very handles, so what was read and what is
+        // between, so such matches are pinned to the handles of the elements the query returned,
+        // and their reads are taken back from those very handles: what was read and what is
         // acted on are one set of elements by construction.
+        const read = readSelector({ testIdAttribute: this.testIdAttribute, secureFieldSelector: SECURE_FIELD_SELECTOR });
+        const reading = projected.locator.locator(read.selector);
         const handles =
           displayValue !== null || name !== null
-            ? ((await projected.locator.elementHandles()) as ElementHandle<Element>[])
+            ? ((await reading.elementHandles()) as ElementHandle<Element>[])
             : null;
         /** Disposes every handle this locate took, on the paths that hand none of them out. */
         const releaseHandles = (): void => {
           for (const handle of handles ?? []) void handle.dispose().catch(() => undefined);
         };
         const first = handles?.[0];
-        const reads =
+        const taken =
           handles === null
-            ? await projected.locator.evaluateAll(readManySemanticsFunction, readOptions)
+            ? await reading.evaluateAll(takeReadsFunction, { token: read.token })
             : first === undefined
               ? []
-              : await first.evaluate(readHandlesSemanticsFunction, { elements: handles, options: readOptions });
-        // The page can replace a queried element before the read reaches it. Every element the
-        // query returned is a match, except a display-value candidate, whose held value says
-        // whether it was one. A match that left re-resolves the set, so a count or a single
-        // match is never taken from what remains; a non-match that left drops out, so churn in
-        // unrelated controls never holds up a query for a stable one.
-        if (reads.some((read) => 'detached' in read && (displayValue === null || matchesText(read.value ?? '', displayValue)))) {
+              : await first.evaluate(takeReadsFunction, { token: read.token, elements: handles });
+        const reads = taken.filter((raw) => raw !== null);
+        if (reads.length !== taken.length) {
           releaseHandles();
-          throw new EngineError('NODE_STALE', 'a match left the document while it was read', { retryable: true });
+          throw new TestError(
+            'INVALID_LOCATOR',
+            'a selector that captures with * (*css=article >> text=Hello) is not supported: use filter({ has }) instead',
+          );
         }
-        const candidates = reads.flatMap((raw, index) =>
-          'detached' in raw || (projected.visible && raw.states.hidden) ? [] : [{ raw, index }],
-        );
+        const candidates = reads.flatMap((raw, index) => (projected.visible && raw.states.hidden ? [] : [{ raw, index }]));
         // An exact label query matches any of the control's labels as the engine's reader names
         // them, so text a label marks aria-hidden (a required-field marker) never hides a field,
         // and an aria-label override or a second label does not either.

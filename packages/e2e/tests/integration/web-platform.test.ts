@@ -525,6 +525,14 @@ test('a viewport set before the first navigation opens no page', async ({ screen
 test('css selectors via browser.locator', async ({ app, browser }) => {
   await app.open();
   await expect(browser.locator('ul[data-testid="items"] li').first()).toHaveText('Item Alpha');
+  await expect(browser.locator('css=ul[data-testid="items"] >> *css=li')).toHaveCount(3);
+  let capture = 'no error';
+  try {
+    await browser.locator('*css=ul[data-testid="items"] >> li').count();
+  } catch (error) {
+    capture = (error as { code?: string }).code ?? 'no code';
+  }
+  expect(capture).toBe('INVALID_LOCATOR');
 });
 
 test('app lifecycle: restart preserves storage, clearState clears it', async ({ app, screen }) => {

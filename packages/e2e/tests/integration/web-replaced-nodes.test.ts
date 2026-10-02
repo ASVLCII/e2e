@@ -5,7 +5,8 @@
  * field that shares its candidate set still reads as shown, and a field that
  * is really removed still reads as hidden. Among a crowd of fields replaced
  * every frame, a stable field resolves and an absent one reads as hidden
- * without waiting out the churn.
+ * without waiting out the churn. A runner too starved to send two protocol
+ * calls within one frame still reads the field as shown.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -17,18 +18,33 @@ import { expect } from 'e2e';
 
 const READS = 30;
 
+/**
+ * Runs body while this process's event loop is blocked in 20 ms slices, so a
+ * frame passes between any two protocol calls, as on a loaded CI runner.
+ * Atomics.wait blocks without spinning a core the other workers need.
+ */
+const starved = async (body) => {
+  const blocker = new Int32Array(new SharedArrayBuffer(4));
+  const timer = setInterval(() => Atomics.wait(blocker, 0, 0, 20), 0);
+  try {
+    return await body();
+  } finally {
+    clearInterval(timer);
+  }
+};
+
 const fields = (screen) => ({
   testId: screen.getByTestId('nickname'),
   label: screen.getByLabel('Nickname', { exact: true }),
   displayValue: screen.getByDisplayValue('ada'),
 });
 
-/** How many of READS reads of each locator report it hidden. */
-const hiddenReads = async (locators) => {
+/** How many of \`reads\` reads of each locator report it hidden. */
+const hiddenReads = async (locators, reads = READS) => {
   const hidden = {};
   for (const [kind, locator] of Object.entries(locators)) {
     hidden[kind] = 0;
-    for (let read = 0; read < READS; read += 1) {
+    for (let read = 0; read < reads; read += 1) {
       if (await locator.isHidden()) hidden[kind] += 1;
     }
   }
@@ -38,6 +54,11 @@ const hiddenReads = async (locators) => {
 test('a field replaced every frame never reads as hidden', async ({ app, screen }) => {
   await app.open('/replaced');
   expect(await hiddenReads(fields(screen))).toEqual({ testId: 0, label: 0, displayValue: 0 });
+});
+
+test('a field replaced every frame never reads as hidden on a starved runner', async ({ app, screen }) => {
+  await app.open('/replaced');
+  expect(await starved(() => hiddenReads(fields(screen), 10))).toEqual({ testId: 0, label: 0, displayValue: 0 });
 });
 
 test('a stable field beside one replaced every frame reads as shown', async ({ app, screen }) => {
@@ -91,12 +112,12 @@ describe('reads of a node replaced every frame', () => {
     // Ninety sequential reads against a page that swaps nodes every frame: on a
     // loaded CI runner each read takes far longer than locally, and the suite
     // asserts what the reads return, not how fast they are. The hook's own
-    // budget covers all seven tests at that deadline.
+    // budget covers all eight tests at that deadline.
     ({ outcome, project } = await runProject(
       { 'tests/replaced.e2e.ts': SUITE },
       { appUrl: app.url, config: { actionTimeout: 5_000, assertionTimeout: 4_000, timeout: 90_000 } },
     ));
-  }, 660_000);
+  }, 750_000);
 
   afterAll(async () => {
     project?.cleanup();
@@ -105,6 +126,11 @@ describe('reads of a node replaced every frame', () => {
 
   it('never reads the live field as hidden through a detached node', () => {
     const result = resultByTitle(outcome, 'a field replaced every frame never reads as hidden');
+    expect(result.status, JSON.stringify(result.attempts[0]?.error)).toBe('passed');
+  });
+
+  it('never reads the live field as hidden while the runner is starved', () => {
+    const result = resultByTitle(outcome, 'a field replaced every frame never reads as hidden on a starved runner');
     expect(result.status, JSON.stringify(result.attempts[0]?.error)).toBe('passed');
   });
 

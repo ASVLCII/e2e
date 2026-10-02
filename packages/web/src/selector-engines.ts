@@ -2,8 +2,10 @@
 
 import { CLOSED_SHADOW_SELECTOR_ENGINES } from './closed-shadow.ts';
 import { EXACT_LABEL_SELECTOR_ENGINE, EXACT_LABEL_SELECTOR_ENGINE_SOURCE } from './label-selector.ts';
+import { READ_SELECTOR_ENGINE, READ_SELECTOR_ENGINE_SOURCE } from './read-selector.ts';
 
 export const SELECTOR_ENGINES: readonly { readonly name: string; readonly source: string }[] = [
   ...CLOSED_SHADOW_SELECTOR_ENGINES,
   { name: EXACT_LABEL_SELECTOR_ENGINE, source: EXACT_LABEL_SELECTOR_ENGINE_SOURCE },
+  { name: READ_SELECTOR_ENGINE, source: READ_SELECTOR_ENGINE_SOURCE },
 ];

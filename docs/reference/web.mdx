@@ -339,7 +339,9 @@ await browser.waitForURL(/\/orders\/\d+$/, { timeout: 15_000 });
 The selector is a Playwright selector: CSS by default, XPath with `xpath=` or
 a leading `//`, and `>>` chains, so
 `browser.locator('[data-testid="row"] >> nth=2 >> [data-testid="conditions"] > div')`
-scopes CSS to one row.
+scopes CSS to one row. A `*` capture before the last part
+(`*css=article >> text=Hello`) is `INVALID_LOCATOR`: use
+`filter({ has })` for an element that contains another.
 
 ```ts
 const payment = browser.frameLocator('#payment-frame');

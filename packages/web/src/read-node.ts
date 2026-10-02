@@ -1,9 +1,10 @@
 /**
- * The wire types of the in-page semantic reader and the page functions
- * assembled from its source for locator.evaluate, locator.evaluateAll, and
- * page.evaluate. The reader itself lives in `in-page/read-semantics.ts`; it is
- * serialized into the page, so every page function here is built from its
- * source with `new Function` and stays free of module-scope captures.
+ * The wire types of the in-page semantic reader and the document walk
+ * assembled from its source for page.evaluate. The reader itself lives in
+ * `in-page/read-semantics.ts`; it is serialized into the page, so the page
+ * function here is built from its source with `new Function` and stays free
+ * of module-scope captures. Locator reads run it inside the selector engines
+ * (`read-selector.ts`, `label-selector.ts`).
  */
 
 import { readSemanticsFunction } from './in-page/read-semantics.ts';
@@ -97,27 +98,8 @@ export type SemanticMode =
       textLimit: number;
     };
 
-/**
- * What a node read reports for an element no longer in its document. A
- * detached element has no boxes, so everything else it would report (hidden,
- * no labels) describes nothing on screen; its current value is still its own.
- */
-export interface DetachedNodeData {
-  readonly detached: true;
-  readonly value: string | null;
-}
-
 /** Result of one read, selected by the mode discriminant. */
-export type SemanticResult<Mode extends SemanticMode> = Mode extends { kind: 'node' }
-  ? RawNodeData | DetachedNodeData
-  : RawObservation;
-
-/** Options for a single-node read, shared by `evaluate` and `evaluateAll` callers. */
-interface NodeReadOptions {
-  readonly testIdAttribute: string;
-  readonly secureFieldSelector: string;
-  readonly mode: { readonly kind: 'node' };
-}
+export type SemanticResult<Mode extends SemanticMode> = Mode extends { kind: 'node' } ? RawNodeData : RawObservation;
 
 /** Options for one document's tree walk. */
 interface TreeReadOptions {
@@ -128,7 +110,7 @@ interface TreeReadOptions {
 
 /**
  * Walks a whole document from its root element in one in-page call. Built
- * from the reader's source like the batch reader below, so the caller
+ * from the reader's source, so the caller
  * evaluates it directly on a page or frame instead of first resolving a
  * `:root` locator - one fewer protocol round trip per document per capture.
  */
@@ -136,28 +118,3 @@ export const readDocumentSemanticsFunction = new Function(
   'options',
   `return (${readSemanticsFunction.toString()})(document.documentElement, options);`,
 ) as (options: TreeReadOptions) => RawObservation;
-
-/**
- * Reads every matched element in one in-page round trip. A page function
- * cannot close over module scope, so the batch function is assembled from the
- * reader's own source (the same source `evaluate` sends) and is a
- * self-contained function Playwright serializes and calls with the elements.
- */
-export const readManySemanticsFunction = new Function(
-  'elements',
-  'options',
-  `return elements.map((element) => (${readSemanticsFunction.toString()})(element, options));`,
-) as (elements: Element[], options: NodeReadOptions) => (RawNodeData | DetachedNodeData)[];
-
-/**
- * Reads every handle the caller already holds in one round trip, so what is
- * read and what is later acted on are the same elements by construction rather
- * than by a second lookup. Evaluated on the first handle so the read runs in
- * the frame the handles belong to; `page.evaluate` would reject handles taken
- * inside an iframe.
- */
-export const readHandlesSemanticsFunction = new Function(
-  '_first',
-  'arg',
-  `return arg.elements.map((element) => (${readSemanticsFunction.toString()})(element, arg.options));`,
-) as (first: Element, arg: { elements: Element[]; options: NodeReadOptions }) => (RawNodeData | DetachedNodeData)[];
