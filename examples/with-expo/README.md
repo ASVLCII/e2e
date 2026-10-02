@@ -16,7 +16,10 @@ npm run test:e2e:ios
 ```
 
 For Android, start an emulator, then run `npm run android:release` and
-`npm run test:e2e:android`.
+`npm run test:e2e:android`. The Android build needs JDK 17, the version
+React Native targets: point `JAVA_HOME` at one. A newer JDK, such as the
+JDK 25 that recent Android Studio bundles, fails the native CMake step with
+"A restricted method in java.lang.System has been called".
 
 A Release build bundles the JavaScript, so no Metro server needs to run while
 the tests do. Rebuild after you change the app. The first run also compiles
@@ -51,16 +54,20 @@ on Android. In React Native, both come from the `testID` prop:
 <Pressable testID="greet" accessibilityRole="button" onPress={greet}>
 ```
 
-The iOS tree differs from the code in a few ways worth knowing before you
-write a locator:
+The tree differs from the code in a few ways worth knowing before you write
+a locator. The tests stick to test ids and text, which read the same on both
+platforms.
 
-- **`textTransform: 'uppercase'` changes the label.** The button reads
-  `GREET`, so `getByRole('button', 'Greet')` finds nothing. The test id
-  doesn't change.
-- **An empty field reports its placeholder as its value.** Don't assert
-  `toHaveValue('')` on an empty `TextInput`.
-- **`accessibilityRole="header"` is not a `heading`.** The title is a `text`
-  node, so the tests use `getByText('Say hello')`.
+- **`textTransform: 'uppercase'` changes the label.** On both platforms the
+  button reads `GREET`, so `getByRole('button', 'Greet')` finds nothing. The
+  test id doesn't change.
+- **An empty field shows its placeholder.** iOS reports it as the field's
+  value, Android as its text. Don't assert `toHaveValue('')` on an empty
+  `TextInput`.
+- **Roles differ by platform.** Android reads `accessibilityRole="header"`
+  as a `heading` and `accessibilityRole="alert"` as an `alert`. On iOS the
+  title is a plain `text` node and the error has no role, so
+  `getByRole('heading', 'Say hello')` passes on Android and fails on iOS.
 
 ## Development builds and CI
 
@@ -83,4 +90,4 @@ Pick **Mobile (iOS/Android)**, replace the Settings bundle id with yours, and
 put `testID`s on the elements your tests touch.
 
 Last checked with e2e 0.15.2, @e2e-dev/mobile 0.9.0, and Expo SDK 57 on an
-iOS 26.5 simulator. The Android target has not been run yet.
+iOS 26.5 simulator (Xcode 27) and an Android 16 (API 36) emulator (JDK 17).
