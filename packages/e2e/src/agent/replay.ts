@@ -379,7 +379,8 @@ export async function replayTrace(
           for (let index = 0; index < planned.times; index += 1) {
             if (list === undefined) {
               if (index > 0) await host.observe('held-still');
-              await actions.scroll(planned.direction);
+              // A folded scroll is paced in full whatever its entry says.
+              await (planned.times > 1 ? host.actions : actions).scroll(planned.direction);
             } else {
               const scrolled = await scrollOnce(host, refind, planned.direction, list, index === 0 ? look : HELD_STILL);
               if (scrolled.kind === 'failed') return stop(scrolled.failure, partial());
