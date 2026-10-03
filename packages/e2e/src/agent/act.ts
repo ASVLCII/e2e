@@ -245,6 +245,7 @@ class ActDispatch {
               ...(agent.executor.version === undefined ? {} : { version: agent.executor.version }),
             },
             redact: runtime.redact,
+            redactCut: runtime.redactCut,
             maxActions: this.accounting.maxActions,
             stepIndex,
           });
@@ -481,7 +482,6 @@ class ActDispatch {
       actions: this.dispatcher.actions,
       signal: this.accounting.signal,
       remainingMs: () => this.accounting.remainingMs(),
-      redact: this.runtime.redact,
       replaying: (active) => {
         this.runtime.steps.replaying(active);
         this.accounting.replaying(active);

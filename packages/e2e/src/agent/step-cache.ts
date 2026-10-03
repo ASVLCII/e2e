@@ -35,6 +35,7 @@ import {
   type ReplayOutcome,
   type SemanticScreen,
 } from './replay.ts';
+import { redactNodesAgain } from './observation.ts';
 import type { SettleMode } from './settle-policy.ts';
 
 /**
@@ -59,6 +60,8 @@ export interface StepCacheOptions {
   readonly templates: readonly ParamTemplate[];
   readonly executor: { readonly name: string; readonly version?: string };
   readonly redact: (text: string) => string;
+  /** `redact` for a field cut at its observed limit (`SecretLedger.redactCut`). */
+  readonly redactCut: (text: string) => string;
   readonly maxActions: number;
   /** Timeline index of the step being dispatched. */
   readonly stepIndex: number;
@@ -174,6 +177,7 @@ export class StepTraceSession {
     if (options.cache.mode === 'read-write') {
       this.recorder = new TraceRecorder({
         redact: options.redact,
+        redactCut: options.redactCut,
         maxActions: options.maxActions,
       });
     }
@@ -424,7 +428,7 @@ export class StepTraceSession {
       // recorded screen only if the recorded effect is visibly on it; with
       // no anchors recorded there is nothing to see, and it is another screen.
       const undecided = verdict === 'undecided' && anchors.length > 0;
-      if (undecided && anchorsPresent(anchors, observation.nodes, { redact: this.options.redact })) {
+      if (undecided && anchorsPresent(anchors, observation.nodes)) {
         return { screen: observation, anchorsSeen: true };
       }
       const delay = END_PATH_DELAYS_MS[attempt];
@@ -490,7 +494,10 @@ export class StepTraceSession {
     const observation = await probeScreen(this.host, 'held-still');
     if (!this.host.traceEligible || observation?.kind !== 'semantic') return;
     const { nodes: endNodes, path: endPath } = observation;
-    const endAnchors = describeAnchors(this.startNodes, endNodes, this.options);
+    // The start capture may predate a secret this step resolved; read with
+    // the ledger as it is now, an unchanged node is no delta.
+    const startNodes = redactNodesAgain(this.startNodes, { redact: this.options.redact, redactCut: this.options.redactCut });
+    const endAnchors = describeAnchors(startNodes, endNodes);
     const trace = recorder.finalize({
       executor: this.options.executor,
       recordedFor: {

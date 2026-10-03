@@ -11,8 +11,11 @@ import { failedStepOutcome, recordedVerdictOf, StepTraceSession, type StepCacheH
 import { AgentError } from '../../src/agent/error.ts';
 import type { ExecutorActions } from '../../src/agent/executor.ts';
 import type { SettleMode } from '../../src/agent/settle-policy.ts';
+import type { RedactedNode } from '../../src/agent/observation.ts';
 import type { SemanticNode } from '../../src/engine/surface.ts';
+import { redacted, redactedNodes } from '../helpers/redacted.ts';
 import type { JsonValue } from '../../src/types.ts';
+import { SecretLedger } from '../../src/internal/redact.ts';
 
 const savedMarker: SemanticNode = {
   ref: { id: 'm1', revision: 'r1' },
@@ -22,8 +25,8 @@ const savedMarker: SemanticNode = {
 };
 const savedAnchor = { role: 'status', name: 'Marker', text: 'saved' };
 
-function nodeMap(list: readonly SemanticNode[]): ReadonlyMap<string, SemanticNode> {
-  return new Map(list.map((node) => [node.ref.id, node]));
+function nodeMap(list: readonly SemanticNode[]): ReadonlyMap<string, RedactedNode> {
+  return redactedNodes(list);
 }
 
 function fakeContext(read: AgentCacheContext['store']['read']): AgentCacheContext {
@@ -67,7 +70,6 @@ function makeHost(
     signal: new AbortController().signal,
     // Short enough that a missing anchor is not waited for across the backoff.
     remainingMs: () => 50,
-    redact: (text) => text,
     traceEligible: true,
     replaying: () => undefined,
   };
@@ -81,6 +83,7 @@ function makeSession(cache: AgentCacheContext, host: StepCacheHost, overrides: P
     templates: [],
     executor: { name: 'test' },
     redact: (text) => text,
+    redactCut: (text) => text,
     maxActions: 25,
     stepIndex: 1,
     ...overrides,
@@ -268,7 +271,7 @@ describe('StepTraceSession', () => {
     await withheld.begin();
     withheld.record({
       name: 'tap',
-      node: { ref: { id: 'n1', revision: 'r1' }, role: 'button', name: 'Upgrade' },
+      node: redacted({ ref: { id: 'n1', revision: 'r1' }, role: 'button', name: 'Upgrade' }),
     });
     await withheld.conclude('passed', 'passed');
     expect(unanchored.staged).toHaveLength(0);
@@ -281,6 +284,31 @@ describe('StepTraceSession', () => {
     await staged.conclude('passed', 'passed');
     expect(anchored.staged).toHaveLength(1);
     expect(stagedTrace(anchored).startPath).toBeUndefined();
+  });
+
+  it('takes no unchanged node for the delta when a secret registered after the starting screen masks it', async () => {
+    const context = fakeContext(noEntry.store.read);
+    const ledger = new SecretLedger();
+    const status: SemanticNode = { ref: { id: 's', revision: 'r1' }, role: 'status', name: 'Code token-2718-value' };
+    const button: SemanticNode = { ref: { id: 'b', revision: 'r1' }, role: 'button', name: 'Save marker' };
+    const screens = [[status, button], [status, button, savedMarker]];
+    const host: StepCacheHost = {
+      ...makeHost(['/storage', '/storage']),
+      // Each capture is redacted with the ledger as it stood then, as the feed redacts it.
+      observe: async () => ({
+        kind: 'semantic' as const,
+        nodes: redactedNodes((screens.length > 1 ? screens.shift() : screens[0]) ?? [], ledger),
+        viewport: { width: 1280, height: 720 },
+        path: '/storage',
+      }),
+    };
+    const session = makeSession(context, host, { redact: ledger.redact, redactCut: ledger.redactCut });
+    await session.begin();
+    // A provider-backed fill resolves the value only now.
+    ledger.register('token', 'token-2718-value');
+    session.record({ name: 'tap', node: redacted(button, ledger) });
+    await session.conclude('passed', 'saved the marker');
+    expect(stagedTrace(context).endAnchors).toEqual([savedAnchor]);
   });
 
   it('stages the delta between the starting and passing screens as end anchors', async () => {
@@ -304,7 +332,7 @@ describe('StepTraceSession', () => {
       ),
     );
     await session.begin();
-    session.record({ name: 'tap', node: { ...button, ref: { id: 'b', revision: 'r2' } } });
+    session.record({ name: 'tap', node: redacted({ ...button, ref: { id: 'b', revision: 'r2' } }) });
     await session.conclude('passed', 'saved the marker');
     expect(stagedTrace(context).endAnchors).toEqual([savedAnchor]);
     expect(stagedTrace(context).endPath).toBe('/storage');
@@ -445,7 +473,7 @@ describe('StepTraceSession', () => {
     await session.begin();
     expect(session.replayedPrefix?.stopReason).toBe('end-mismatch');
     // The replayed flow did not produce its effect; the executor acted further.
-    session.record({ name: 'tap', node: { ref: { id: 's', revision: 'r2' }, role: 'button', name: 'Save' } });
+    session.record({ name: 'tap', node: redacted({ ref: { id: 's', revision: 'r2' }, role: 'button', name: 'Save' }) });
     await session.conclude('passed', 'saved after all');
     expect(context.staged).toHaveLength(0);
     expect(deleted).toEqual(['a'.repeat(64)]);
