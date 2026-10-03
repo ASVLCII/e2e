@@ -58,8 +58,6 @@ type Actionable = Pick<
   | 'dblclick'
   | 'fill'
   | 'press'
-  | 'check'
-  | 'uncheck'
   | 'hover'
   | 'scrollIntoViewIfNeeded'
   | 'selectOption'
@@ -351,7 +349,7 @@ const NAVIGATION_RACE_PATTERN =
   /execution context was destroyed|because of a navigation|navigating and changing the content|frame was detached|frame got detached|node is detached from document/i;
 
 /** Whether a Playwright failure describes a read that lost its document to a navigation. */
-function isNavigationRace(cause: unknown): boolean {
+export function isNavigationRace(cause: unknown): boolean {
   return NAVIGATION_RACE_PATTERN.test(message(cause));
 }
 

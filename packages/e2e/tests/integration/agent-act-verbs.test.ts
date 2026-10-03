@@ -83,6 +83,14 @@ const FLOWS: readonly Flow[] = [
       calls <= 1 ? [{ toolName: 'check', input: { target: nodeIdFor(call.prompt, /checkbox "Agree to terms"/), checked: true } }] : undefined,
   },
   {
+    title: 'checks a radio the pick replaces with its summary',
+    instruction: 'pick Express delivery',
+    check: `await expect(screen.getByRole('status', { name: 'Gesture state' })).toHaveText('delivery: Express');`,
+    replays: true,
+    script: (calls, call) =>
+      calls === 0 ? [{ toolName: 'check', input: { target: nodeIdFor(call.prompt, /radio "Express"/), checked: true } }] : undefined,
+  },
+  {
     title: 'uploads a project file',
     instruction: 'attach the fixture file',
     check: `await expect(screen.getByRole('status', { name: 'Gesture state' })).toHaveText('attached: attachment.txt');`,
@@ -281,6 +289,14 @@ describe('agent.act grammar verbs', () => {
     expect(third!.lastToolResult).not.toContain('had no visible effect');
   });
 
+  it('records a check whose radio the pick replaced: the click landed', () => {
+    expect(resultByTitle(outcome, 'checks a radio the pick replaces with its summary').status).toBe('passed');
+    const actions = engineEvents('checks a radio the pick replaces with its summary');
+    expect(actions.map((event) => `${event.name}:${event.status}`)).toEqual(['check:passed']);
+    expect(actions[0]!.detail).toBe('check radio "Express" in "Delivery"');
+    expect(turnsOf('pick Express delivery')[1]!.lastToolResult).toMatch(/changed #\S+ status "Gesture state" text="delivery: Express"/);
+  });
+
   it('uploads a project-relative file, recording the path as given and the policy decision', () => {
     expect(resultByTitle(outcome, 'uploads a project file').status).toBe('passed');
     const step = stepOf('uploads a project file');
@@ -430,6 +446,7 @@ describe('agent.act grammar verbs: record then zero-turn replay', () => {
     const engineNames = (title: string) => actStepOf(secondRun, title).events.filter((event) => event.kind === 'engine').map((event) => event.name);
     expect(engineNames('hovers the menu trigger and taps what it reveals')).toEqual(['hover', 'tap']);
     expect(engineNames('drags the card onto the done column')).toEqual(['dragTo']);
+    expect(engineNames('checks a radio the pick replaces with its summary')).toEqual(['check']);
     expect(actStepOf(secondRun, 'uploads a project file').events.filter((event) => event.kind === 'policy')).toEqual([
       expect.objectContaining({ name: 'upload.path', decision: 'allowed' }),
     ]);
