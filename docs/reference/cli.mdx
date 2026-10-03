@@ -96,9 +96,9 @@ For a new project, the wizard asks you to choose:
   **Mobile (iOS/Android)** adds `@e2e-dev/mobile`, defaults to iOS on
   macOS and Android elsewhere, and opens Settings. **None** adds nothing.
 - A model provider or subscription for agent steps. Choose Vercel AI Gateway,
-  OpenRouter, an OpenAI-compatible endpoint, ChatGPT, GitHub Copilot, or
-  SuperGrok. Choose None for tests that only use locators. The wizard adds
-  the required packages and model config. Subscription users then sign in
+  OpenRouter, an OpenAI-compatible endpoint, ChatGPT, GitHub Copilot,
+  OpenCode Console, or SuperGrok. Choose None for tests that only use
+  locators. The wizard adds the required packages and model config. Subscription users then sign in
   with `e2e login`. See [Models](/models) and [Subscriptions](/subscriptions).
 - Where to install the agent skill (see [e2e guide](#e2e-guide)):
   `.agents/skills/` for Codex, Cursor, Copilot, Gemini CLI, OpenCode, and
@@ -164,6 +164,7 @@ npx e2e login openai              # ChatGPT, browser sign-in
 npx e2e login openai --device     # sign in with a device code
 npx e2e login github-copilot --from-gh  # use your GitHub CLI login
 npx e2e login github-copilot --client-id <id> [--enterprise-url <host>]
+npx e2e login opencode-console    # OpenCode Console, device code
 npx e2e login spacexai            # SuperGrok, device code
 npx e2e login                     # choose a provider
 ```
@@ -173,6 +174,7 @@ pnpm exec e2e login openai              # ChatGPT, browser sign-in
 pnpm exec e2e login openai --device     # sign in with a device code
 pnpm exec e2e login github-copilot --from-gh  # use your GitHub CLI login
 pnpm exec e2e login github-copilot --client-id <id> [--enterprise-url <host>]
+pnpm exec e2e login opencode-console    # OpenCode Console, device code
 pnpm exec e2e login spacexai            # SuperGrok, device code
 pnpm exec e2e login                     # choose a provider
 ```
@@ -182,6 +184,7 @@ bunx e2e login openai              # ChatGPT, browser sign-in
 bunx e2e login openai --device     # sign in with a device code
 bunx e2e login github-copilot --from-gh  # use your GitHub CLI login
 bunx e2e login github-copilot --client-id <id> [--enterprise-url <host>]
+bunx e2e login opencode-console    # OpenCode Console, device code
 bunx e2e login spacexai            # SuperGrok, device code
 bunx e2e login                     # choose a provider
 ```
@@ -194,7 +197,7 @@ configuration.
 
 | Argument or flag | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `[provider]` | `openai`, `github-copilot`, or `spacexai` | a picker | The subscription to sign in to |
+| `[provider]` | `openai`, `github-copilot`, `opencode-console`, or `spacexai` | a picker | The subscription to sign in to |
 | `--device` | boolean | `false` | ChatGPT: show a code to enter on another device instead of opening a browser |
 | `--from-gh` | boolean | `false` | GitHub Copilot: reuse the token of the signed-in GitHub CLI |
 | `--client-id <id>` | string | none | GitHub Copilot: the client id of your GitHub OAuth App with the device flow enabled |
@@ -239,10 +242,11 @@ bunx e2e models openai    # one provider
 </CodeGroup>
 
 Asks the vendor which models the stored login serves and prints one line per
-model: the id `chatgpt()`, `copilot()`, or `grok()` takes, the vendor's name
-for it, and its notes (reasoning levels, vision, preview, hidden, and for
-Copilot `not enabled` or `no chat or responses` when `copilot()` cannot call
-it). Without a
+model: the id `chatgpt()`, `copilot()`, `opencodeConsole()`, or `grok()`
+takes, the vendor's name for it, and its notes (reasoning levels, vision,
+preview, hidden, for Copilot `not enabled` or `no chat or responses` when
+`copilot()` cannot call it, and for OpenCode Console the plan, Zen or Go,
+that serves it). Without a
 stored login, or when the named provider has none, exits 1 with the sign-in
 command; when one of several logins fails to list, the others still print and
 the command exits 1. An unknown provider exits 2. See

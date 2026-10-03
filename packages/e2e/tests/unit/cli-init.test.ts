@@ -260,6 +260,7 @@ describe('e2e init', () => {
         expect.objectContaining({ value: 'openai-compatible', label: 'OpenAI-compatible endpoint' }),
         expect.objectContaining({ value: 'chatgpt', label: 'ChatGPT Plus/Pro subscription' }),
         expect.objectContaining({ value: 'copilot', label: 'GitHub Copilot subscription' }),
+        expect.objectContaining({ value: 'opencode-console', label: 'OpenCode Console' }),
         expect.objectContaining({ value: 'grok', label: 'SuperGrok subscription' }),
         expect.objectContaining({ value: 'none' }),
       ],
@@ -277,6 +278,13 @@ describe('e2e init', () => {
   it.each([
     { gateway: 'chatgpt', provider: 'openai', line: "import { chatgpt } from 'e2e/oauth/chatgpt';", model: "model: chatgpt('gpt-6-luna'),", sdk: ['@ai-sdk/openai'] },
     { gateway: 'copilot', provider: 'github-copilot', line: "import { copilot } from 'e2e/oauth/copilot';", model: "model: copilot('claude-sonnet-5'),", sdk: ['@ai-sdk/openai-compatible', '@ai-sdk/openai'] },
+    {
+      gateway: 'opencode-console',
+      provider: 'opencode-console',
+      line: "import { opencodeConsole } from 'e2e/oauth/opencode-console';",
+      model: "model: opencodeConsole('deepseek-v4.1-flash'),",
+      sdk: ['@ai-sdk/openai-compatible', '@ai-sdk/openai', '@ai-sdk/anthropic', '@ai-sdk/google'],
+    },
     { gateway: 'grok', provider: 'spacexai', line: "import { grok } from 'e2e/oauth/grok';", model: "model: grok('grok-4'),", sdk: ['@ai-sdk/xai'] },
   ] as const)('writes a $gateway subscription model and names the sign-in as the next step', async ({ gateway, provider, line, model, sdk }) => {
     vi.mocked(clack.select).mockResolvedValueOnce('web').mockResolvedValueOnce(gateway);

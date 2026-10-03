@@ -56,6 +56,7 @@ import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/
 import { chatgpt } from '../../src/oauth/chatgpt.ts';
 import { copilot } from '../../src/oauth/copilot.ts';
 import { grok } from '../../src/oauth/grok.ts';
+import { opencodeConsole } from '../../src/oauth/opencode-console.ts';
 // @ts-expect-error isDefinedTool left e2e/agent: config loading checks each tools entry itself
 import { isDefinedTool } from '../../src/agent/public.ts';
 // @ts-expect-error createAgent left e2e/agent: an agents entry is the plain object it took
@@ -519,12 +520,15 @@ if (runEvent.type === 'explore') {
 chatgpt('gpt-5.6-luna') satisfies LanguageModelV4;
 copilot('gpt-4.1') satisfies LanguageModelV4;
 grok('grok-4') satisfies LanguageModelV4;
+opencodeConsole('go/deepseek-v4.1-flash') satisfies LanguageModelV4;
 // @ts-expect-error the store and apiUrl options are gone
 chatgpt('gpt-5.6-luna', {});
 // @ts-expect-error the store and baseURL options are gone
 copilot('gpt-4.1', {});
 // @ts-expect-error the store and baseURL options are gone
 grok('grok-4', {});
+// @ts-expect-error a constructor takes the model id alone
+opencodeConsole('go/deepseek-v4.1-flash', {});
 
 // agents.<name>: the judge slot beside model, and every budget in one entry.
 ({ targets: [{ engine }], agents: { default: { model, judge: model, judgmentTimeout: 30_000, maxSteps: 5, maxModelCalls: 10, maxObservationBytes: 1000, maxInputTokens: 32_000 } } }) satisfies E2EConfig;

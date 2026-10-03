@@ -53,6 +53,7 @@ key, or a local endpoint. Authenticate:
 | --- | --- |
 | ChatGPT Plus or Pro | `npx e2e login openai` |
 | GitHub Copilot | `npx e2e login github-copilot` (GitHub CLI signed in, or your own `--client-id`) |
+| OpenCode Console (OpenCode Zen and OpenCode Go) | `npx e2e login opencode-console` (approve the device code, pick the workspace) |
 | SuperGrok or X Premium+ | `npx e2e login spacexai` |
 | Vercel AI Gateway | Set `AI_GATEWAY_API_KEY`, or sign in to the Vercel CLI and `npx vercel link`; without the key `gateway()` uses a Vercel OIDC token |
 | OpenRouter | Set `OPENROUTER_API_KEY` |
@@ -70,6 +71,14 @@ over Copilot's Responses API when the plan serves that model only there, choosin
 per model from the plan's listing. `npx e2e models github-copilot` marks the models
 it cannot call at all: those served only over an API `copilot()` does not speak, and
 those the plan has not enabled.
+
+Switching to OpenCode Console: install `ai`, `@ai-sdk/openai-compatible`,
+`@ai-sdk/openai`, `@ai-sdk/anthropic`, and `@ai-sdk/google`, set
+`model: opencodeConsole('<id>')` from `e2e/oauth/opencode-console`, run
+`npx e2e login opencode-console`. A bare id is an OpenCode Zen model; a `go/` id
+(`go/deepseek-v4.1-flash`) is an OpenCode Go model and needs the workspace's Go
+subscription. `npx e2e models opencode-console` lists the ids, tagged Zen or Go. In CI,
+set a Console service account key as `OPENCODE_API_KEY`.
 
 ## The config
 
