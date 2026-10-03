@@ -10,7 +10,8 @@
           "role": "listitem",
           "name": "report.pdf",
           "within": "Files"
-        }
+        },
+        "quiet": true
       },
       {
         "name": "secondaryTap",

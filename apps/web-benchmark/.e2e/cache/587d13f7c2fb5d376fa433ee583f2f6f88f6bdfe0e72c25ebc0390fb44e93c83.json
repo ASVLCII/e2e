@@ -10,7 +10,8 @@
           "role": "button",
           "name": "Attachments",
           "within": "Files"
-        }
+        },
+        "quiet": true
       },
       {
         "name": "upload",
