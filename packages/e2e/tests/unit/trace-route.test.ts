@@ -7,7 +7,7 @@ const key = (location: string) => routeKey(routeOf(location));
 const verdict = (recorded: string, live: string) => compareRoutes(routeOf(recorded), routeOf(live));
 
 describe('routeOf', () => {
-  it('abstracts the ids apps mint: uuids, hex and digit runs, random tokens', () => {
+  it('abstracts the ids apps mint: uuids, hex and digit runs, random tokens, prefixed record ids', () => {
     expect(key('/runs/3f2504e0-4f89-11d3-9a0c-0305e82c3301')).toBe('/runs/:id');
     expect(key('/projects/a77c12665e90/tests')).toBe('/projects/:id/tests');
     expect(key('/orders/42')).toBe('/orders/:id');
@@ -15,6 +15,8 @@ describe('routeOf', () => {
     expect(key('/blog/2024/09/18/launch-day')).toBe('/blog/:id/:id/:id/launch-day');
     expect(key('/dashboard/e2e-45961c4c/projects/0c1d2e3f4a5b')).toBe('/dashboard/:id/projects/:id');
     expect(key('/keys/omk_7Qx9Lm2Pz4Rt8Wv1')).toBe('/keys/:id');
+    expect(key('/projects/PROJ-016')).toBe('/projects/:id');
+    expect(key('/invoices/INV-2041')).toBe('/invoices/:id');
   });
 
   it('keeps the words a router owns: versions, locales, dates in words, capitalized and dashed slugs', () => {
@@ -23,6 +25,7 @@ describe('routeOf', () => {
     expect(key('/en-US/settings/general')).toBe('/en-US/settings/general');
     expect(key('/Products/Summer-Sneaker')).toBe('/Products/Summer-Sneaker');
     expect(key('/users/john_doe')).toBe('/users/john_doe');
+    expect(key('/news/page-2')).toBe('/news/page-2');
     expect(key('/docs/index.html')).toBe('/docs/index.html');
     expect(key('/tags/c++')).toBe('/tags/c++');
     expect(key('/shop/%E9%9E%8B')).toBe('/shop/\u978b');
@@ -68,6 +71,7 @@ describe('compareRoutes', () => {
     expect(verdict('/orders/1', '/orders/2')).toBe('same');
     expect(verdict('/companies?search=a', '/companies?search=b#x')).toBe('same');
     expect(verdict('Settings', 'Settings')).toBe('same');
+    expect(verdict('/projects/PROJ-016', '/projects/PROJ-017')).toBe('same');
   });
 
   it('leaves exactly one unexplained segment to the screen, and nothing else', () => {

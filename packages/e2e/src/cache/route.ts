@@ -38,15 +38,18 @@ const PARAM = ':id';
 /**
  * A segment shaped like a value the app mints per record: a uuid, a hex or
  * digit run, a long token carrying letters and at least two digits (a route
- * word such as `companies-v2` has one), or text with whitespace, which no
- * router puts in a path. A capitalized or dashed word is none of these; two
- * of them differing is left to the screen.
+ * word such as `companies-v2` has one), a prefixed record id — letters, a
+ * dash, then a digit tail of two or more (`PROJ-016`, `INV-2041`; a single
+ * digit as in `page-2` is a route word) — or text with whitespace, which no
+ * router puts in a path. Any other capitalized or dashed word is none of
+ * these; two of them differing is left to the screen.
  */
 const MINTED_SEGMENT: readonly RegExp[] = [
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^[0-9a-f]{8,}$/i,
   /^\d+$/,
   /^(?=(?:[^\d]*\d){2})(?=.*[A-Za-z])[A-Za-z0-9_-]{12,}$/,
+  /^[A-Za-z]+-\d{2,}$/,
   /\s/,
 ];
 
