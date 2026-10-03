@@ -14,6 +14,7 @@ import { packageVersion } from '../internal/package-version.ts';
 import { projectRelativePath } from '../internal/source.ts';
 import type { VcsInfo } from '../internal/vcs.ts';
 import type { SkipInfo } from '../collect/select.ts';
+import { someSkippedAfterFailure } from '../run/records.ts';
 import type {
   ArtifactRecord,
   AttemptRecord,
@@ -555,7 +556,8 @@ function computeSummary(results: readonly ResultRecord[]): ReportSummary {
  * nothing contradicts that. One genuine failure keeps the run failed, and so
  * does any run-level error (a launch that never came up, a cleanup or report
  * write that failed): it is its own fact about the run, not a blocked step,
- * and it must stay visible to a host reading the status. Derivation requires
+ * and it must stay visible to a host reading the status. So does a skip after
+ * a failure under `failOnSkippedFailure`. Derivation requires
  * positive evidence, never absence of it.
  */
 function deriveRunStatus(
@@ -563,9 +565,11 @@ function deriveRunStatus(
   results: readonly ResultRecord[],
   serialGroups: readonly SerialGroupRecord[],
   runErrors: readonly RunError[],
+  failOnSkippedFailure: boolean,
 ): BuildReportOptions['status'] | 'blocked' {
   if (status !== 'failed' && status !== 'error') return status;
   if (runErrors.length > 0) return status;
+  if (failOnSkippedFailure && someSkippedAfterFailure(results, serialGroups)) return status;
   // Serial members carry no attempts of their own; their failing error lives
   // on the group's last attempt (or its failing member).
   const groupCode = new Map<string, string | undefined>();
@@ -700,7 +704,7 @@ export function buildReport(options: BuildReportOptions): Report1Document {
         name: 'e2e',
         version: packageVersion(import.meta.url, '../../package.json', '0.0.0'),
       },
-      status: deriveRunStatus(options.status, options.results, options.serialGroups, options.runErrors),
+      status: deriveRunStatus(options.status, options.results, options.serialGroups, options.runErrors, config?.failOnSkippedFailure === true),
       exitCode: options.exitCode,
       startedAt: options.startedAt,
       finishedAt: timestamp(),
