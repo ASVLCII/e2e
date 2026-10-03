@@ -7,11 +7,12 @@
  * provider-independent.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { withHint } from '../../internal/errors.ts';
 import { missingModelError, type ResolvedModel } from '../../config/agent.ts';
 import { aiSdk, asSdkLanguageModel, loadAiSdk, type SdkLanguageModel } from '../ai-sdk.ts';
-import { MODEL_REQUEST_HEADERS } from '../../internal/client-identity.ts';
+import { modelRequestHeaders } from '../../internal/client-identity.ts';
 import { packageVersion } from '../../internal/package-version.ts';
 import { AgentError } from '../error.ts';
 import { isContextOverflow } from './overflow.ts';
@@ -93,7 +94,7 @@ export function createModelAdapter(model: ResolvedModel | undefined, agentName =
         maxOutputTokens: call.maxOutputTokens,
         ...(providerOptions === undefined ? {} : { providerOptions: providerOptions as never }),
         maxRetries: TRANSPORT_RETRIES,
-        headers: MODEL_REQUEST_HEADERS,
+        headers: modelRequestHeaders(randomUUID()),
         abortSignal: call.signal,
         timeout: call.timeoutMs,
       } as const;

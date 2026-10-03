@@ -1,6 +1,6 @@
 ---
 title: Subscriptions
-description: Use your ChatGPT, GitHub Copilot, or SuperGrok subscription for agent steps.
+description: Use your ChatGPT, GitHub Copilot, SuperGrok, or OpenCode Go subscription for agent steps.
 ---
 
 Use an existing subscription without a separate API key. Choose your plan
@@ -11,6 +11,7 @@ in `e2e init`, install dependencies, then sign in:
 | ChatGPT Plus or Pro | `npx e2e login openai` |
 | GitHub Copilot | `npx e2e login github-copilot` |
 | SuperGrok or X Premium+ | `npx e2e login spacexai` |
+| OpenCode Go | Set `OPENCODE_API_KEY` to the key from [opencode.ai/auth](https://opencode.ai/auth) |
 
 Follow the terminal prompts, then run `npx e2e run`. Agent calls use your
 plan's usage limits. For a new project, start with the [quickstart](/quickstart).
@@ -96,6 +97,36 @@ import { grok } from 'e2e/oauth/grok';
 
 const agent = { model: grok('grok-4') };
 ```
+  </Tab>
+  <Tab title="OpenCode Go">
+<CodeGroup>
+```bash npm
+npm install -D ai @ai-sdk/openai @ai-sdk/openai-compatible
+```
+
+```bash pnpm
+pnpm add -D ai @ai-sdk/openai @ai-sdk/openai-compatible
+```
+
+```bash bun
+bun add -d ai @ai-sdk/openai @ai-sdk/openai-compatible
+```
+</CodeGroup>
+
+```ts title="Model setup"
+import { opencodeGo } from 'e2e/oauth/opencode-go';
+
+const agent = { model: opencodeGo('gpt-6-luna') };
+```
+
+Go has no sign-in command: copy the API key from
+[opencode.ai/auth](https://opencode.ai/auth) and set `OPENCODE_API_KEY`.
+`opencodeGo()` calls each model over the API Go serves it on: GPT, Grok, and
+Muse Spark over `@ai-sdk/openai`, MiniMax and Qwen 3.8 Flash over
+`@ai-sdk/anthropic` (install it for those), and the rest, such as Kimi, GLM,
+and DeepSeek, over `@ai-sdk/openai-compatible`. The
+[Go model list](https://opencode.ai/docs/go/) has the ids. Every agent step
+is one session to Go, so its turns share the prompt cache.
   </Tab>
 </Tabs>
 

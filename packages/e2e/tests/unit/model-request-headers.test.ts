@@ -72,7 +72,13 @@ function chatModel() {
   return createOpenAICompatible({ name: 'scripted', baseURL }).chatModel('scripted');
 }
 
+/** The conversation id a request carried. */
+function sessionOf(headers: IncomingHttpHeaders): string | string[] | undefined {
+  return headers['x-session-affinity'];
+}
+
 function expectIdentified(headers: IncomingHttpHeaders | undefined) {
+  expect(headers?.['x-session-affinity']).toMatch(/^[0-9a-f-]{36}$/);
   expect(headers?.['user-agent']?.startsWith(`${USER_AGENT} `)).toBe(true);
   expect(headers?.['user-agent']).toContain(' ai/');
   expect(headers?.['http-referer']).toBe('https://tester.army/e2e');
@@ -80,11 +86,10 @@ function expectIdentified(headers: IncomingHttpHeaders | undefined) {
 }
 
 describe('model request headers', () => {
-  it('identifies e2e on a judgment call, ahead of the AI SDK user agent', async () => {
+  it('identifies e2e on a judgment call, ahead of the AI SDK user agent, as a conversation of its own', async () => {
     const model = chatModel();
     const adapter = createModelAdapter({ provider: model.provider, id: model.modelId, model });
-
-    await adapter.generate({
+    const call = {
       system: 's',
       prompt: 'p',
       schemaName: 'judgment',
@@ -94,10 +99,14 @@ describe('model request headers', () => {
       maxInputTokens: 64_000,
       timeoutMs: 10_000,
       signal: new AbortController().signal,
-    });
+    };
 
-    expect(received).toHaveLength(1);
-    expectIdentified(received[0]);
+    await adapter.generate(call);
+    await adapter.generate(call);
+
+    expect(received).toHaveLength(2);
+    for (const headers of received) expectIdentified(headers);
+    expect(new Set(received.map(sessionOf)).size).toBe(2);
   });
 
   it('identifies e2e on every turn of an act loop', async () => {
@@ -129,5 +138,6 @@ describe('model request headers', () => {
     expect(steps.all()[0]?.status).toBe('passed');
     expect(received).toHaveLength(2);
     for (const headers of received) expectIdentified(headers);
+    expect(new Set(received.map(sessionOf)).size).toBe(1);
   });
 });

@@ -38,8 +38,9 @@ const SCOPES: readonly Scope[] = [
     dir: 'e2e',
     optionalPeerHomes: {
       ai: ['agent/ai-sdk.ts'],
-      '@ai-sdk/openai': ['oauth/chatgpt.ts', 'oauth/copilot.ts'],
-      '@ai-sdk/openai-compatible': ['oauth/copilot.ts'],
+      '@ai-sdk/anthropic': ['oauth/opencode-go.ts'],
+      '@ai-sdk/openai': ['oauth/chatgpt.ts', 'oauth/copilot.ts', 'oauth/opencode-go.ts'],
+      '@ai-sdk/openai-compatible': ['oauth/copilot.ts', 'oauth/opencode-go.ts'],
       '@ai-sdk/xai': ['oauth/grok.ts'],
     },
   },

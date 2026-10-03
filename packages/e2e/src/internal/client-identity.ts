@@ -10,8 +10,21 @@ export const USER_AGENT = `e2e/${packageVersion(import.meta.url, '../../package.
  * its own user agent after ours; `http-referer` and `x-title` are the app
  * attribution the Vercel AI Gateway and OpenRouter read, and others ignore.
  */
-export const MODEL_REQUEST_HEADERS: Readonly<Record<string, string>> = {
+const MODEL_REQUEST_HEADERS: Readonly<Record<string, string>> = {
   'user-agent': USER_AGENT,
   'http-referer': 'https://tester.army/e2e',
   'x-title': 'e2e',
 };
+
+/**
+ * Carries the conversation a model call belongs to: one id per act step or
+ * judgment, the same on every turn of it, so a vendor that routes by session
+ * keeps the turns on one cache. A provider with its own session header
+ * (OpenCode's `x-opencode-session`) copies it from here.
+ */
+export const SESSION_HEADER = 'x-session-affinity';
+
+/** The headers every model call of one conversation sends. */
+export function modelRequestHeaders(sessionId: string): Readonly<Record<string, string>> {
+  return { ...MODEL_REQUEST_HEADERS, [SESSION_HEADER]: sessionId };
+}

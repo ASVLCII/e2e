@@ -54,7 +54,9 @@ suites that consume the built packages the way a user would.
     and `models` commands and the `e2e/oauth/*` model constructors; each
     constructor subpath is the place its `@ai-sdk/*` optional peers are
     imported, and the Copilot constructor loads `@ai-sdk/openai` lazily, only
-    for the Responses models, so the CLI boots without any of them). The
+    for the Responses models, and the OpenCode Go constructor loads the one
+    package its model's API needs on the first call, so the CLI boots
+    without any of them). The
     constructors and the CLI
     are the whole public surface: the flows, stores, and fetch behind them
     are module-private, not a library for other products. `tests/live/` holds hand-run

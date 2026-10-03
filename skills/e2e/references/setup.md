@@ -54,6 +54,7 @@ key, or a local endpoint. Authenticate:
 | ChatGPT Plus or Pro | `npx e2e login openai` |
 | GitHub Copilot | `npx e2e login github-copilot` (GitHub CLI signed in, or your own `--client-id`) |
 | SuperGrok or X Premium+ | `npx e2e login spacexai` |
+| OpenCode Go | Set `OPENCODE_API_KEY` (from opencode.ai/auth); `opencodeGo('<id>')` from `e2e/oauth/opencode-go` |
 | Vercel AI Gateway | Set `AI_GATEWAY_API_KEY`, or sign in to the Vercel CLI and `npx vercel link`; without the key `gateway()` uses a Vercel OIDC token |
 | OpenRouter | Set `OPENROUTER_API_KEY` |
 | Local or self-hosted endpoint | Set the endpoint URL and a model it serves, plus a key if required |
@@ -252,7 +253,7 @@ For an app started elsewhere, point `app.url` at it, literally or via
 
 | Variable | Effect |
 | --- | --- |
-| `AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, ... | Read by provider packages, not the runner. |
+| `AI_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, `OPENAI_API_KEY`, ... | Read by provider packages, not the runner. |
 | `E2E_USER_<NAME>_USERNAME`, `E2E_USER_<NAME>_PASSWORD` | Override `credentials.<name>`; `<NAME>` is the name uppercased, other characters `_`. |
 | `E2E_SECRET_<NAME>` | Overrides `secrets.<name>`, same rule. Two entries of one namespace mapping to one variable are `INVALID_CONFIG`. |
 | `CI` | CI defaults; list in topic `running`. |

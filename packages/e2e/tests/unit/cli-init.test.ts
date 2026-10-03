@@ -261,6 +261,7 @@ describe('e2e init', () => {
         expect.objectContaining({ value: 'chatgpt', label: 'ChatGPT Plus/Pro subscription' }),
         expect.objectContaining({ value: 'copilot', label: 'GitHub Copilot subscription' }),
         expect.objectContaining({ value: 'grok', label: 'SuperGrok subscription' }),
+        expect.objectContaining({ value: 'opencode-go', label: 'OpenCode Go subscription' }),
         expect.objectContaining({ value: 'none' }),
       ],
     }));
@@ -291,6 +292,19 @@ describe('e2e init', () => {
     expect(devDependencies).toHaveProperty('ai', '^7.0.0');
     for (const name of sdk) expect(devDependencies).toHaveProperty(name);
     expect(output()).toContain(`e2e login ${provider}, then`);
+  });
+
+  it('writes an OpenCode Go model that reads OPENCODE_API_KEY, with no sign-in step', async () => {
+    vi.mocked(clack.select).mockResolvedValueOnce('web').mockResolvedValueOnce('opencode-go');
+    vi.mocked(clack.confirm).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    expect((await init(dir)).exitCode).toBe(0);
+    expect(read('e2e.config.ts')).toContain("import { opencodeGo } from 'e2e/oauth/opencode-go';");
+    expect(read('e2e.config.ts')).toContain("model: opencodeGo('gpt-6-luna'),");
+    expect(read('e2e.config.ts')).toContain('reads OPENCODE_API_KEY');
+    const devDependencies = JSON.parse(read('package.json')).devDependencies;
+    for (const name of ['ai', '@ai-sdk/openai', '@ai-sdk/openai-compatible']) expect(devDependencies).toHaveProperty(name);
+    expect(output()).not.toContain('e2e login');
   });
 
   it('validates the endpoint the way config resolution will', async () => {

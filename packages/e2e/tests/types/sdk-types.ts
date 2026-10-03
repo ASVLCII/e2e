@@ -56,6 +56,7 @@ import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/
 import { chatgpt } from '../../src/oauth/chatgpt.ts';
 import { copilot } from '../../src/oauth/copilot.ts';
 import { grok } from '../../src/oauth/grok.ts';
+import { opencodeGo } from '../../src/oauth/opencode-go.ts';
 // @ts-expect-error isDefinedTool left e2e/agent: config loading checks each tools entry itself
 import { isDefinedTool } from '../../src/agent/public.ts';
 // @ts-expect-error createAgent left e2e/agent: an agents entry is the plain object it took
@@ -515,6 +516,10 @@ if (runEvent.type === 'explore') {
 chatgpt('gpt-5.6-luna') satisfies LanguageModelV4;
 copilot('gpt-4.1') satisfies LanguageModelV4;
 grok('grok-4') satisfies LanguageModelV4;
+// OpenCode Go reads OPENCODE_API_KEY and takes no options either.
+opencodeGo('kimi-k3') satisfies LanguageModelV4;
+// @ts-expect-error the key comes from OPENCODE_API_KEY
+opencodeGo('kimi-k3', {});
 // @ts-expect-error the store and apiUrl options are gone
 chatgpt('gpt-5.6-luna', {});
 // @ts-expect-error the store and baseURL options are gone

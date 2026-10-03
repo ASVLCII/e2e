@@ -5,7 +5,7 @@
  * entry here.
  */
 
-export type GatewayId = 'vercel' | 'openrouter' | 'openai-compatible' | 'chatgpt' | 'copilot' | 'grok';
+export type GatewayId = 'vercel' | 'openrouter' | 'openai-compatible' | 'chatgpt' | 'copilot' | 'grok' | 'opencode-go';
 
 export interface GatewayPreset {
   readonly id: GatewayId;
@@ -84,6 +84,15 @@ export const GATEWAYS: readonly GatewayPreset[] = [
     comment: 'Your SuperGrok subscription serves the model; sign in once with `e2e login spacexai`, `e2e models spacexai` lists the ids.',
     login: 'spacexai',
     model: () => "grok('grok-4')",
+  },
+  {
+    id: 'opencode-go',
+    label: 'OpenCode Go subscription',
+    hint: 'your Go plan: GPT, Kimi, GLM, DeepSeek, Qwen, and more; reads OPENCODE_API_KEY',
+    dependencies: { '@ai-sdk/openai': '^4.0.0', '@ai-sdk/openai-compatible': '^3.0.0' },
+    import: "import { opencodeGo } from 'e2e/oauth/opencode-go';",
+    comment: 'Your OpenCode Go subscription serves the model and reads OPENCODE_API_KEY from https://opencode.ai/auth; MiniMax ids also need @ai-sdk/anthropic.',
+    model: () => "opencodeGo('gpt-6-luna')",
   },
 ];
 
