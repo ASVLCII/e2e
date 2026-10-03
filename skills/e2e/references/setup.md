@@ -63,6 +63,14 @@ set `model: chatgpt('gpt-6-luna')` from `e2e/oauth/chatgpt`, run `npx e2e
 login openai`. `npx e2e models` lists the ids each login serves. Use API keys
 in CI.
 
+Switching to Copilot: install `ai`, `@ai-sdk/openai-compatible`, and
+`@ai-sdk/openai`, set `model: copilot('<id>')` from `e2e/oauth/copilot`, run
+`npx e2e login github-copilot`. `copilot()` calls a model over chat completions, or
+over Copilot's Responses API when the plan serves that model only there, choosing
+per model from the plan's listing. `npx e2e models github-copilot` marks the models
+it cannot call at all: those served only over an API `copilot()` does not speak, and
+those the plan has not enabled.
+
 ## The config
 
 `e2e.config.ts` sits at the project root and default-exports an object literal
