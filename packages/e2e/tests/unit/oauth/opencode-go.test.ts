@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { providerHints } from '../../../src/agent/model/provider-hints.ts';
 import { USER_AGENT } from '../../../src/internal/client-identity.ts';
 import { opencodeGo } from '../../../src/oauth/opencode-go.ts';
 import { json, useServers, useVendor, type Received } from './helpers/server.ts';
@@ -65,6 +66,28 @@ describe('opencodeGo', () => {
     expect(sent.headers['user-agent']).toContain(' ai/');
     if (path.endsWith('/messages')) expect(sent.headers['x-api-key']).toBe('go-key');
     if (path.endsWith('/responses')) expect(JSON.parse(sent.body)).toMatchObject({ store: false });
+  });
+
+  it('lifts the Anthropic SDK\'s 4096-token cap on a Messages call that sets no limit, and keeps a set one', async () => {
+    const server = await go();
+    vendor(server, {});
+    vi.stubEnv('OPENCODE_API_KEY', 'go-key');
+
+    await generateText({ model: opencodeGo('minimax-m3'), prompt: 'act turn' });
+    await generateText({ model: opencodeGo('minimax-m3'), prompt: 'judgment', maxOutputTokens: 512 });
+
+    expect(server.requests.map((request) => JSON.parse(request.body).max_tokens)).toEqual([131_072, 512]);
+  });
+
+  it('carries the runner\'s prompt-cache breakpoint on a Messages model', async () => {
+    const server = await go();
+    vendor(server, {});
+    vi.stubEnv('OPENCODE_API_KEY', 'go-key');
+    const model = opencodeGo('qwen3.8-flash');
+
+    await generateText({ model, instructions: providerHints(model).instructions('rules'), prompt: 'hi' });
+
+    expect(JSON.parse(server.requests[0]!.body).system).toEqual([{ type: 'text', text: 'rules', cache_control: { type: 'ephemeral' } }]);
   });
 
   it('keeps one session per model instance for a caller outside the runner', async () => {

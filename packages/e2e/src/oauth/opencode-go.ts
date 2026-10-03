@@ -14,13 +14,19 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { LanguageModelV4 } from '@ai-sdk/provider';
+import type { LanguageModelV4, LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { SESSION_HEADER, USER_AGENT } from '../internal/client-identity.ts';
 import { OAuthError } from './errors.ts';
 import { withoutServerStorage } from './responses.ts';
 import type { FetchFunction } from './types.ts';
 
 const GO_API_URL = 'https://opencode.ai/zen/go/v1';
+/**
+ * The output limit of every model Go serves over Messages (models.dev). The
+ * Anthropic SDK does not know these models and would cap a call that sets no
+ * limit, such as an act turn, at 4096 tokens, too few for a reasoning model.
+ */
+const MESSAGES_MAX_OUTPUT_TOKENS = 131_072;
 const OPENCODE_SESSION_HEADER = 'x-opencode-session';
 
 /** The API a Go model is served over: `/responses`, `/messages`, or `/chat/completions`. */
@@ -91,13 +97,28 @@ async function createModel(modelId: string, protocol: Protocol, fetch: FetchFunc
     }
     case 'messages': {
       const { createAnthropic } = await load(() => import('@ai-sdk/anthropic'), '@ai-sdk/anthropic', modelId);
-      return createAnthropic({ apiKey: 'go', baseURL: GO_API_URL, fetch, name })(modelId);
+      return withOutputLimit(createAnthropic({ apiKey: 'go', baseURL: GO_API_URL, fetch, name })(modelId), MESSAGES_MAX_OUTPUT_TOKENS);
     }
     case 'chat': {
       const { createOpenAICompatible } = await load(() => import('@ai-sdk/openai-compatible'), '@ai-sdk/openai-compatible', modelId);
       return createOpenAICompatible({ apiKey: 'go', baseURL: GO_API_URL, fetch, name, includeUsage: true }).chatModel(modelId);
     }
   }
+}
+
+/** Sends `limit` as the output limit of a call that sets none. */
+function withOutputLimit(model: LanguageModelV4, limit: number): LanguageModelV4 {
+  const limited = (options: LanguageModelV4CallOptions): LanguageModelV4CallOptions => ({ ...options, maxOutputTokens: options.maxOutputTokens ?? limit });
+  return {
+    specificationVersion: model.specificationVersion,
+    provider: model.provider,
+    modelId: model.modelId,
+    get supportedUrls() {
+      return model.supportedUrls;
+    },
+    doGenerate: (options) => model.doGenerate(limited(options)),
+    doStream: (options) => model.doStream(limited(options)),
+  };
 }
 
 /** Imports the package a protocol needs, naming it when it is not installed. */

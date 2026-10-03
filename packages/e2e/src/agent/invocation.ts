@@ -5,6 +5,7 @@
  * explicit deadline, a model-call budget, and no shared model transcript.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { StepExecutorContext } from './executor.ts';
 import type { JSONSchema7 } from 'ai';
 import type { AgentCacheContext } from '../cache/context.ts';
@@ -149,6 +150,8 @@ const MAX_OUTPUT_TOKENS = 8192;
 /** Model-call accounting plus observation metrics for one invocation; a judgment carries no ledger. */
 export class Invocation {
   readonly deadline: Deadline;
+  /** Every model call of the invocation, repairs included, is one conversation. */
+  private readonly conversation = randomUUID();
 
   private readonly metrics: StepMetrics = {
     modelCalls: 0,
@@ -367,6 +370,7 @@ export class Invocation {
               maxOutputTokens: MAX_OUTPUT_TOKENS,
               maxInputTokens: this.agent.config.maxInputTokens,
               providerOptions: this.agent.config.providerOptions,
+              conversation: this.conversation,
               signal: this.runtime.engine.signal,
               timeoutMs: Math.max(1, this.deadline.remaining()),
             }),

@@ -7,7 +7,6 @@
  * provider-independent.
  */
 
-import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { withHint } from '../../internal/errors.ts';
 import { missingModelError, type ResolvedModel } from '../../config/agent.ts';
@@ -94,7 +93,7 @@ export function createModelAdapter(model: ResolvedModel | undefined, agentName =
         maxOutputTokens: call.maxOutputTokens,
         ...(providerOptions === undefined ? {} : { providerOptions: providerOptions as never }),
         maxRetries: TRANSPORT_RETRIES,
-        headers: modelRequestHeaders(randomUUID()),
+        headers: modelRequestHeaders(call.conversation),
         abortSignal: call.signal,
         timeout: call.timeoutMs,
       } as const;

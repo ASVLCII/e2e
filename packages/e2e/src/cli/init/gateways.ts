@@ -91,7 +91,7 @@ export const GATEWAYS: readonly GatewayPreset[] = [
     hint: 'your Go plan: GPT, Kimi, GLM, DeepSeek, Qwen, and more; reads OPENCODE_API_KEY',
     dependencies: { '@ai-sdk/openai': '^4.0.0', '@ai-sdk/openai-compatible': '^3.0.0' },
     import: "import { opencodeGo } from 'e2e/oauth/opencode-go';",
-    comment: 'Your OpenCode Go subscription serves the model and reads OPENCODE_API_KEY from https://opencode.ai/auth; MiniMax ids also need @ai-sdk/anthropic.',
+    comment: 'Your OpenCode Go subscription serves the model and reads OPENCODE_API_KEY from https://opencode.ai/auth; MiniMax and Qwen 3.8 Flash ids also need @ai-sdk/anthropic.',
     model: () => "opencodeGo('gpt-6-luna')",
   },
 ];

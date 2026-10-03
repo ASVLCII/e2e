@@ -445,6 +445,7 @@ describe('model error classification', () => {
       validate: (value: unknown) => ({ ok: true as const, value }),
       maxOutputTokens: 16,
       maxInputTokens: 64_000,
+      conversation: 'judgment-1',
       timeoutMs: 50,
       signal: aborted.signal,
     };
@@ -556,6 +557,7 @@ function modelCall() {
     validate: (value: unknown) => ({ ok: true as const, value }),
     maxOutputTokens: 16,
     maxInputTokens: 64_000,
+    conversation: 'judgment-1',
     timeoutMs: 600_000,
     signal: new AbortController().signal,
   };

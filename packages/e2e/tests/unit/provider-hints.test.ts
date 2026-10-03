@@ -12,6 +12,12 @@ describe('providerHints for Anthropic', () => {
     expect(direct.instructions('rules')).toEqual(hints.instructions('rules'));
   });
 
+  it('recognizes another vendor\'s model served over the Messages API', () => {
+    const go = providerHints({ provider: 'opencode-go.messages', modelId: 'minimax-m3' });
+    expect(go.instructions('rules')).toEqual(hints.instructions('rules'));
+    expect(providerHints({ provider: 'opencode-go.chat', modelId: 'kimi-k3' }).instructions('rules')).toBe('rules');
+  });
+
   it('marks the system prompt as a breakpoint and adds no request options', () => {
     expect(hints.instructions('rules')).toEqual({
       role: 'system',

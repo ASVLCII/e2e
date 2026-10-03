@@ -63,10 +63,12 @@ export function providerHints(model: ProviderModelRef | undefined): ProviderHint
 
 /**
  * A gateway model names its upstream in the model id (`anthropic/claude-…`);
- * a direct provider names it in the provider (`anthropic.messages`).
+ * a direct provider names it in the provider (`anthropic.messages`), and a
+ * vendor serving other models over Anthropic's Messages API names the API
+ * (`opencode-go.messages`).
  */
 function speaksAnthropic(model: ProviderModelRef | undefined): boolean {
-  return idPrefix(model, 'anthropic/') || providerPrefix(model, 'anthropic');
+  return idPrefix(model, 'anthropic/') || providerPrefix(model, 'anthropic') || (model?.provider ?? '').toLowerCase().endsWith('.messages');
 }
 
 /**

@@ -60,6 +60,8 @@ export interface ModelCall<Value> {
   readonly maxInputTokens: number;
   /** Provider options from `agent.providerOptions`, passed through as-is. */
   readonly providerOptions?: ProviderOptions | undefined;
+  /** The conversation the call belongs to, the same across a judgment's repair attempts. */
+  readonly conversation: string;
   readonly signal: AbortSignal;
   readonly timeoutMs: number;
 }

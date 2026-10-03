@@ -78,7 +78,7 @@ function sessionOf(headers: IncomingHttpHeaders): string | string[] | undefined 
 }
 
 function expectIdentified(headers: IncomingHttpHeaders | undefined) {
-  expect(headers?.['x-session-affinity']).toMatch(/^[0-9a-f-]{36}$/);
+  expect(headers?.['x-session-affinity']).toBeTruthy();
   expect(headers?.['user-agent']?.startsWith(`${USER_AGENT} `)).toBe(true);
   expect(headers?.['user-agent']).toContain(' ai/');
   expect(headers?.['http-referer']).toBe('https://tester.army/e2e');
@@ -86,7 +86,7 @@ function expectIdentified(headers: IncomingHttpHeaders | undefined) {
 }
 
 describe('model request headers', () => {
-  it('identifies e2e on a judgment call, ahead of the AI SDK user agent, as a conversation of its own', async () => {
+  it('identifies e2e on a judgment call, ahead of the AI SDK user agent, with the conversation it belongs to', async () => {
     const model = chatModel();
     const adapter = createModelAdapter({ provider: model.provider, id: model.modelId, model });
     const call = {
@@ -97,16 +97,17 @@ describe('model request headers', () => {
       validate: (value: unknown) => ({ ok: true as const, value }),
       maxOutputTokens: 16,
       maxInputTokens: 64_000,
+      conversation: 'judgment-1',
       timeoutMs: 10_000,
       signal: new AbortController().signal,
     };
 
     await adapter.generate(call);
-    await adapter.generate(call);
+    await adapter.generate({ ...call, conversation: 'judgment-2' });
 
     expect(received).toHaveLength(2);
     for (const headers of received) expectIdentified(headers);
-    expect(new Set(received.map(sessionOf)).size).toBe(2);
+    expect(received.map(sessionOf)).toEqual(['judgment-1', 'judgment-2']);
   });
 
   it('identifies e2e on every turn of an act loop', async () => {
@@ -139,5 +140,6 @@ describe('model request headers', () => {
     expect(received).toHaveLength(2);
     for (const headers of received) expectIdentified(headers);
     expect(new Set(received.map(sessionOf)).size).toBe(1);
+    expect(sessionOf(received[0]!)).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
