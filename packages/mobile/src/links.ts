@@ -38,7 +38,9 @@ function denyForbiddenScheme(protocol: string): void {
  * Parses a link a test asked to open. A string that is not an absolute URL
  * is `INVALID_ARGUMENT`; a `file:`, `data:`, `javascript:`, `view-source:`,
  * `blob:`, or `filesystem:` link is `POLICY_DENIED`, as it is for `app.open`
- * on the web.
+ * on the web. The message never echoes the input: a malformed link can carry
+ * a magic-link token in its query, path, or userinfo, and nothing about a
+ * string that failed to parse says which part is safe to repeat.
  */
 export function linkTarget(input: string): URL {
   let url: URL;
@@ -47,7 +49,7 @@ export function linkTarget(input: string): URL {
   } catch {
     throw new TestError(
       'INVALID_ARGUMENT',
-      `openLink needs an absolute URL such as myapp://orders/42 or https://example.com/verify, got "${input}"`,
+      'openLink needs an absolute URL such as myapp://orders/42 or https://example.com/verify',
     );
   }
   denyForbiddenScheme(url.protocol);

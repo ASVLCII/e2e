@@ -464,7 +464,10 @@ needs an app: an open bound to none leaves no app session to observe, so it
 is `INVALID_ARGUMENT`. `file:`, `data:`, `javascript:`, `view-source:`,
 `blob:`, and `filesystem:` links are `POLICY_DENIED`. A device link may use
 any app's custom scheme, so the rule refuses these schemes rather than
-admitting http(s) alone as the web does. The report shows the link cut before its
+admitting http(s) alone as the web does. A string that does not parse as an
+absolute URL is `INVALID_ARGUMENT` too, and its message names no part of the
+input, which may carry a magic-link token in its query, path, or userinfo.
+The report shows the link cut before its
 query and fragment, where a magic link carries its token. The replay cache
 anchors on the location the link lands on: a step recorded after `openLink`
 replays when the link lands on the same screen again.
