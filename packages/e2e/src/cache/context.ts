@@ -18,8 +18,10 @@ import {
   projectIdentity,
   traceCacheKeyHash,
   traceCallSignature,
+  type CacheAgentIdentity,
   type CacheTargetIdentity,
   type TraceCacheKind,
+  type TraceCallSignature,
 } from './identity.ts';
 import { FileCacheStore, MAX_CACHE_WIRE_BYTES, type CacheStore } from './store.ts';
 import type { ActionTrace } from './trace.ts';
@@ -57,8 +59,9 @@ export interface AgentCacheContext {
   readonly strict: false | { readonly advice: string };
   /**
    * Claims one step's key hash. Not a pure derivation: each claim advances
-   * the per-attempt occurrence index for its signature, which is what lets a
-   * test repeat the same instruction and cache each occurrence separately.
+   * the per-attempt occurrence index for its agent and signature, which is
+   * what lets a test repeat the same instruction and cache each occurrence
+   * separately.
    * Exactly one claim per dispatched step, in execution order — the
    * `StepTraceSession` constructor is the sole caller and owns that
    * invariant structurally.
@@ -67,6 +70,7 @@ export interface AgentCacheContext {
     kind: TraceCacheKind,
     instruction: string,
     params: Readonly<Record<string, JsonValue>> | undefined,
+    agent: CacheAgentIdentity,
   ): string;
   /**
    * Trace writes staged during the attempt. A trace is not trusted the moment
@@ -178,14 +182,23 @@ export function createAgentCacheContext(options: {
       writable: mode === 'read-write',
     });
   const project = projectIdentity(options.projectId);
-  const nextCallIndex = createCallIndexer();
+  // One occurrence count per agent: the agent is part of the key, so another
+  // agent's call of the same instruction must not renumber this one's.
+  const indexers = new Map<string, ReturnType<typeof createCallIndexer>>();
+  const nextCallIndex = (agent: CacheAgentIdentity, signature: TraceCallSignature): number => {
+    // Folded like the key folds it (`buildTraceCacheKey`): no context is the empty one.
+    const agentKey = canonicalJson([agent.name, agent.context ?? '']);
+    const indexer = indexers.get(agentKey) ?? createCallIndexer();
+    indexers.set(agentKey, indexer);
+    return indexer(signature);
+  };
   return {
     mode,
     store,
     identity: { testId: options.testId, targetId: options.target.targetId },
     replayEligible: options.attemptIndex === 0,
     strict: options.cache.strict === false ? false : { advice: staleAdvice(options.cache, options.cache.strict, options.projectRoot) },
-    claimKeyHash: (kind, instruction, params) => {
+    claimKeyHash: (kind, instruction, params, agent) => {
       const signature = traceCallSignature(kind, instruction, params);
       return traceCacheKeyHash(
         buildTraceCacheKey({
@@ -193,7 +206,8 @@ export function createAgentCacheContext(options: {
           testId: options.testId,
           target: options.target,
           signature,
-          callIndex: nextCallIndex(signature),
+          callIndex: nextCallIndex(agent, signature),
+          agent,
           policyVersion: REPLAY_POLICY_VERSION,
         }),
       );

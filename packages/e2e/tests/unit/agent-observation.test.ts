@@ -1,9 +1,9 @@
 import { assert, describe, expect, it, vi } from 'vitest';
 import type { Observation, SemanticNode } from '../../src/engine/surface.ts';
-import { changeShape, interactiveNodeCount, isTransitionalObservation, observationShape, prepareObservation, projectTree, redactNode, settleObservation } from '../../src/agent/observation.ts';
+import { changeShape, interactiveNodeCount, isTransitionalObservation, observationShape, prepareObservation, projectTree, redactNode, redactNodesAgain, settleObservation } from '../../src/agent/observation.ts';
 import { OBSERVED_NAME_LIMIT, OBSERVED_TEXT_LIMIT } from '../../src/engine/contract.ts';
 import { SecretLedger } from '../../src/internal/redact.ts';
-import { describeAnchors } from '../../src/cache/anchors.ts';
+import { describeDelta } from '../../src/cache/anchors.ts';
 
 function node(id: string, extra: Partial<SemanticNode> = {}): SemanticNode {
   return { ref: { id, revision: 'r1' }, ...extra };
@@ -230,7 +230,7 @@ describe('prepareObservation', () => {
       expect(cut(OBSERVED_NAME_LIMIT, kept)).toHaveLength(OBSERVED_NAME_LIMIT);
       const prepared = prepareObservation(observation(tree), { redact: ledger.redact, redactCut: ledger.redactCut, maxBytes: 16_384 });
       assert(prepared.kind === 'semantic');
-      const anchors = describeAnchors(new Map(), prepared.nodes);
+      const anchors = describeDelta(new Map(), prepared.nodes, false).appeared;
       expect(anchors.map((anchor) => anchor.name ?? anchor.text).join(' ')).toContain('<secret:multi>');
       for (const shown of [prepared.text, JSON.stringify(projectTree(prepared.tree)), JSON.stringify(anchors)]) {
         expect(shown).toContain('<secret:multi>');
@@ -245,7 +245,20 @@ describe('prepareObservation', () => {
     const prepared = prepareObservation(observation(tree), { redact: ledger.redact, redactCut: ledger.redactCut, maxBytes: 4_096 });
     assert(prepared.kind === 'semantic');
     expect(prepared.nodes.get('n2')).toMatchObject({ name: 'say <secret:phrase> now', testId: '<secret:phrase>' });
-    expect(JSON.stringify(describeAnchors(new Map(), prepared.nodes))).not.toContain('horse');
+    expect(JSON.stringify(describeDelta(new Map(), prepared.nodes, false).appeared)).not.toContain('horse');
+  });
+
+  it('redacts an earlier capture again with a secret resolved since, keeping which nodes are leaves', () => {
+    const tree = node('n1', { role: 'list', children: [node('n2', { role: 'listitem', name: 'tok_9f8e7d6c5b4a3210', children: [node('n3', { text: 'tok_9f8e7d6c5b4a3210' })] })] });
+    const before = new SecretLedger([]);
+    const prepared = prepareObservation(observation(tree), { redact: before.redact, redactCut: before.redactCut, maxBytes: 4_096 });
+    assert(prepared.kind === 'semantic');
+    const after = new SecretLedger([['token', 'tok_9f8e7d6c5b4a3210']]);
+    const again = redactNodesAgain(prepared.nodes, { redact: after.redact, redactCut: after.redactCut });
+    expect(JSON.stringify([...again.values()])).not.toContain('tok_9f8e7d6c5b4a3210');
+    expect(again.get('n2')).toMatchObject({ name: '<secret:token>', children: [{ text: '<secret:token>' }] });
+    expect(again.get('n2')?.children?.[0]).toBe(again.get('n3'));
+    expect(again.get('n3')?.children).toBeUndefined();
   });
 
   it('truncates at the byte limit while keeping the root and flagging truncation', () => {
