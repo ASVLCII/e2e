@@ -148,6 +148,14 @@ attemptContext.resolveSecret(secrets.get('key')) satisfies Promise<string>;
 void attemptContext.resolveSecret(secrets.get('key'), { derived: (plaintext) => [Buffer.from(`ada:${plaintext}`).toString('base64')] });
 // @ts-expect-error a derived form is a string computed from the value, never the handle itself.
 void attemptContext.resolveSecret(secrets.get('key'), { derived: () => [secrets.get('key')] });
+// An engine reports what the app logged, one line from a closed source and level each.
+attemptContext.appLog({ source: 'network', level: 'error', text: 'GET /api/todos 500' });
+// @ts-expect-error an app log source is a closed union.
+attemptContext.appLog({ source: 'stdout', level: 'error', text: 'boom' });
+declare const actCache: NonNullable<Awaited<ReturnType<Agent['act']>>['cache']>;
+actCache.entry satisfies string | undefined;
+// @ts-expect-error what became of the recording is known once the attempt ends, so only the report has it.
+void actCache.write;
 credentials.user('admin').password satisfies Secret;
 // @ts-expect-error a Secret has no plaintext accessor.
 secrets.get('key').value;
