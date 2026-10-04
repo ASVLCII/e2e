@@ -8,8 +8,7 @@
         "summary": "secondary-tap node \"report.pdf\"",
         "target": {
           "text": "report.pdf"
-        },
-        "quiet": true
+        }
       },
       {
         "name": "tap",

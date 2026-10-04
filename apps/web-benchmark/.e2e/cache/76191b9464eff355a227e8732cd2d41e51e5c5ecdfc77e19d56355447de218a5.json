@@ -25,7 +25,7 @@
       "callIndex": 0,
       "agent": "default"
     },
-    "summary": "Selected Express delivery; the Delivery state now reads “Express” and the page confirms “Express delivery selected.”",
+    "summary": "Selected Express delivery; the delivery state now reads “Express” and the page confirms “Express delivery selected.”",
     "startPath": "/e/control-inventory",
     "endPath": "/e/control-inventory",
     "endAnchors": [
@@ -59,6 +59,9 @@
       {
         "role": "group",
         "name": "Delivery"
+      },
+      {
+        "text": "Standard"
       }
     ],
     "endWaitMs": 11721

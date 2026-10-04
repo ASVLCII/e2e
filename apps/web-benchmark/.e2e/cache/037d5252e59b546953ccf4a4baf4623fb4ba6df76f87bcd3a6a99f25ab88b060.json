@@ -10,8 +10,7 @@
           "role": "button",
           "name": "Accept terms",
           "testId": "accept-button"
-        },
-        "quiet": true
+        }
       },
       {
         "name": "tap",

@@ -67,6 +67,11 @@
         "role": "button",
         "name": "Cancel order",
         "text": "Pay now"
+      },
+      {
+        "role": "button",
+        "name": "Pay now",
+        "text": "Cancel order"
       }
     ],
     "endWaitMs": 11896

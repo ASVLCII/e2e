@@ -11,8 +11,7 @@
         "target": {
           "testId": "table-viewport"
         },
-        "spans": 0.3083,
-        "quiet": true
+        "spans": 0.3083
       },
       {
         "name": "tap",

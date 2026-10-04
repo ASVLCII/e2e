@@ -10,8 +10,7 @@
           "role": "listitem",
           "name": "report.pdf",
           "within": "Files"
-        },
-        "quiet": true
+        }
       },
       {
         "name": "secondaryTap",
@@ -53,6 +52,10 @@
       },
       {
         "text": "summary.pdf"
+      },
+      {
+        "role": "listitem",
+        "name": "summary.pdf"
       }
     ],
     "goneAnchors": [
@@ -63,6 +66,10 @@
       },
       {
         "text": "report.pdf"
+      },
+      {
+        "role": "listitem",
+        "name": "report.pdf"
       }
     ],
     "endWaitMs": 11535

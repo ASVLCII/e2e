@@ -11,8 +11,7 @@
           "name": "gift_card_amount_option_undefined",
           "text": "$25",
           "testId": "amount-25"
-        },
-        "quiet": true
+        }
       },
       {
         "name": "type",
