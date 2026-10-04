@@ -7,6 +7,10 @@ import { describePosition, relocateDescriptor } from '../../src/cache/relocate.t
 
 const identity = (text: string): string => text;
 
+function fixture(id: string, fields: Omit<SemanticNode, 'ref'>): SemanticNode {
+  return { ref: { id, revision: 'r' }, ...fields };
+}
+
 /** A two-row table: identical "Delete" buttons told apart only by their row. */
 function table(): { nodes: Map<string, RedactedNode>; parents: Map<string, string> } {
   const nodes = new Map<string, RedactedNode>();
@@ -28,6 +32,22 @@ function table(): { nodes: Map<string, RedactedNode>; parents: Map<string, strin
 }
 
 describe('container keys', () => {
+  it('never keys a row of a list by the list\'s first row, a neighbour a scroll changes', () => {
+    const nodes = new Map<string, RedactedNode>();
+    const parents = new Map<string, string>();
+    const rows = [499, 500, 512].map((n) => {
+      const label = fixture(`t${n}`, { role: 'text', text: `Row 0${n}` });
+      const row = fixture(`r${n}`, { role: 'group', name: `Row 0${n}`, testId: `row-${n}`, children: [label] });
+      nodes.set(row.ref.id, redacted(row));
+      nodes.set(label.ref.id, redacted(label));
+      parents.set(label.ref.id, row.ref.id);
+      parents.set(row.ref.id, 'list');
+      return row;
+    });
+    nodes.set('list', redacted(fixture('list', { role: 'group', children: rows })));
+    expect(containerKey('r512', nodes, parents)).toBeUndefined();
+  });
+
   it('names the row a control sits in by the row\'s first text', () => {
     const { nodes, parents } = table();
     expect(containerKey('d1', nodes, parents)).toBe('Budget draft');

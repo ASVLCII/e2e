@@ -1,19 +1,15 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-09-24T20:47:58.050Z",
+  "createdAt": "2026-10-04T09:14:51.953Z",
   "payload": {
     "actions": [
       {
-        "name": "scroll",
-        "summary": "scroll up on group \"reward-scroll\" in \"Pull down to refresh and reveal your re…\"",
-        "direction": "up",
-        "target": {
-          "role": "group",
-          "testId": "reward-scroll",
-          "selector": "id=reward-scroll",
-          "within": "Pull down to refresh and reveal your reward"
-        },
-        "spans": 0.9125
+        "name": "tool",
+        "summary": "tool swipe"
+      },
+      {
+        "name": "tool",
+        "summary": "tool swipe"
       },
       {
         "name": "tap",
@@ -33,9 +29,12 @@
     "recordedFor": {
       "testId": "tests-agent/scenarios.e2e.ts::act%20completes%20Async%20States",
       "targetId": "android-emulator",
-      "instructionDigest": "fdc4e142da6e03180c7a75853bbbeb788efe25a58ccefefc640c6041870b36ce"
+      "instructionDigest": "fdc4e142da6e03180c7a75853bbbeb788efe25a58ccefefc640c6041870b36ce",
+      "paramsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "callIndex": 0,
+      "agent": "default"
     },
-    "summary": "Waited for the Async States screen to load, scrolled the reward area to refresh and reveal the claim button, then tapped Claim reward. The screen now confirms “Reward claimed.”.",
+    "summary": "Waited for the reward screen to load, pulled down on the reward area to reveal the reward, and tapped Claim reward. The screen now shows “Reward claimed.”",
     "startPath": "dev.e2e.benchmark",
     "endPath": "dev.e2e.benchmark",
     "endAnchors": [
@@ -49,6 +48,16 @@
         "testId": "reward-scroll"
       }
     ],
-    "endWaitMs": 16103
+    "goneAnchors": [
+      {
+        "role": "text",
+        "name": "Loading…"
+      },
+      {
+        "role": "group",
+        "testId": "initial-loading"
+      }
+    ],
+    "endWaitMs": 15750
   }
 }

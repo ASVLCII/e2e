@@ -1,6 +1,6 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-09-24T21:02:09.516Z",
+  "createdAt": "2026-10-04T09:04:24.691Z",
   "payload": {
     "actions": [
       {
@@ -10,6 +10,7 @@
           "role": "textbox",
           "name": "e.g. jane@example.com",
           "testId": "email-input",
+          "placeholder": "e.g. jane@example.com",
           "selector": "id=email-input",
           "within": "Step 1 of 3"
         },
@@ -17,7 +18,8 @@
       },
       {
         "name": "dismissKeyboard",
-        "summary": "dismiss the keyboard"
+        "summary": "dismiss the keyboard",
+        "quiet": true
       },
       {
         "name": "tap",
@@ -37,6 +39,7 @@
           "role": "textbox",
           "name": "e.g. Jane",
           "testId": "first-name-input",
+          "placeholder": "e.g. Jane",
           "selector": "id=first-name-input",
           "within": "Step 2 of 3"
         },
@@ -49,6 +52,7 @@
           "role": "textbox",
           "name": "e.g. Merchant",
           "testId": "last-name-input",
+          "placeholder": "e.g. Merchant",
           "selector": "id=last-name-input",
           "within": "Step 2 of 3"
         },
@@ -56,7 +60,8 @@
       },
       {
         "name": "dismissKeyboard",
-        "summary": "dismiss the keyboard"
+        "summary": "dismiss the keyboard",
+        "quiet": true
       },
       {
         "name": "tap",
@@ -76,6 +81,7 @@
           "role": "textbox",
           "name": "e.g. 0612435678",
           "testId": "phone-input",
+          "placeholder": "e.g. 0612435678",
           "selector": "id=phone-input",
           "within": "Step 3 of 3"
         },
@@ -83,7 +89,8 @@
       },
       {
         "name": "dismissKeyboard",
-        "summary": "dismiss the keyboard"
+        "summary": "dismiss the keyboard",
+        "quiet": true
       },
       {
         "name": "tap",
@@ -104,9 +111,12 @@
     "recordedFor": {
       "testId": "tests-agent/scenarios.e2e.ts::act%20completes%20Sequential%20Onboarding",
       "targetId": "android-emulator",
-      "instructionDigest": "970c887978c38f936a27d9b90e47b8e93318f07069e136ba3b343e8bfa936525"
+      "instructionDigest": "970c887978c38f936a27d9b90e47b8e93318f07069e136ba3b343e8bfa936525",
+      "paramsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "callIndex": 0,
+      "agent": "default"
     },
-    "summary": "Completed the signup wizard, dismissing the keyboard before each Continue. The confirmation screen shows jane@example.com, Jane Merchant, and 0612435678.",
+    "summary": "Completed all three signup steps, dismissing the keyboard before each Continue. The completion screen confirms jane@example.com, Jane Merchant, and 0612435678.",
     "startPath": "dev.e2e.benchmark",
     "endPath": "dev.e2e.benchmark",
     "endAnchors": [
@@ -131,6 +141,31 @@
         "testId": "echo-phone"
       }
     ],
-    "endWaitMs": 11900
+    "goneAnchors": [
+      {
+        "role": "text",
+        "name": "Step 1 of 3"
+      },
+      {
+        "role": "text",
+        "name": "Let's start with your email"
+      },
+      {
+        "role": "textbox",
+        "name": "e.g. jane@example.com",
+        "testId": "email-input",
+        "placeholder": "e.g. jane@example.com"
+      },
+      {
+        "role": "group",
+        "name": "Continue",
+        "testId": "continue-button"
+      },
+      {
+        "role": "group",
+        "testId": "onboarding-step-email"
+      }
+    ],
+    "endWaitMs": 11417
   }
 }

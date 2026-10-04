@@ -90,7 +90,11 @@ What never loosens:
   accident would otherwise check it on a replay where the accident never
   happened.
 
-- `within` must hold on every rung. The same "Delete" in another row is
+- `within` must hold on every rung. It is the first text of the nearest
+  named row, list item, or group, unless that text is the label of another
+  control of the target's own role: then the "container" is a list and the
+  text is its first row, which a scroll changes (a row of an Android list was
+  keyed by `Row 0499`, and the replay found `Row 0500` first). The same "Delete" in another row is
   another control, and with only one row left the ladder would otherwise
   delete the wrong record.
 - An ambiguous exact match diverges. Every fallback rung only widens the

@@ -1,6 +1,6 @@
 {
   "schemaVersion": "trace-1",
-  "createdAt": "2026-09-24T07:57:07.100Z",
+  "createdAt": "2026-10-04T09:12:54.295Z",
   "payload": {
     "actions": [
       {
@@ -26,13 +26,12 @@
       },
       {
         "name": "tap",
-        "summary": "tap button \"CONFIRM\" in \"CANCEL\"",
+        "summary": "tap button \"CONFIRM\"",
         "target": {
           "role": "button",
           "name": "CONFIRM",
           "testId": "android:id/button1",
-          "selector": "id=android:id/button1",
-          "within": "CANCEL"
+          "selector": "id=android:id/button1"
         }
       }
     ],
@@ -43,9 +42,12 @@
     "recordedFor": {
       "testId": "tests-agent/scenarios.e2e.ts::act%20completes%20Modal%20Flow",
       "targetId": "android-emulator",
-      "instructionDigest": "32bf25d16daf4e21f574c8c4919b38c59ac735da3fa3c55d0ddb4093a2abd239"
+      "instructionDigest": "32bf25d16daf4e21f574c8c4919b38c59ac735da3fa3c55d0ddb4093a2abd239",
+      "paramsDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "callIndex": 0,
+      "agent": "default"
     },
-    "summary": "Opened the modal, tapped Continue, and confirmed the native alert. The modal closed and the screen now shows “Flow completed.”.",
+    "summary": "Confirmed the alert. The Modal Flow screen now displays “Flow completed.”",
     "startPath": "dev.e2e.benchmark",
     "endPath": "dev.e2e.benchmark",
     "endAnchors": [
@@ -55,6 +57,13 @@
         "testId": "success-message"
       }
     ],
-    "endWaitMs": 11600
+    "goneAnchors": [
+      {
+        "role": "group",
+        "name": "Open modal",
+        "testId": "open-modal-button"
+      }
+    ],
+    "endWaitMs": 11729
   }
 }
