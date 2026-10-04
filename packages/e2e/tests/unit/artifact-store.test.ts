@@ -270,6 +270,20 @@ describe('download redaction', () => {
     expect(store.puts[0]!.sha256).toBe(createHash('sha256').update(redacted).digest('hex'));
   });
 
+  it('rewrites fragments and encoded forms in a download, the way trace text entries are', async () => {
+    const artifacts = downloads('filled');
+    const cut = SECRET.slice(6, 20);
+    const encoded = Buffer.from(SECRET).toString('base64');
+    const body = `cut=${cut}\nencoded=${encoded}\n`;
+    writeFileSync(path.join(artifacts.dir, 'downloads', 'export.txt'), body);
+    artifacts.sink.register('download', 'downloads/export.txt');
+    await artifacts.settle();
+    expect(artifacts.records[0]).toMatchObject({ redaction: 'complete' });
+    expect(readFileSync(path.join(artifacts.dir, 'downloads', 'export.txt'), 'utf8')).toBe(
+      'cut=<secret:api-key>\nencoded=<secret:api-key>\n',
+    );
+  });
+
   it('rewrites a value CSV quoted, its double quotes doubled', async () => {
     const artifacts = createAttemptArtifacts({
       artifactsRoot: root(),

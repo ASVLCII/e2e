@@ -281,7 +281,7 @@ async function redactDownload(absolute: string, secrecy: SessionSecrecy): Promis
   try {
     const bytes = await readFile(absolute);
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-    const redacted = secrecy.ledger.redact(text);
+    const redacted = secrecy.ledger.redactFragments(text);
     if (redacted !== text) await writeFileAtomic(absolute, redacted);
     return 'complete';
   } catch {
