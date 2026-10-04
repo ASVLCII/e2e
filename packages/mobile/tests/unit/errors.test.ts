@@ -206,6 +206,9 @@ describe('automation runner failures', () => {
       ['invalid-presented-payload', 'regular iOS snapshot payload refers to a parent outside the payload'],
       ['invalid-presented-payload', 'regular iOS snapshot payload marked a disabled or off-viewport node actionable'],
       ['invalid-quality-payload', 'iOS snapshot graph contains an invalid node depth'],
+      ['regular-node-outside-cumulative-clip', 'regular iOS snapshot node escaped its cumulative clip'],
+      ['regular-degenerate-actionable-node', 'regular iOS snapshot node with a missing or degenerate frame is actionable'],
+      ['projection-mismatch', 'iOS snapshot projection does not match its source'],
     ];
     for (const [reason, text] of raised) {
       const translated = translateError(new AppError('COMMAND_FAILED', text, { reason }), 'snapshot', 'session e2e-ios-0');
@@ -345,7 +348,7 @@ describe('automation runner failures through the engine', () => {
     });
   });
 
-  it('takes a snapshot the runner could not present once more, and fails the observation on the second failure', async () => {
+  it('takes a snapshot the runner could not present again after the transition lands, and fails the observation when it never does', async () => {
     const h = harness({ device: 'iPhone 17 Pro' });
     let failures = 1;
     h.fake.respond('capture.snapshot', () => {
@@ -360,14 +363,20 @@ describe('automation runner failures through the engine', () => {
     expect(snapshot.root.children?.length).toBeGreaterThan(0);
     expect(h.fake.methods().filter((method) => method === 'capture.snapshot')).toHaveLength(2);
 
+    // An alert dismissing fails the check on a couple of captures in a row.
     failures = 2;
+    const later = await h.engine.observe!(operation());
+    expect(later.root.children?.length).toBeGreaterThan(0);
+    expect(h.fake.methods().filter((method) => method === 'capture.snapshot')).toHaveLength(5);
+
+    failures = 3;
     await expect(h.engine.observe!(operation())).rejects.toMatchObject({
       code: 'ENGINE_FAILURE',
       message: expect.stringContaining(
         'snapshot failed: the iOS automation runner could not present the accessibility snapshot (session e2e-ios-0 on iPhone 17 Pro)',
       ),
     });
-    expect(h.fake.methods().filter((method) => method === 'capture.snapshot')).toHaveLength(4);
+    expect(h.fake.methods().filter((method) => method === 'capture.snapshot')).toHaveLength(8);
   });
 
   it('names the session and device when a node action or the screen scroll meets a busy runner', async () => {

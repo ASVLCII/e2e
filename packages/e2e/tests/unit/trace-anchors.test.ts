@@ -117,6 +117,25 @@ describe('describeDelta', () => {
     ]);
   });
 
+  it('records one anchor per label, the one with a test id, since which wrappers a platform reports varies', () => {
+    // One iOS accessibility backend reports the status and a wrapper named after it; another reports only the status.
+    const status = node('s', { role: 'text', name: 'Flow completed', testId: 'success-message' });
+    const wrapper = node('w', { role: 'other', name: 'Flow completed' });
+    const recorded = appeared(nodes([heading]), nodes([heading, wrapper, status]));
+    expect(recorded).toEqual([{ role: 'text', name: 'Flow completed', testId: 'success-message' }]);
+    expect(deltaHolds({ endAnchors: recorded }, nodes([heading, status]), nodes([heading]))).toBe(true);
+    // Nested wrappers of a removed button collapse the same way on the gone side.
+    const button = node('b', { role: 'other', name: 'Open modal', testId: 'open-modal-button' });
+    const outer = node('o', { role: 'other', name: 'Open modal', children: [button] });
+    expect(describeDelta(nodes([heading, outer, button]), nodes([heading]), false).gone).toEqual([
+      { role: 'other', name: 'Open modal', testId: 'open-modal-button' },
+    ]);
+    // Fields reading one label with different values are different effects.
+    const first = node('f1', { role: 'textbox', name: 'Email', value: 'a@x.test' });
+    const second = node('f2', { role: 'textbox', name: 'Email', value: 'b@x.test' });
+    expect(appeared(nodes([heading]), nodes([heading, first, second]))).toHaveLength(2);
+  });
+
   it('puts announcements first, then leaves, then containers, which only repeat their children', () => {
     // Ten list items, each a container over one text leaf, plus a status line
     // after the list: 21 new descriptors for a cap of 8. The observation index
@@ -220,7 +239,9 @@ describe('describeDelta', () => {
       // The status reads "Express" too: the label is gone, but an anchor of its text alone is not.
       expect(delta.gone).not.toContainEqual({ text: 'Express' });
       expect(delta.gone).toContainEqual({ role: 'radio', name: 'Express' });
-      expect(delta.gone).toContainEqual({ text: 'Standard' });
+      // The radio and its label read one label: one anchor stands for both.
+      expect(delta.gone).not.toContainEqual({ text: 'Standard' });
+      expect(delta.gone).toContainEqual({ role: 'radio', name: 'Standard' });
     });
 
     it('still fails a replay whose pick left the radios on screen', () => {

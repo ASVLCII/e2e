@@ -123,7 +123,10 @@ const RUNNER_STATE: ReadonlyMap<string, { readonly headline: string; readonly fi
  * presenter rewraps as `invalid-presented-payload` on the presented tree and
  * `invalid-quality-payload` on the quality tree, and the payload checks it
  * raises as `invalid-presented-payload` directly (a parent outside the
- * payload, a disabled or off-viewport node marked actionable).
+ * payload, a disabled or off-viewport node marked actionable), the regular
+ * tree's invariants (a node outside its ancestors' clip, which a view
+ * mid-animation trips; an actionable node with no frame), and a projection
+ * that does not match its source (`ios-snapshot-engine`).
  */
 const PRESENTATION_CODE = 'IOS_SNAPSHOT_ENGINE_FAILED';
 const PRESENTATION_REASONS = new Set([
@@ -132,6 +135,9 @@ const PRESENTATION_REASONS = new Set([
   'malformed-graph',
   'invalid-presented-payload',
   'invalid-quality-payload',
+  'regular-node-outside-cumulative-clip',
+  'regular-degenerate-actionable-node',
+  'projection-mismatch',
 ]);
 const PRESENTATION = {
   headline: 'the iOS automation runner could not present the accessibility snapshot',

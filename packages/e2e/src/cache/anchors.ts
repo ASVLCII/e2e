@@ -130,12 +130,22 @@ function deltaSide(
   const leaves: AnchorNode[] = [];
   const containers: AnchorNode[] = [];
   for (const anchor of nodes) {
-    if (seen.has(anchor.key) || inOther(anchor)) continue;
-    seen.add(anchor.key);
+    if (inOther(anchor)) continue;
+    // A labelled anchor is deduplicated by `onePerLabel`, which keeps the one with a test id.
+    if (labelsOf(anchor.descriptor).length === 0) {
+      if (seen.has(anchor.key)) continue;
+      seen.add(anchor.key);
+    }
     const role = anchor.descriptor.role ?? '';
     (ANNOUNCEMENT_ROLES.has(role) ? announcements : anchor.leaf ? leaves : containers).push(anchor);
   }
-  const all = [...announcements, ...leaves, ...containers];
+  // Nodes that read the same label (a status, and a wrapper the platform
+  // names after it) are one effect, and whether a platform reports the
+  // wrapper at all varies: an iOS snapshot from one accessibility backend has
+  // it and one from another does not, for the same screen. Recording each
+  // would fail a replay whose effect is all there, so one stands for all,
+  // the one with a test id when there is one, else the first in order.
+  const all = onePerLabel([...announcements, ...leaves, ...containers]);
   const stable = all.filter((anchor) => isAlert(anchor.descriptor) || !volatile(anchor.descriptor));
   return (stable.length > 0 ? stable : all).slice(0, MAX_TRACE_ANCHORS).map((anchor) => anchor.descriptor);
 }
@@ -183,6 +193,37 @@ const COUNT_TEXT: readonly RegExp[] = [
 function isBareNumber(anchor: TraceTargetDescriptor): boolean {
   const label = anchor.name ?? anchor.text;
   return label !== undefined && /^\d+$/.test(label) && anchor.testId === undefined && (anchor.name === undefined || anchor.text === undefined || anchor.name === anchor.text);
+}
+
+/**
+ * The anchors with one kept per label (`labelsOf`, with its value and
+ * states), in the order given: a later one takes the slot only when it has a
+ * test id and the kept one does not. Anchors with no label are all kept.
+ */
+function onePerLabel(anchors: readonly AnchorNode[]): AnchorNode[] {
+  const kept: (AnchorNode | undefined)[] = [];
+  const slots = new Map<string, number>();
+  for (const anchor of anchors) {
+    const labels = labelsOf(anchor.descriptor);
+    if (labels.length === 0) {
+      kept.push(anchor);
+      continue;
+    }
+    const key = JSON.stringify([labels.toSorted(), anchor.descriptor.value ?? null, statesKey(anchor.descriptor.states)]);
+    const slot = slots.get(key);
+    if (slot === undefined) {
+      slots.set(key, kept.length);
+      kept.push(anchor);
+    } else if (anchor.descriptor.testId !== undefined && kept[slot]!.descriptor.testId === undefined) {
+      kept[slot] = anchor;
+    }
+  }
+  return kept.filter((anchor): anchor is AnchorNode => anchor !== undefined);
+}
+
+/** An anchor's name and text, lower-cased with whitespace collapsed; empty for an anchor with neither. */
+function labelsOf(anchor: TraceTargetDescriptor): string[] {
+  return [anchor.name, anchor.text].flatMap((label) => (label === undefined ? [] : [label.replace(/\s+/g, ' ').trim().toLowerCase()]));
 }
 
 /** Whether an anchor's text cannot read the same on the next run; `countIsData` decides an anchor holding a count. */

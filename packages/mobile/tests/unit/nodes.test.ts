@@ -504,4 +504,12 @@ describe('snapshot projection', () => {
     expect(screenTitle(innerText)).toBe('About');
     expect(screenTitle(project([{ ref: '@e1', type: 'button', label: 'Go' }]))).toBeUndefined();
   });
+
+  it('prefers an iOS navigation bar\'s identifier, its title, to a label that reads the back button', () => {
+    // React Native's native stack: every pushed screen's bar is labelled with the back button's text.
+    const pushed = project([{ ref: '@e1', type: 'NavigationBar', kind: 'navigation-bar', identifier: 'Modal Flow', label: 'Benchmark Examples' }]);
+    expect(screenTitle(pushed)).toBe('Modal Flow');
+    // The backend that labels the bar with its title, and reports no identifier, agrees.
+    expect(screenTitle(project([{ ref: '@e1', type: 'navigation-bar', label: 'Modal Flow' }]))).toBe('Modal Flow');
+  });
 });

@@ -279,6 +279,29 @@ replayed through it): every other row as expected on this branch; `main`
 handed off or missed on testid, settings, clock, and on ab when the label
 flipped.
 
+## On an iOS simulator
+
+Run 2026-10-04 on the mobile benchmark (iPhone 17 Pro, iOS 26.5), three
+scenarios recorded with a real model, then replayed read-only:
+
+- Before the fixes below, Modal Flow passed its end check 1 time in 3. One
+  cause per failure: agent-device switches between its XCTest and private-ax
+  backends from one capture to the next, and they report one screen
+  differently (a wrapper `other "Flow completed"` around the status in one,
+  absent in the other; a navigation bar labelled with the back button's text
+  in one and with the title in the other), and a capture taken while an
+  alert dismisses fails the runner's clip check.
+- Fixes: one anchor per label (`onePerLabel`), the navigation bar's
+  identifier as the screen title (`packages/mobile/src/nodes.ts`), and a
+  delayed retry of a capture the runner rejects mid-animation
+  (`packages/mobile/src/surface.ts`). After them: 12 of 12 replays with no
+  model call, Login 18.2 to 18.4 s, Modal Flow 6.1 to 6.2 s, Bottom Tabs 3.4 s.
+- Drift, recorded targets edited to an older app: a relabeled and a
+  re-placeholdered field with test ids replayed through the test id rung, a
+  control whose role changed through the test id alone, an alert button
+  recorded as a link through the role family; a renamed system sheet button
+  with no test id handed off.
+
 ## Audit, 2026-10-03
 
 A full read of the subsystem, with an independent bug hunt that proved each
