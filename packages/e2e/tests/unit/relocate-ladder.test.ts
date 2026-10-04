@@ -178,4 +178,14 @@ describe('relocateRecorded', () => {
       candidates: ['a'],
     });
   });
+
+  it('finds a tapped toggle only in the state the recording tapped it in, since the tap would flip it the other way', () => {
+    const off: TraceTargetDescriptor = { role: 'checkbox', name: 'Mushrooms', testId: 'topping-mushrooms', states: [] };
+    const on: TraceTargetDescriptor = { ...off, states: ['checked'] };
+    const unchecked = redactedNodes([node('a', { role: 'checkbox', name: 'Mushrooms', testId: 'topping-mushrooms', states: { checked: false } })]);
+    expect(relocateRecorded(off, unchecked)).toEqual({ kind: 'found', id: 'a' });
+    expect(relocateRecorded(on, unchecked)).toEqual({ kind: 'failed', failure: 'target-not-found' });
+    // A label that spells the state (`✓, Mushrooms`) changes with it; the test id rung still holds the state.
+    expect(relocateRecorded({ ...on, name: '✓, Mushrooms' }, unchecked)).toEqual({ kind: 'failed', failure: 'target-not-found' });
+  });
 });

@@ -24,7 +24,7 @@
 
 import type { RedactedNode } from '../agent/observation.ts';
 import { containerKey, describeTarget, parentsOf } from '../agent/actions.ts';
-import type { TracePosition, TraceTargetDescriptor } from './trace.ts';
+import { TRACE_ANCHOR_STATES, type TracePosition, type TraceTargetDescriptor } from './trace.ts';
 
 /**
  * Version of the replay/relocation policy, part of every cache key. Bumping
@@ -363,7 +363,14 @@ function matchingIds(descriptor: TraceTargetDescriptor, keyed: readonly Describe
  * the candidates came from, never guessed.
  */
 function withinContainer(descriptor: TraceTargetDescriptor, nodes: ReadonlyMap<string, RedactedNode>): readonly DescribedNode[] {
-  const candidates = describeNodes(nodes);
+  const all = describeNodes(nodes);
+  // A tapped toggle recorded its state: one in the other state is not the
+  // control the recording tapped, since the tap would flip it the other way.
+  const recorded = descriptor.states === undefined ? undefined : descriptor.states.join(',');
+  const candidates =
+    recorded === undefined
+      ? all
+      : all.filter((candidate) => TRACE_ANCHOR_STATES.filter((state) => nodes.get(candidate.id)?.states?.[state] === true).join(',') === recorded);
   if (descriptor.within === undefined) return candidates;
   const parents = parentsOf(nodes);
   return candidates.filter((candidate) => containerKey(candidate.id, nodes, parents) === descriptor.within);

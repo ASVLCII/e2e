@@ -287,8 +287,8 @@ describe('replayTrace', () => {
     expect(outcome).toMatchObject({ completed: false, executed: 1, stopReason: 'action-failed' });
     expect(outcome.summaries).toEqual(['tap button "Upgrade"']);
     expect(host.calls).toEqual(['tap']);
-    // The first look was the start capture; the failed one was the fill's.
-    expect(host.looks).toEqual(['held-still']);
+    // The first look was the start capture; the failed ones were the fill's, and the one more try it gets.
+    expect(host.looks).toEqual(['held-still', 'held-still']);
   });
 
   it('replays every node verb through its own grammar call, with the recorded state and files', async () => {
@@ -473,6 +473,39 @@ describe('replayTrace', () => {
     const outcome = await replayTrace(host, trace([{ ...tapUpgrade, summary: 'tap button "Save"', target: { role: 'button', name: 'Save', testId: 'primary' } }]));
     expect(outcome).toEqual({ completed: true, executed: 1, total: 1, summaries: ['tap button "Save"'] });
     expect(tapped).toEqual([{ id: 'w3' }]);
+  });
+
+  it('tries an action that never reached the app once more, after the screen holds still and the target is found again', async () => {
+    let failures = 1;
+    const host = makeHost({
+      onAction: (name) => {
+        if (name === 'tap' && failures > 0) {
+          failures -= 1;
+          throw new AgentError('ACTION_FAILED', 'the list re-rendered under the tap');
+        }
+      },
+    });
+    const outcome = await replayTrace(host, trace([tapUpgrade, typeEmail]));
+    expect(outcome).toMatchObject({ completed: true, executed: 2 });
+    expect(host.calls).toEqual(['tap', 'tap', 'type']);
+    expect(host.looks.slice(0, 2)).toEqual(['held-still', 'held-still']);
+  });
+
+  it('never tries again an action the policy refused or that may have reached the app', async () => {
+    const denied = makeHost({
+      onAction: (name) => {
+        if (name === 'tap') throw new AgentError('POLICY_DENIED', 'not allowed');
+      },
+    });
+    expect(await replayTrace(denied, trace([tapUpgrade]))).toMatchObject({ completed: false, stopReason: 'action-failed' });
+    expect(denied.calls).toEqual(['tap']);
+    const uncertain = makeHost({
+      onAction: (name) => {
+        if (name === 'tap') throw new AgentError('ACTION_FAILED', 'timed out', { cause: { code: 'ACTION_MAY_HAVE_COMMITTED' } });
+      },
+    });
+    expect(await replayTrace(uncertain, trace([tapUpgrade]))).toMatchObject({ completed: false, stopReason: 'action-uncertain' });
+    expect(uncertain.calls).toEqual(['tap']);
   });
 
   it('absorbs an action failure as divergence, never as a step failure', async () => {
