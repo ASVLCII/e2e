@@ -287,8 +287,8 @@ describe('replayTrace', () => {
     expect(outcome).toMatchObject({ completed: false, executed: 1, stopReason: 'action-failed' });
     expect(outcome.summaries).toEqual(['tap button "Upgrade"']);
     expect(host.calls).toEqual(['tap']);
-    // The first look was the start capture; the failed ones were the fill's, and the one more try it gets.
-    expect(host.looks).toEqual(['held-still', 'held-still']);
+    // The first look was the start capture; the failed one was the fill's, which is not retried: no action ran.
+    expect(host.looks).toEqual(['held-still']);
   });
 
   it('replays every node verb through its own grammar call, with the recorded state and files', async () => {

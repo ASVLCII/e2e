@@ -85,6 +85,20 @@ export interface ReplayHost {
  */
 export const QUIET_CHANGE_WAIT_MS = 300;
 
+/** The grammar with `onCall` told before every call, which then runs as given. */
+function markDispatch(actions: ExecutorActions, onCall: () => void): ExecutorActions {
+  return new Proxy(actions, {
+    get: (target, key, receiver) => {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]): unknown => {
+        onCall();
+        return (value as (...args: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+}
+
 /**
  * The grammar with every call paced as quiet: each one asks the host for the
  * short change wait first, and clears it once the call settles, so a call
@@ -313,7 +327,13 @@ export async function replayTrace(
     if (!host.traceEligible) return stop('action-failed');
     // An action its recording saw change nothing waits only a beat for a
     // change: the pace follows the recording, not the change timeout.
-    const actions = action.quiet === true ? quietActions(host) : host.actions;
+    // Whether the grammar call of this action ran: only a failure it threw is
+    // an action that never reached the app, worth one more try; a look or a
+    // relocation that failed before it is not.
+    let dispatched = false;
+    const actions = markDispatch(action.quiet === true ? quietActions(host) : host.actions, () => {
+      dispatched = true;
+    });
     const planned = planCall(action, actions);
     if (planned.kind === 'gap') {
       return { ...stop('gap'), ...(planned.derived === undefined ? {} : { derived: planned.derived }) };
@@ -428,7 +448,8 @@ export async function replayTrace(
           // the runner never repeats an unknown-commit operation itself.
           return { ...stop('action-uncertain', partial()), uncertainAction: action.summary };
         }
-        if (tries === 0 && repeated === 0 && !hasCause(cause, ({ code }) => typeof code === 'string' && NEVER_RETRIED.has(code))) {
+        if (dispatched && tries === 0 && repeated === 0 && !hasCause(cause, ({ code }) => typeof code === 'string' && NEVER_RETRIED.has(code))) {
+          dispatched = false;
           look = HELD_STILL;
           continue;
         }
