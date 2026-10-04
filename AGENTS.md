@@ -28,7 +28,6 @@ There is no separate spec. The code is the contract, pinned in three places:
 
 There are no RFCs or design documents in the repo. The why lives in PR
 descriptions and commit bodies; `git log` and `gh pr view` are the archive.
-
 ## Layout
 
 `packages/` holds what publishes to npm; `apps/` holds the private apps and
