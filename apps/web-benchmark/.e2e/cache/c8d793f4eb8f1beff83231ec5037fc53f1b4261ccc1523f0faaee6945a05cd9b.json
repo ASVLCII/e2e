@@ -29,7 +29,7 @@
       "callIndex": 0,
       "agent": "default"
     },
-    "summary": "Entered SHADOW-42 and submitted the form. The page displays “Access granted.”",
+    "summary": "Entered SHADOW-42 and submitted the nested-shadow-root form. The page now displays “Access granted.”",
     "startPath": "/e/shadow-dom-form",
     "endPath": "/e/shadow-dom-form",
     "endAnchors": [
