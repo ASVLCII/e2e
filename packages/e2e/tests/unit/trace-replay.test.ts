@@ -491,6 +491,21 @@ describe('replayTrace', () => {
     expect(host.looks.slice(0, 2)).toEqual(['held-still', 'held-still']);
   });
 
+  it('tries a folded viewport scroll that never reached the app once more too', async () => {
+    let failures = 1;
+    const host = makeHost({
+      onAction: (name) => {
+        if (name === 'scroll' && failures > 0) {
+          failures -= 1;
+          throw new AgentError('ACTION_FAILED', 'the page was still loading');
+        }
+      },
+    });
+    const outcome = await replayTrace(host, trace([{ name: 'scroll', summary: 'scroll down', direction: 'down', times: 2 }]));
+    expect(outcome).toMatchObject({ completed: true, executed: 1 });
+    expect(host.calls).toEqual(['scroll', 'scroll', 'scroll']);
+  });
+
   it('never tries again an action the policy refused or that may have reached the app', async () => {
     const denied = makeHost({
       onAction: (name) => {

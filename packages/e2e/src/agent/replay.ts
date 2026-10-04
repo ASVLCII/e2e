@@ -331,9 +331,12 @@ export async function replayTrace(
     // an action that never reached the app, worth one more try; a look or a
     // relocation that failed before it is not.
     let dispatched = false;
-    const actions = markDispatch(action.quiet === true ? quietActions(host) : host.actions, () => {
+    const mark = () => {
       dispatched = true;
-    });
+    };
+    const actions = markDispatch(action.quiet === true ? quietActions(host) : host.actions, mark);
+    // The grammar at the policy's pace, for the calls a quiet mark never applies to.
+    const paced = markDispatch(host.actions, mark);
     const planned = planCall(action, actions);
     if (planned.kind === 'gap') {
       return { ...stop('gap'), ...(planned.derived === undefined ? {} : { derived: planned.derived }) };
@@ -393,9 +396,9 @@ export async function replayTrace(
               if (list === undefined) {
                 if (index > 0) await host.observe('held-still');
                 // A folded scroll is paced in full whatever its entry says.
-                await (planned.times > 1 ? host.actions : actions).scroll(planned.direction);
+                await (planned.times > 1 ? paced : actions).scroll(planned.direction);
               } else {
-                const scrolled = await scrollOnce(host, refind, planned.direction, list, index === 0 ? look : HELD_STILL);
+                const scrolled = await scrollOnce(paced, refind, planned.direction, list, index === 0 ? look : HELD_STILL);
                 if (scrolled.kind === 'failed') return stop(scrolled.failure, partial());
                 if (scrolled.kind === 'viewport') list = undefined;
               }
@@ -686,7 +689,7 @@ function usableBox(rect: SemanticNode['rect']): Box | undefined {
  * the step off on.
  */
 async function scrollOnce(
-  host: ReplayHost,
+  actions: ExecutorActions,
   refind: (descriptor: TraceTargetDescriptor, look: Look) => Promise<Relocated>,
   direction: ScrollDirection,
   list: ScrolledList,
@@ -694,11 +697,11 @@ async function scrollOnce(
 ): Promise<{ readonly kind: 'list' | 'viewport' } | { readonly kind: 'failed'; readonly failure: RelocationFailure }> {
   const relocated = await refind(list.descriptor, look);
   if (relocated.kind === 'found') {
-    await host.actions.scroll(direction, { id: relocated.id });
+    await actions.scroll(direction, { id: relocated.id });
     return { kind: 'list' };
   }
   if ((list.spans ?? 0) < MAIN_LIST_SHARE) return { kind: 'failed', failure: relocated.failure };
-  await host.actions.scroll(direction);
+  await actions.scroll(direction);
   return { kind: 'viewport' };
 }
 
