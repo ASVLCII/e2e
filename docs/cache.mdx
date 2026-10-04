@@ -94,7 +94,11 @@ A control matched this way must be found the same way on a second look a
 moment later, so a page still leaving is never acted on. The recorded row
 or group still has to match, and when the test id points at one control and
 the name at another, the agent takes the step. A control recorded among
-identical twins is found only by its place among the same number of them.
+identical twins is found only by its place among the same number of them. A
+tapped checkbox, switch, or radio is found only in the state it was tapped
+in, since the tap flips it. An action the app never received, such as a tap
+that landed while a list re-rendered, is tried once more after the screen
+holds still.
 A control recorded by its role alone, with no name, text, placeholder, or
 test id, has no fallback.
 

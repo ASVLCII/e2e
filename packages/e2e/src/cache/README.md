@@ -84,6 +84,12 @@ control whose label carries state is better served by a test id.
 
 What never loosens:
 
+- A tapped toggle (`TOGGLE_ROLES`: checkbox, switch, radio) records the state
+  it was in, and relocates only onto one in the same state on every rung. A
+  tap flips it: a recording that unchecked a box the model had checked by
+  accident would otherwise check it on a replay where the accident never
+  happened.
+
 - `within` must hold on every rung. The same "Delete" in another row is
   another control, and with only one row left the ladder would otherwise
   delete the wrong record.
@@ -125,6 +131,15 @@ later verification confirms it, like any recording. In `read-only` mode the
 entry keeps replaying through the fallback; `step.cache.relocated` (report),
 `relocated` (run summary), and `agent_steps_relocated` (telemetry) make that
 visible.
+
+## A replayed action that never reached the app
+
+An action the engine reports as failed, and not as possibly committed
+(`ACTION_MAY_HAVE_COMMITTED`, which hands off as `action-uncertain`), gets one
+more try: the replay waits for the screen to hold still, finds the target
+again, and repeats it. A tap that landed while a debounced list re-rendered
+or a sheet slid in is what the live agent retries too. A policy refusal, a
+wrong argument, or a capability the engine lacks never repeats.
 
 ## Pacing
 

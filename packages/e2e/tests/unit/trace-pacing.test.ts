@@ -180,7 +180,8 @@ describe('replayTrace pacing on a call that fails before its action runs', () =>
       summary: 'uploaded',
     });
     expect(outcome).toMatchObject({ completed: false, stopReason: 'action-failed' });
-    expect(paces).toEqual([QUIET_CHANGE_WAIT_MS, undefined]);
+    // The call and its one more try each set the pace and clear it.
+    expect(paces).toEqual([QUIET_CHANGE_WAIT_MS, undefined, QUIET_CHANGE_WAIT_MS, undefined]);
   });
 });
 
