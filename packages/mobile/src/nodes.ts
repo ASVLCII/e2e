@@ -542,9 +542,10 @@ export function screenRoot(roots: readonly SemanticNode[], viewport: ViewportSiz
 }
 
 /**
- * The visible screen's title: an iOS navigation bar's identifier (UIKit
- * names the bar after its title), else the bar's or Android toolbar's own
- * label, else the first text inside it, else its identifier. Undefined when the screen has no
+ * The visible screen's title: the navigation bar's (iOS) or toolbar's
+ * (Android) own label unless it reads a back button inside the bar, else the
+ * first text inside it, else its identifier (UIKit names the bar after its
+ * title). Undefined when the screen has no
  * title bar, which is the honest answer for a launch screen, a full-screen
  * sheet, or Android's Settings home.
  */
@@ -553,17 +554,20 @@ export function screenTitle(snapshot: ProjectedSnapshot): string | undefined {
     snapshot.index.find((entry) => entry.kind === 'navigation-bar') ??
     snapshot.index.find((entry) => ANDROID_TITLE_IDS.some((suffix) => entry.raw.identifier?.endsWith(suffix) === true));
   if (bar === undefined) return undefined;
-  // An iOS navigation bar's identifier is its title; its label is not always:
-  // a React Native native stack labels every pushed screen's bar with the back
-  // button's text, which one accessibility backend reports and another does
-  // not, so the label would name every screen alike, and differently from one
-  // capture to the next. An Android toolbar's identifier is a resource id.
-  if (bar.kind === 'navigation-bar' && bar.raw.identifier !== undefined && bar.raw.identifier.trim() !== '') return bar.raw.identifier;
-  if (bar.raw.label !== undefined && bar.raw.label.trim() !== '') return bar.raw.label;
+  // A bar labelled with the text of a button inside it is labelled with its
+  // back button: a React Native native stack does that to every pushed
+  // screen's bar under one iOS accessibility backend and not the other, so
+  // that label would name every screen alike, and differently from one
+  // capture to the next. The title text inside the bar is the same in both.
+  const label = bar.raw.label?.trim() ?? '';
+  const backLabelled =
+    label !== '' && snapshot.index.some((entry) => entry.node.role === 'button' && entry.raw.label?.trim() === label && isWithin(entry, bar));
+  if (label !== '' && !backLabelled) return bar.raw.label;
   const text = snapshot.index.find(
     (entry) => entry.node.role === 'text' && entry.raw.label !== undefined && entry.raw.label.trim() !== '' && isWithin(entry, bar),
   );
   if (text !== undefined) return text.raw.label;
+  if (backLabelled && (bar.raw.identifier === undefined || bar.raw.identifier.trim() === '')) return bar.raw.label;
   return bar.raw.identifier === undefined || bar.raw.identifier.trim() === '' ? undefined : bar.raw.identifier;
 }
 

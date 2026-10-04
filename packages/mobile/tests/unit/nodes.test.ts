@@ -505,11 +505,22 @@ describe('snapshot projection', () => {
     expect(screenTitle(project([{ ref: '@e1', type: 'button', label: 'Go' }]))).toBeUndefined();
   });
 
-  it('prefers an iOS navigation bar\'s identifier, its title, to a label that reads the back button', () => {
-    // React Native's native stack: every pushed screen's bar is labelled with the back button's text.
-    const pushed = project([{ ref: '@e1', type: 'NavigationBar', kind: 'navigation-bar', identifier: 'Modal Flow', label: 'Benchmark Examples' }]);
+  it('reads past a bar label that is its back button\'s text, to the title inside it or its identifier', () => {
+    // React Native's native stack under XCTest: every pushed screen's bar is labelled with the back button's text.
+    const pushed = project([
+      { ref: '@e1', depth: 0, type: 'NavigationBar', kind: 'navigation-bar', identifier: 'Modal Flow', label: 'Benchmark Examples' },
+      { ref: '@e2', depth: 1, type: 'Button', label: 'Benchmark Examples', identifier: 'BackButton' },
+      { ref: '@e3', depth: 1, type: 'StaticText', label: 'Modal Flow' },
+    ]);
     expect(screenTitle(pushed)).toBe('Modal Flow');
-    // The backend that labels the bar with its title, and reports no identifier, agrees.
+    const titleless = project([
+      { ref: '@e1', depth: 0, type: 'NavigationBar', kind: 'navigation-bar', identifier: 'Modal Flow', label: 'Benchmark Examples' },
+      { ref: '@e2', depth: 1, type: 'Button', label: 'Benchmark Examples' },
+    ]);
+    expect(screenTitle(titleless)).toBe('Modal Flow');
+    // The backend that labels the bar with its title agrees.
     expect(screenTitle(project([{ ref: '@e1', type: 'navigation-bar', label: 'Modal Flow' }]))).toBe('Modal Flow');
+    // A bar an app gave a fixed identifier keeps its visible title.
+    expect(screenTitle(project([{ ref: '@e1', type: 'navigation-bar', identifier: 'main-navbar', label: 'Profile' }]))).toBe('Profile');
   });
 });

@@ -197,8 +197,9 @@ function isBareNumber(anchor: TraceTargetDescriptor): boolean {
 
 /**
  * The anchors with one kept per label (`labelsOf`, with its value and
- * states), in the order given: a later one takes the slot only when it has a
- * test id and the kept one does not. Anchors with no label are all kept.
+ * states), in the order given: a later one takes the slot only when it is a
+ * leaf with a test id and the kept one has none. A wrapper never takes it,
+ * since a wrapper is what one accessibility backend omits. Anchors with no label are all kept.
  */
 function onePerLabel(anchors: readonly AnchorNode[]): AnchorNode[] {
   const kept: (AnchorNode | undefined)[] = [];
@@ -214,7 +215,7 @@ function onePerLabel(anchors: readonly AnchorNode[]): AnchorNode[] {
     if (slot === undefined) {
       slots.set(key, kept.length);
       kept.push(anchor);
-    } else if (anchor.descriptor.testId !== undefined && kept[slot]!.descriptor.testId === undefined) {
+    } else if (anchor.leaf && anchor.descriptor.testId !== undefined && kept[slot]!.descriptor.testId === undefined) {
       kept[slot] = anchor;
     }
   }

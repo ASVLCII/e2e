@@ -130,6 +130,10 @@ describe('describeDelta', () => {
     expect(describeDelta(nodes([heading, outer, button]), nodes([heading]), false).gone).toEqual([
       { role: 'other', name: 'Open modal', testId: 'open-modal-button' },
     ]);
+    // A wrapper with a test id never takes the slot from the status it wraps.
+    const plain = node('p', { role: 'status', name: 'Saved' });
+    const tagged = node('g', { role: 'other', name: 'Saved', testId: 'save-banner', children: [plain] });
+    expect(appeared(nodes([heading]), nodes([heading, tagged, plain]))).toEqual([{ role: 'status', name: 'Saved' }]);
     // Fields reading one label with different values are different effects.
     const first = node('f1', { role: 'textbox', name: 'Email', value: 'a@x.test' });
     const second = node('f2', { role: 'textbox', name: 'Email', value: 'b@x.test' });
