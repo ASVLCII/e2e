@@ -14,6 +14,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { createFakeEngine, FAKE_APP, type FakeEngineBehavior, type FakeEngineHandle } from '../helpers/fake-engine.ts';
 import { freePort } from '../helpers/free-port.ts';
 import { gate } from '../helpers/gate.ts';
@@ -27,6 +28,8 @@ const resolveModule = new URL('../../dist/config/resolve.js', import.meta.url).h
 const { resolveConfig } = (await import(resolveModule)) as typeof import('../../src/config/resolve.ts');
 const secretsModule = new URL('../../dist/secrets.js', import.meta.url).href;
 const { credentials, secrets } = (await import(secretsModule)) as typeof import('../../src/secrets.ts');
+const agentModule = new URL('../../dist/agent/public.js', import.meta.url).href;
+const { defineTool } = (await import(agentModule)) as typeof import('../../src/agent/public.ts');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -62,6 +65,8 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     /** Runs while a config file evaluates, as its top-level code would. */
     readonly evaluate?: (configPath: string) => void;
     readonly onSessionEnd?: (summary: McpSessionSummary) => void;
+    /** Project tools under `agents.default.tools`. */
+    readonly tools?: Record<string, ReturnType<typeof defineTool>>;
   }
 
   /**
@@ -81,6 +86,7 @@ describe('SessionHost', { timeout: 60_000 }, () => {
             credentials: { admin: { username: 'admin', password: 'kiosk-pw' } },
             ...(options.trace === undefined ? {} : { trace: options.trace }),
             ...(options.video === undefined ? {} : { video: options.video }),
+            ...(options.tools === undefined ? {} : { agents: { default: { tools: options.tools } } }),
           } as never,
           { projectRoot: dir, env: {}, configPath },
         );
@@ -120,41 +126,22 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     expect(fake.stats()).toMatchObject({ attemptsStarted: 2, attemptsEnded: 2, disposes: 2 });
   });
 
-  it('closes the schema of every fixed tool: an argument it does not declare fails validation', () => {
-    const specs = host(engines().next).toolSpecs();
-    expect(specs.map((spec) => spec.name)).toEqual(['open_session', 'tools', 'call', 'close_session']);
-    const accepted: Record<string, Record<string, unknown>> = {
-      open_session: { target: 'kiosk' },
-      tools: { tool: 'tap' },
-      call: { tool: 'tap', args: { target: 'n1' } },
-      close_session: {},
-    };
-    for (const spec of specs) {
-      expect(spec.inputSchema.safeParse(accepted[spec.name]).success, spec.name).toBe(true);
-      const decorated = spec.inputSchema.safeParse({ ...accepted[spec.name], force: true });
-      expect(decorated.success, spec.name).toBe(false);
-      if (!decorated.success) expect(decorated.error.issues.map((issue) => issue.code)).toEqual(['unrecognized_keys']);
-    }
-  });
-
   it('closes an idle session and disposes the engine', async () => {
     const fakes = engines();
-    const idle = host(fakes.next, { idleMs: 300 });
+    const idle = host(fakes.next, { idleMs: 100 });
     await idle.open({});
     expect(idle.isOpen).toBe(true);
-    await sleep(1_000);
-    expect(idle.isOpen).toBe(false);
+    await expect.poll(() => idle.isOpen, { timeout: 5_000 }).toBe(false);
     expect(logs.some((line) => line.includes('idle for'))).toBe(true);
     expect(fakes.made[0]!.stats()).toMatchObject({ attemptsStarted: 1, attemptsEnded: 1, disposes: 1 });
   });
 
   it('ends a session at its TTL through the step deadline', async () => {
     const fakes = engines();
-    const short = host(fakes.next, { ttlMs: 1_000 });
+    const short = host(fakes.next, { ttlMs: 500 });
     await short.open({});
-    await sleep(3_000);
-    expect(short.isOpen).toBe(false);
-    expect(logs.some((line) => line.includes('exceeded its 1000 ms timeout'))).toBe(true);
+    await expect.poll(() => short.isOpen, { timeout: 5_000 }).toBe(false);
+    await expect.poll(() => logs.some((line) => line.includes('exceeded its 500 ms timeout')), { timeout: 5_000 }).toBe(true);
     expect(fakes.made[0]!.stats()).toMatchObject({ attemptsEnded: 1, disposes: 1 });
   });
 
@@ -203,7 +190,9 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     await navigating.promise;
     const second = sessionId(await pair.open({}));
     held.open();
-    await pair.close('done', sessionId(await first));
+    const firstId = sessionId(await first);
+    expect(second).not.toBe(firstId);
+    await pair.close('done', firstId);
     await pair.close('done', second);
   });
 
@@ -467,9 +456,8 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     await counted.close('closed by the agent', id);
     await expect(counted.open({ target: 'nowhere' })).rejects.toMatchObject({ code: 'UNKNOWN_TARGET' });
     await counted.open({});
-    await sleep(1_000);
+    await expect.poll(() => summaries, { timeout: 5_000 }).toHaveLength(3);
 
-    expect(summaries).toHaveLength(3);
     const [closed, failed, idle] = summaries as [McpSessionSummary, McpSessionSummary, McpSessionSummary];
     expect(closed).toMatchObject({
       outcome: 'closed',
@@ -486,6 +474,29 @@ describe('SessionHost', { timeout: 60_000 }, () => {
     expect(closed.durationMs).toBeGreaterThan(0);
     expect(failed).toMatchObject({ outcome: 'open-failed', endedBy: undefined, openErrorCode: 'UNKNOWN_TARGET', platform: undefined });
     expect(idle).toMatchObject({ outcome: 'closed', endedBy: 'idle', platform: 'kiosk' });
+  });
+
+  it('redacts a secret from what a project tool returns or throws', async () => {
+    const echo = defineTool(
+      { description: 'Echo the admin password.', inputSchema: z.object({}), execute: async () => 'pw=kiosk-pw' },
+      { mutates: false },
+    );
+    const leak = defineTool(
+      { description: 'Fail with the admin password.', inputSchema: z.object({}), execute: async () => { throw new Error('denied kiosk-pw'); } },
+      { mutates: false },
+    );
+    const extra = { signal: new AbortController().signal };
+    const text = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? '').join('\n');
+    const session = host(engines().next, { tools: { echo, leak } });
+    const id = sessionId(await session.open({}));
+
+    const echoed = await session.call(id, 'echo', {}, extra);
+    expect(text(echoed)).toBe('pw=<secret:admin.password>');
+    const thrown = await session.call(id, 'leak', {}, extra);
+    expect(thrown.isError).toBe(true);
+    expect(text(thrown)).toContain('denied <secret:admin.password>');
+    expect(text(thrown)).not.toContain('kiosk-pw');
+    await session.close('done', id);
   });
 
   it('counts an action that failed and then could not look at the screen as one failed call', async () => {

@@ -988,6 +988,8 @@ describe('resolveConfig', () => {
       expect(own.targets[0]![kind]).toEqual({ mode: 'on-all-retries', source: 'target' });
       const flagged = resolveConfig({ targets: [web('off')], [kind]: 'off' }, { projectRoot: ROOT, env: BASE_ENV, cli: { [kind]: 'on' } });
       expect(flagged.targets[0]![kind]).toEqual({ mode: 'on', source: 'run' });
+      const off = resolveConfig({ targets: TARGETS, [kind]: 'on' }, { projectRoot: ROOT, env: BASE_ENV, cli: { [kind]: 'off' } });
+      expect(off.targets[0]![kind]).toEqual({ mode: 'off', source: 'run' });
     });
 
     it('keeps the mode, at the top and on a target, out of the digest', () => {

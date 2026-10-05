@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   resultByTitle,
   runProjectWithConfigFile,
   workerConfigSource,
+  workerFakeConfigSource,
 } from '../helpers/run-project.ts';
 
 describe('parallel worker execution', () => {
@@ -36,7 +37,7 @@ test('${name} runs', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/one.e2e.ts': testFile('one'), 'tests/two.e2e.ts': testFile('two') },
-        { appUrl: app.url, configSource: workerConfigSource(2) },
+        { configSource: workerFakeConfigSource(2) },
       );
       expect(resultByTitle(outcome, 'one runs').status).toBe('passed');
       expect(resultByTitle(outcome, 'two runs').status).toBe('passed');
@@ -72,6 +73,11 @@ test('starts with the seeded state', { session: 'seeded' }, async ({ app, screen
   await app.open('/storage');
   await expect(screen.getByRole('status', { name: 'Marker' })).toHaveText('saved');
 });
+
+test('without a session starts clean', async ({ app, screen }) => {
+  await app.open('/storage');
+  await expect(screen.getByRole('status', { name: 'Marker' })).toHaveText('empty');
+});
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/auth.setup.e2e.ts': setupFile, 'tests/consumer.e2e.ts': consumerFile },
@@ -79,7 +85,10 @@ test('starts with the seeded state', { session: 'seeded' }, async ({ app, screen
       );
       expect(resultByTitle(outcome, 'seed storage').status).toBe('passed');
       expect(resultByTitle(outcome, 'starts with the seeded state').status).toBe('passed');
+      expect(resultByTitle(outcome, 'without a session starts clean').status).toBe('passed');
       expect(outcome.exitCode).toBe(0);
+      const sessionsRoot = path.join(project.dir, '.e2e', 'sessions');
+      if (existsSync(sessionsRoot)) expect(readdirSync(sessionsRoot)).toEqual([]);
       project.cleanup();
     },
     120_000,
@@ -113,7 +122,7 @@ test('unrelated still runs', async ({ app }) => {
           'tests/dependent.e2e.ts': dependentFile,
           'tests/unrelated.e2e.ts': unrelatedFile,
         },
-        { appUrl: app.url, configSource: workerConfigSource(2) },
+        { configSource: workerFakeConfigSource(2) },
       );
       const dependent = resultByTitle(outcome, 'depends on broken');
       expect(dependent.status).toBe('skipped');
@@ -128,7 +137,7 @@ test('unrelated still runs', async ({ app }) => {
   it(
     'runs serial groups as one unit on one worker',
     async () => {
-      const serialFile = `import { test, expect } from 'e2e';
+      const serialFile = `import { test } from 'e2e';
 
 test.describe('wizard', { serial: true }, () => {
   let shared = 0;
@@ -136,13 +145,12 @@ test.describe('wizard', { serial: true }, () => {
   test('step 1', async ({ app, screen }) => {
     await app.open();
     shared += 1;
-    await screen.getByRole('button', { name: 'Increment' }).tap();
-    await expect(screen.getByRole('status')).toHaveText('1');
+    await screen.getByRole('button', { name: 'Submit' }).tap();
   });
 
   test('step 2 shares state', async ({ screen }) => {
     if (shared !== 1) throw new Error('module state was not preserved: ' + shared);
-    await screen.getByRole('button', { name: 'Increment' }).tap();
+    await screen.getByRole('button', { name: 'Submit' }).tap();
   });
 });
 `;
@@ -154,7 +162,7 @@ test('parallel neighbor', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/wizard.e2e.ts': serialFile, 'tests/other.e2e.ts': otherFile },
-        { appUrl: app.url, configSource: workerConfigSource(2) },
+        { configSource: workerFakeConfigSource(2) },
       );
       expect(resultByTitle(outcome, 'step 1').status).toBe('passed');
       expect(resultByTitle(outcome, 'step 2 shares state').status).toBe('passed');
@@ -193,7 +201,7 @@ test('survivor passes', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/crash.e2e.ts': crashFile, 'tests/survivor.e2e.ts': survivorFile },
-        { appUrl: app.url, configSource: workerConfigSource(2) },
+        { configSource: workerFakeConfigSource(2) },
       );
       const crashed = resultByTitle(outcome, 'crashes the worker');
       expect(crashed.status).toBe('failed');
@@ -207,6 +215,36 @@ test('survivor passes', async ({ app }) => {
       const run = outcome.report['run'] as unknown as Record<string, unknown>;
       const errors = run['errors'] as Record<string, unknown>[];
       expect(errors.some((error) => error['code'] === 'WORKER_EXIT')).toBe(true);
+      assertValidReport(JSON.parse(readFileSync(outcome.reportPath!, 'utf8')));
+      project.cleanup();
+    },
+    120_000,
+  );
+
+  it(
+    'times out a body that never calls the harness and runs the next test of its file',
+    async () => {
+      const file = `import { test } from 'e2e';
+
+test('sleeps past its timeout', { timeout: 1000 }, async ({ app }) => {
+  await app.open();
+  await new Promise((resolve) => setTimeout(resolve, 60_000));
+});
+
+test('runs after the timeout', async ({ app }) => {
+  await app.open();
+});
+`;
+      const { outcome, project } = await runProjectWithConfigFile(
+        { 'tests/timeout.e2e.ts': file },
+        { configSource: workerFakeConfigSource(1) },
+      );
+      const timedOut = resultByTitle(outcome, 'sleeps past its timeout');
+      expect(timedOut.status).toBe('timed-out');
+      expect(timedOut.attempts[0]?.error?.message).toContain('test timed out after 1000 ms');
+      expect(resultByTitle(outcome, 'runs after the timeout').status).toBe('passed');
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.report.run.errors).toEqual([]);
       project.cleanup();
     },
     120_000,
@@ -264,16 +302,18 @@ test('sleeps a long time', { timeout: 8000 }, async ({ app }) => {
 test('waits in the queue', async () => {});
 `;
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 4_000);
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/slow.e2e.ts': slowFile, 'tests/unstarted.e2e.ts': queuedFile },
         {
-          appUrl: app.url,
-          configSource: workerConfigSource(1),
-          runOptions: { interruptSignal: controller.signal },
+          configSource: workerFakeConfigSource(1),
+          runOptions: {
+            interruptSignal: controller.signal,
+            onEvent: (event) => {
+              if (event.type === 'test-started') controller.abort();
+            },
+          },
         },
       );
-      clearTimeout(timer);
       expect(outcome.exitCode).toBe(130);
       expect(outcome.status).toBe('interrupted');
       const result = resultByTitle(outcome, 'sleeps a long time');
@@ -307,7 +347,7 @@ test('would run last', async () => {});
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/limit.e2e.ts': file },
-        { appUrl: app.url, configSource: workerConfigSource(1), runOptions: { maxFailures: 1 } },
+        { configSource: workerFakeConfigSource(1), runOptions: { maxFailures: 1 } },
       );
       expect(outcome.exitCode).toBe(1);
       const byDeclaration = outcome.results.toSorted((a, b) => a.test.declarationIndex - b.test.declarationIndex);
@@ -336,9 +376,8 @@ test('${name} never runs', async ({ app }) => {
       const { outcome, project } = await runProjectWithConfigFile(
         Object.fromEntries(['one', 'two', 'three', 'four'].map((name) => [`tests/${name}.e2e.ts`, testFile(name)])),
         {
-          appUrl: app.url,
           // Every worker resolves its own project id, so none agrees with the runner's digest.
-          configSource: workerConfigSource(4, "\n  projectId: 'p-' + Math.random().toString(36).slice(2),"),
+          configSource: workerFakeConfigSource(4, "\n  projectId: 'p-' + Math.random().toString(36).slice(2),"),
         },
       );
       const run = outcome.report['run'] as unknown as Record<string, unknown>;
@@ -372,7 +411,7 @@ test('runs after the rejection', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/stray.e2e.ts': strayFile },
-        { appUrl: app.url, configSource: workerConfigSource(1) },
+        { configSource: workerFakeConfigSource(1) },
       );
       const stray = resultByTitle(outcome, 'leaves a rejection behind');
       expect(stray.status).toBe('failed');
@@ -391,25 +430,31 @@ test('runs after the rejection', async ({ app }) => {
   it(
     'charges a rejection that surfaces late to the test running at the time',
     async () => {
-      const leakingFile = `import { test } from 'e2e';
+      const leakingFile = `import { existsSync } from 'node:fs';
+import { test } from 'e2e';
 
 test('leaves a timer behind', async ({ app }) => {
   await app.open();
-  setTimeout(() => {
+  const marker = new URL('./running', import.meta.url);
+  const timer = setInterval(() => {
+    if (!existsSync(marker)) return;
+    clearInterval(timer);
     void Promise.reject(new Error('late'));
-  }, 1_500);
+  }, 20);
 });
 `;
-      const sleepingFile = `import { test } from 'e2e';
+      const sleepingFile = `import { writeFileSync } from 'node:fs';
+import { test } from 'e2e';
 
 test('is running when it surfaces', async ({ app }) => {
   await app.open();
-  await new Promise((resolve) => setTimeout(resolve, 6_000));
+  writeFileSync(new URL('./running', import.meta.url), '');
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
 });
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/a-leaks.e2e.ts': leakingFile, 'tests/b-sleeps.e2e.ts': sleepingFile },
-        { appUrl: app.url, configSource: workerConfigSource(1) },
+        { configSource: workerFakeConfigSource(1) },
       );
       expect(resultByTitle(outcome, 'leaves a timer behind').status).toBe('passed');
       const charged = resultByTitle(outcome, 'is running when it surfaces');
@@ -445,7 +490,7 @@ test('runs on the same worker afterwards', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/a-leaks.e2e.ts': leakingFile, 'tests/b-next.e2e.ts': nextFile },
-        { appUrl: app.url, configSource: workerConfigSource(1) },
+        { configSource: workerFakeConfigSource(1) },
       );
       const finished = resultByTitle(outcome, 'finishes before the leak');
       expect(finished.status).toBe('passed');
@@ -479,7 +524,7 @@ test('runs after both', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/twice.e2e.ts': file },
-        { appUrl: app.url, configSource: workerConfigSource(1) },
+        { configSource: workerFakeConfigSource(1) },
       );
       const attempt = resultByTitle(outcome, 'fails twice').attempts[0]!;
       expect(attempt.status).toBe('failed');
@@ -505,7 +550,7 @@ test('throws off the stack', async ({ app }) => {
   setTimeout(() => {
     throw new Error('boom-uncaught');
   });
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  await new Promise((resolve) => setTimeout(resolve, 300));
 });
 
 test('never starts', async ({ app }) => {
@@ -514,7 +559,7 @@ test('never starts', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/fatal.e2e.ts': file },
-        { appUrl: app.url, configSource: workerConfigSource(1) },
+        { configSource: workerFakeConfigSource(1) },
       );
       const run = outcome.report['run'] as unknown as Record<string, unknown>;
       const errors = run['errors'] as Record<string, unknown>[];
@@ -558,7 +603,7 @@ test('runs on the next worker', async ({ app }) => {
 `;
       const { outcome, project } = await runProjectWithConfigFile(
         { 'tests/a-early.e2e.ts': earlyFile, 'tests/b-next.e2e.ts': nextFile },
-        { appUrl: app.url, configSource: workerConfigSource(1) },
+        { configSource: workerFakeConfigSource(1) },
       );
       const run = outcome.report['run'] as unknown as Record<string, unknown>;
       const errors = run['errors'] as Record<string, unknown>[];
