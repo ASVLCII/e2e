@@ -3,8 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:ios": "xcodebuild -project ../HelloApp.xcodeproj -scheme HelloApp -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath ../build -quiet build",
-    "install:ios": "xcrun simctl install booted ../build/Build/Products/Debug-iphonesimulator/HelloApp.app",
     "test:e2e": "e2e run"
   },
   "devDependencies": {

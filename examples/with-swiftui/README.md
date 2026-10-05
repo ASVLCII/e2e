@@ -5,19 +5,20 @@ The test project is in `e2e/`, next to the Xcode project.
 
 ## Run
 
-Use Node 22 or later, Xcode, and a running iOS simulator.
-From this folder:
+Open `HelloApp.xcodeproj` in Xcode. Select the **HelloApp** scheme and an
+iPhone simulator. Press **Run** to build and install the app. Stop the
+Xcode run before you start the tests.
+
+Use Node 22 or later for the tests. From this folder:
 
 ```bash
 cd e2e
 npm install
 npx agent-device doctor
-npm run build:ios
-npm run install:ios
 npm run test:e2e
 ```
 
-Build and install again after app changes.
+After app changes, run the app in Xcode again before you run the tests.
 
 ## Agent tests
 

@@ -16,8 +16,7 @@ export default {
       name: 'ios',
       engine: mobile({ platform: 'ios' }),
       // PRODUCT_BUNDLE_IDENTIFIER in the Xcode project. Build and install the app
-      // first (`npm run build:ios && npm run install:ios`); the tests open
-      // whatever is installed under this id.
+      // first with Xcode's Run command; the tests open the installed app.
       app: { bundleId: 'dev.e2e.examples.swiftui' },
     },
   ],
