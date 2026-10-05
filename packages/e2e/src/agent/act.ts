@@ -224,7 +224,6 @@ class ActDispatch {
       secrets: spec.secrets,
       trace: () => this.stepCache,
     });
-    this.feed.onChangeSettled = (changed) => this.stepCache?.noteSettled(changed);
     // The dispatch always runs inside a recorded step (`dispatchAgentStep`
     // opens one); the index names the step to the executor and to the trace cache.
     const stepIndex = runtime.steps.currentStepIndex;
@@ -484,7 +483,7 @@ class ActDispatch {
       get traceEligible() { return feed.traceEligible; },
       observe: async (mode) => screenOf(await this.feed.probe(mode), this.runtime.app.base?.origin),
       actions: this.dispatcher.actions,
-      paceNext: (changeWaitMs) => this.dispatcher.paceNext(changeWaitMs),
+      withChangeWait: (changeWaitMs, call) => this.dispatcher.withChangeWait(changeWaitMs, call),
       signal: this.accounting.signal,
       remainingMs: () => this.accounting.remainingMs(),
       replaying: (active) => {

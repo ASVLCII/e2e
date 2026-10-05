@@ -49,6 +49,9 @@ export interface TraceRecorderOptions {
   readonly maxActions?: number;
 }
 
+/** The answer the look after an action gives: whether the screen left the shape the action was resolved against. */
+export type SettleNote = (changed: boolean) => void;
+
 export class TraceRecorder {
   private readonly actions: RecordedAction[] = [];
   private truncated = false;
@@ -63,21 +66,8 @@ export class TraceRecorder {
   }
 
   private lastActionAt: number | undefined;
-  /** Index of the action the last `push` stored on its own: undefined after a fold or a dropped action. */
-  private lastPushed: number | undefined;
-  /** Index of the action whose change wait the next settled look reports on (`noteSettled`). */
-  private awaitingSettle: number | undefined;
-
-  /**
-   * The indices of the recorded actions that settled quietly, when the
-   * recording is action for action the `names` given (a whole replay of an
-   * entry), else none: an index into a different list would mark the wrong
-   * action.
-   */
-  quietIndices(names: readonly string[]): number[] {
-    if (this.actions.length !== names.length || this.actions.some((action, index) => action.name !== names[index])) return [];
-    return this.actions.flatMap((action, index) => (action.quiet === true ? [index] : []));
-  }
+  /** Counts every push, a fold or a dropped action included: a settle note goes stale once it moves. */
+  private revision = 0;
 
   /** Number of actions recorded so far, gaps included. */
   get recordedCount(): number {
@@ -89,33 +79,25 @@ export class TraceRecorder {
     return this.lastActionAt;
   }
 
-  /** Records one committed grammar action. */
-  record(action: RecordableAction): void {
-    this.push(this.toRecorded(action, describeAction(action, { redact: this.redact, redactCut: this.redactCut })));
+  /**
+   * Records one committed grammar action, returning the note the look after
+   * it answers: whether the screen left the shape the action was resolved
+   * against within its change wait. One that did not is marked `quiet`, and
+   * a replay will not wait out the change the recording proved never comes.
+   * An action folded into the one before it or dropped at the cap gets no
+   * note, and a note goes stale once anything else is recorded before the
+   * look, which then answers for both.
+   */
+  record(action: RecordableAction): SettleNote | undefined {
+    const index = this.push(this.toRecorded(action, describeAction(action, { redact: this.redact, redactCut: this.redactCut })));
     this.lastActionAt = Date.now();
-  }
-
-  /**
-   * Notes that the action just recorded armed a change wait, so the settle
-   * the next look reports is about it. Not `measured` (another action's wait
-   * was still pending against the same look), folded into the action before
-   * it, or dropped at the cap, it is noted against nothing.
-   */
-  armedChange(measured: boolean): void {
-    this.awaitingSettle = measured ? this.lastPushed : undefined;
-  }
-
-  /**
-   * Notes whether the screen left the shape the awaiting action was resolved
-   * against within its change wait. One that did not is marked `quiet`, and a
-   * replay will not wait out the change the recording proved never comes.
-   */
-  noteSettled(changed: boolean): void {
-    const index = this.awaitingSettle;
-    this.awaitingSettle = undefined;
-    if (index === undefined || changed) return;
-    const action = this.actions[index];
-    if (action !== undefined) this.actions[index] = { ...action, quiet: true };
+    if (index === undefined) return undefined;
+    const at = this.revision;
+    return (changed) => {
+      const recorded = this.actions[index];
+      if (changed || this.revision !== at || recorded === undefined) return;
+      this.actions[index] = { ...recorded, quiet: true };
+    };
   }
 
   /**
@@ -209,7 +191,11 @@ export class TraceRecorder {
       return descriptor ?? { role: 'unknown' };
     };
     const requireTarget = (): TraceTargetDescriptor => require(target);
-    if (isNodeAction(action)) return { name: action.name, summary, target: withToggleState(requireTarget(), action.node) };
+    if (isNodeAction(action)) {
+      // A tap flips a toggle; hovering it or scrolling it into view does not.
+      const flips = action.name === 'tap' || action.name === 'doubleTap';
+      return { name: action.name, summary, target: flips ? withToggleState(requireTarget(), action.node) : requireTarget() };
+    }
     switch (action.name) {
       case 'check':
         return { name: 'check', summary, target: requireTarget(), checked: action.checked };
@@ -289,15 +275,13 @@ export class TraceRecorder {
     return bound(redacted, MAX_TRACE_INPUT_CHARS);
   }
 
-  private push(action: RecordedAction): void {
+  /** Stores one action, returning its index, or undefined when it folded into the one before or was dropped at the cap. */
+  private push(action: RecordedAction): number | undefined {
+    this.revision += 1;
     // A scroll repeated in the same direction on the same target is one
     // action that ran several times, not several actions: a long list paged
     // to its end fits the trace, and replays with the same repeats.
     const last = this.actions[this.actions.length - 1];
-    this.lastPushed = undefined;
-    // Any action after the awaiting one lands before the look that would
-    // answer for it, so that look answers for neither.
-    this.awaitingSettle = undefined;
     if (action.name === 'scroll' && last?.name === 'scroll' && sameScroll(last, action)) {
       // The smallest coverage of the repeats decides the viewport fallback,
       // so a list that shrank on the way is never promoted by its first size.
@@ -306,14 +290,13 @@ export class TraceRecorder {
       const { spans: previous, quiet: _quiet, ...rest } = last;
       const spans = previous === undefined || action.spans === undefined ? undefined : Math.min(previous, action.spans);
       this.actions[this.actions.length - 1] = { ...rest, times: (last.times ?? 1) + 1, ...(spans === undefined ? {} : { spans }) };
-      return;
+      return undefined;
     }
     if (this.actions.length >= this.maxActions) {
       this.truncated = true;
-      return;
+      return undefined;
     }
-    this.actions.push(action);
-    this.lastPushed = this.actions.length - 1;
+    return this.actions.push(action) - 1;
   }
 }
 

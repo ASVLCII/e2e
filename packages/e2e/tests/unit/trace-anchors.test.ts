@@ -322,6 +322,12 @@ describe('deltaHolds', () => {
     expect(deltaHolds(recorded, nodes([heading, node('s3', { role: 'status', text: 'Save failed' })]), start)).toBe(false);
   });
 
+  it('compares a field\'s value exactly, even when it reads a date or a duration: the value is the step\'s effect', () => {
+    const picked = { role: 'textbox', name: 'Due date', value: '2026-10-05' };
+    expect(holds([picked], [node('d', { role: 'textbox', name: 'Due date', value: '2026-10-05' })])).toBe(true);
+    expect(holds([picked], [node('d', { role: 'textbox', name: 'Due date', value: '2026-10-06' })])).toBe(false);
+  });
+
   it('forgives a churned test id when the other fields still identify the node', () => {
     const anchor = { role: 'link', name: 'PB-Twin-Alpha', testId: 'row-1a2b' };
     const rerendered = node('r2', { role: 'link', name: 'PB-Twin-Alpha', testId: 'row-9f8e' });

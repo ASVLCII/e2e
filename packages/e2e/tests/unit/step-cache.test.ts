@@ -88,6 +88,7 @@ function makeHost(
     remainingMs: () => 50,
     traceEligible: true,
     replaying: () => undefined,
+    withChangeWait: (_changeWaitMs, call) => call(),
   };
 }
 

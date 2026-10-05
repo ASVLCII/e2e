@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ExecutorActions } from '../../src/agent/executor.ts';
+import { EngineError } from '../../src/engine/contract.ts';
+import { TestError } from '../../src/internal/errors.ts';
 import { QUIET_CHANGE_WAIT_MS, replayTrace, type ReplayHost } from '../../src/agent/replay.ts';
 import { flushStagedTraces, type AgentCacheContext } from '../../src/cache/context.ts';
 import { TraceRecorder } from '../../src/cache/recorder.ts';
@@ -29,78 +31,34 @@ const conclusion = {
 };
 
 describe('TraceRecorder pacing', () => {
-  it('marks an action quiet when the screen kept its shape through the action\'s change wait, and only then', () => {
+  it('marks an action quiet when the look after it saw the screen keep its shape, and only then', () => {
     const recording = recorder();
-    recording.record({ name: 'secondaryTap', node: redacted(menu) });
-    recording.armedChange(true);
-    recording.noteSettled(false);
-    recording.record({ name: 'tap', node: redacted(rename) });
-    recording.armedChange(true);
-    recording.noteSettled(true);
+    recording.record({ name: 'secondaryTap', node: redacted(menu) })?.(false);
+    recording.record({ name: 'tap', node: redacted(rename) })?.(true);
     const trace = recording.finalize(conclusion)!;
     expect(trace.actions.map((action) => action.quiet)).toEqual([true, undefined]);
   });
 
-  it('notes a settle against nothing when no action armed a change since the last one', () => {
+  it('lets a note go stale once another action is recorded before the look, which then answers for both', () => {
     const recording = recorder();
-    recording.record({ name: 'tap', node: redacted(rename) });
-    recording.armedChange(true);
-    recording.noteSettled(true);
-    // A second settle with nothing armed in between says nothing about the tap.
-    recording.noteSettled(false);
-    expect(recording.finalize(conclusion)!.actions[0]!.quiet).toBeUndefined();
-  });
-
-  it('marks nothing when another action\'s wait was still pending, or another action landed before the look', () => {
-    const stacked = recorder();
-    stacked.record({ name: 'tap', node: redacted(rename) });
-    stacked.armedChange(false);
-    stacked.noteSettled(false);
-    expect(stacked.finalize(conclusion)!.actions[0]!.quiet).toBeUndefined();
-    const followed = recorder();
-    followed.record({ name: 'secondaryTap', node: redacted(menu) });
-    followed.armedChange(true);
+    const note = recording.record({ name: 'secondaryTap', node: redacted(menu) });
     // A secret fill arms no wait of its own, but it lands before the look.
-    followed.record({ name: 'typeSecret', node: redacted(rename), secret: 'pin' });
-    followed.noteSettled(false);
-    expect(followed.finalize(conclusion)!.actions.map((action) => action.quiet)).toEqual([undefined, undefined]);
+    recording.record({ name: 'typeSecret', node: redacted(rename), secret: 'pin' });
+    note?.(false);
+    expect(recording.finalize(conclusion)!.actions.map((action) => action.quiet)).toEqual([undefined, undefined]);
   });
 
-  it('never marks an action dropped at the cap, nor the one before it', () => {
-    const recording = recorder(1);
-    recording.record({ name: 'tap', node: redacted(rename) });
-    recording.armedChange(true);
-    recording.noteSettled(true);
-    recording.record({ name: 'secondaryTap', node: redacted(menu) });
-    recording.armedChange(true);
-    recording.noteSettled(false);
-    const trace = recording.finalize(conclusion)!;
-    expect(trace.actions).toHaveLength(1);
-    expect(trace.actions[0]!.quiet).toBeUndefined();
-  });
-
-  it('paces a folded scroll in full, since nothing says which repeat was quiet', () => {
-    const recording = recorder();
-    recording.record({ name: 'scroll', direction: 'down' });
-    recording.armedChange(true);
-    recording.noteSettled(false);
-    recording.record({ name: 'scroll', direction: 'down' });
-    recording.armedChange(true);
-    recording.noteSettled(false);
-    const [scroll] = recording.finalize(conclusion)!.actions;
+  it('gives no note to an action dropped at the cap or folded into the scroll before it', () => {
+    const capped = recorder(1);
+    capped.record({ name: 'tap', node: redacted(rename) });
+    expect(capped.record({ name: 'secondaryTap', node: redacted(menu) })).toBeUndefined();
+    const folded = recorder();
+    folded.record({ name: 'scroll', direction: 'down' })?.(false);
+    expect(folded.record({ name: 'scroll', direction: 'down' })).toBeUndefined();
+    // A folded scroll is paced in full, since nothing says which repeat was quiet.
+    const [scroll] = folded.finalize(conclusion)!.actions;
     expect(scroll).toMatchObject({ name: 'scroll', times: 2 });
     expect(scroll!.quiet).toBeUndefined();
-  });
-
-  it('lines its quiet actions up with a replayed entry only when the two lists match action for action', () => {
-    const recording = recorder();
-    recording.record({ name: 'secondaryTap', node: redacted(menu) });
-    recording.armedChange(true);
-    recording.noteSettled(false);
-    recording.record({ name: 'tap', node: redacted(rename) });
-    expect(recording.quietIndices(['secondaryTap', 'tap'])).toEqual([0]);
-    expect(recording.quietIndices(['secondaryTap'])).toEqual([]);
-    expect(recording.quietIndices(['tap', 'tap'])).toEqual([]);
   });
 });
 
@@ -125,26 +83,30 @@ describe('quiet in an entry', () => {
 describe('replayTrace pacing', () => {
   function host(paced: (number | undefined)[]): ReplayHost & { calls: string[] } {
     const calls: string[] = [];
-    let next: number | undefined;
+    let wait: number | undefined;
     const act = (name: string) => async () => {
       calls.push(name);
-      paced.push(next);
-      next = undefined;
+      paced.push(wait);
     };
     return {
       calls,
       traceEligible: true,
       observe: async () => ({ kind: 'semantic', nodes: redactedNodes([menu, rename]), viewport: { width: 1280, height: 720 } }),
       actions: { secondaryTap: act('secondaryTap'), tap: act('tap'), pressKey: act('pressKey') } as unknown as ExecutorActions,
-      paceNext: (ms) => {
-        next = ms;
+      withChangeWait: async (ms, call) => {
+        wait = ms;
+        try {
+          return await call();
+        } finally {
+          wait = undefined;
+        }
       },
       signal: new AbortController().signal,
       remainingMs: () => 60_000,
     };
   }
 
-  it('asks for the short change wait right before an action its recording saw change nothing, and for no other', async () => {
+  it('runs an action its recording saw change nothing at the short change wait, and no other', async () => {
     const paced: (number | undefined)[] = [];
     const replay = host(paced);
     const actions: RecordedAction[] = [
@@ -159,29 +121,49 @@ describe('replayTrace pacing', () => {
   });
 });
 
-describe('replayTrace pacing on a call that fails before its action runs', () => {
-  it('clears the pace, so the next action, the executor\'s after the hand-off, is paced by its policy', async () => {
-    const paces: (number | undefined)[] = [];
-    const host: ReplayHost = {
+describe('replayTrace on a call that fails', () => {
+  function failing(cause: Error): ReplayHost & { calls: number; waits: (number | undefined)[] } {
+    const state = { calls: 0, waits: [] as (number | undefined)[] };
+    let wait: number | undefined;
+    return Object.assign(state, {
       traceEligible: true,
-      observe: async () => ({ kind: 'semantic', nodes: redactedNodes([menu]), viewport: { width: 1280, height: 720 } }),
+      observe: async () => ({ kind: 'semantic' as const, nodes: redactedNodes([menu]), viewport: { width: 1280, height: 720 } }),
       actions: {
-        upload: () => {
-          throw new Error('the path is outside the project');
+        upload: async () => {
+          state.calls += 1;
+          state.waits.push(wait);
+          throw cause;
         },
       } as unknown as ExecutorActions,
-      paceNext: (ms) => void paces.push(ms),
+      withChangeWait: async (ms: number, call: () => Promise<unknown>) => {
+        wait = ms;
+        try {
+          return await call();
+        } finally {
+          wait = undefined;
+        }
+      },
       signal: new AbortController().signal,
       remainingMs: () => 60_000,
-    };
-    const outcome = await replayTrace(host, {
-      actions: [{ name: 'upload', summary: 'upload', target: { role: 'listitem', name: 'report.pdf' }, paths: ['../x'], quiet: true }],
-      executor: { name: 'scripted' },
-      summary: 'uploaded',
     });
-    expect(outcome).toMatchObject({ completed: false, stopReason: 'action-failed' });
-    // The call and its one more try each set the pace and clear it.
-    expect(paces).toEqual([QUIET_CHANGE_WAIT_MS, undefined, QUIET_CHANGE_WAIT_MS, undefined]);
+  }
+  const upload = (): ActionTrace => ({
+    actions: [{ name: 'upload', summary: 'upload', target: { role: 'listitem', name: 'report.pdf' }, paths: ['report.pdf'], quiet: true }],
+    executor: { name: 'scripted' },
+    summary: 'uploaded',
+  });
+
+  it('tries an engine failure once more, at the same pace both times', async () => {
+    const host = failing(new EngineError('ENGINE_FAILURE', 'the runner was busy', { retryable: false }));
+    expect(await replayTrace(host, upload())).toMatchObject({ completed: false, stopReason: 'action-failed' });
+    expect(host.calls).toBe(2);
+    expect(host.waits).toEqual([QUIET_CHANGE_WAIT_MS, QUIET_CHANGE_WAIT_MS]);
+  });
+
+  it('never tries again a refused argument, such as an upload path outside the project', async () => {
+    const host = failing(new TestError('INVALID_ARGUMENT', 'the path is outside the project'));
+    expect(await replayTrace(host, upload())).toMatchObject({ completed: false, stopReason: 'action-failed' });
+    expect(host.calls).toBe(1);
   });
 });
 
@@ -235,29 +217,5 @@ describe('flushStagedTraces and pacing', () => {
       implicatesUnconfirmed: true,
     });
     expect(JSON.parse(await readFile(file, 'utf8')).payload.actions[0].quiet).toBeUndefined();
-  });
-
-  it('writes the pacing a whole replay saw into a kept entry recorded before it, and never over pacing it has', async () => {
-    const { store, keyHash, file, context } = await fileStore('keep');
-    const keep = (quiet: readonly number[]) =>
-      flushStagedTraces(context({ kind: 'keep', keyHash, stepIndex: 0, recordedFor: recorded(false).recordedFor!, quiet }), {
-        lastVerifiedStepIndex: 1,
-        implicatesUnconfirmed: true,
-      });
-    await store.write(keyHash, recorded(false));
-    await keep([0]);
-    const paced = await readFile(file, 'utf8');
-    expect(JSON.parse(paced).payload.actions.map((action: RecordedAction) => action.quiet)).toEqual([true, undefined]);
-    await keep([1]);
-    expect(await readFile(file, 'utf8')).toBe(paced);
-    // An index past the entry's actions is another list's, and is ignored.
-    const { store: other, keyHash: otherKey, file: otherFile, context: otherContext } = await fileStore('keep-range');
-    await other.write(otherKey, recorded(false));
-    const before = await readFile(otherFile, 'utf8');
-    await flushStagedTraces(otherContext({ kind: 'keep', keyHash: otherKey, stepIndex: 0, recordedFor: recorded(false).recordedFor!, quiet: [5] }), {
-      lastVerifiedStepIndex: 1,
-      implicatesUnconfirmed: true,
-    });
-    expect(await readFile(otherFile, 'utf8')).toBe(before);
   });
 });

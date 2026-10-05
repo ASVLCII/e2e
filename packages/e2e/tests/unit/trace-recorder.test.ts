@@ -323,8 +323,10 @@ describe('tapped toggles', () => {
     recorder.record({ name: 'tap', node: box(true) });
     recorder.record({ name: 'tap', node: box(false) });
     recorder.record({ name: 'tap', node: upgradeButton });
+    // Hovering a toggle does not flip it, so its state is not part of the target.
+    recorder.record({ name: 'hover', node: box(true) });
     const trace = recorder.finalize(conclusion)!;
-    expect(trace.actions.map((action) => ('target' in action ? action.target?.states : undefined))).toEqual([['checked'], [], undefined]);
+    expect(trace.actions.map((action) => ('target' in action ? action.target?.states : undefined))).toEqual([['checked'], [], undefined, undefined]);
     expect(readTraceEntry(JSON.parse(JSON.stringify(buildTraceEntry(trace))))?.payload.actions).toEqual(trace.actions);
   });
 });

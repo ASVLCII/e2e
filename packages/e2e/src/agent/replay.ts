@@ -12,7 +12,7 @@
  * divergence.
  */
 
-import { isRelocatableDescriptor, MAIN_LIST_SHARE, relocateRecorded, type RelocationFailure, type RelocationResult } from '../cache/relocate.ts';
+import { isRelocatableDescriptor, MAIN_LIST_SHARE, relocateWithFallbacks, type RelocationFailure, type RelocationResult } from '../cache/relocate.ts';
 import { isNodeAction, type ActionTrace, type DerivedReason, type RecordedAction, type TraceTargetDescriptor, type TraceViewport } from '../cache/trace.ts';
 import type { SemanticNode, ViewportPoint } from '../engine/surface.ts';
 import { describeTarget } from './actions.ts';
@@ -70,11 +70,13 @@ export interface ReplayHost {
   readonly signal: AbortSignal;
   remainingMs(): number;
   /**
-   * Sets the change wait the next action arms in place of its settle
-   * policy's (`ActionDispatcher.paceNext`). Absent on a host that paces
-   * every action by its policy.
+   * Runs `call` with `changeWaitMs` as the change wait the action it makes
+   * arms, in place of its settle policy's (`ActionDispatcher.withChangeWait`).
+   * Absent on a host that paces every action by its policy.
    */
-  paceNext?(changeWaitMs: number | undefined): void;
+  withChangeWait?(changeWaitMs: number, call: () => Promise<unknown>): Promise<unknown>;
+  /** Told when a recorded action is about to be dispatched (the step cache marks its entry consumed). */
+  onDispatch?(): void;
 }
 
 /**
@@ -84,49 +86,6 @@ export interface ReplayHost {
  * wait the recording spent proving nothing changed.
  */
 export const QUIET_CHANGE_WAIT_MS = 300;
-
-/** The grammar with `onCall` told before every call, which then runs as given. */
-function markDispatch(actions: ExecutorActions, onCall: () => void): ExecutorActions {
-  return new Proxy(actions, {
-    get: (target, key, receiver) => {
-      const value: unknown = Reflect.get(target, key, receiver);
-      if (typeof value !== 'function') return value;
-      return (...args: unknown[]): unknown => {
-        onCall();
-        return (value as (...args: unknown[]) => unknown).apply(target, args);
-      };
-    },
-  });
-}
-
-/**
- * The grammar with every call paced as quiet: each one asks the host for the
- * short change wait first, and clears it once the call settles, so a call
- * that fails before its action consumes the pace (a refused upload path)
- * never hands it to the next action, the executor's after a hand-off.
- */
-function quietActions(host: ReplayHost): ExecutorActions {
-  return new Proxy(host.actions, {
-    get: (target, key, receiver) => {
-      const value: unknown = Reflect.get(target, key, receiver);
-      if (typeof value !== 'function') return value;
-      return (...args: unknown[]): unknown => {
-        host.paceNext?.(QUIET_CHANGE_WAIT_MS);
-        const clear = () => host.paceNext?.(undefined);
-        let result: unknown;
-        try {
-          result = (value as (...args: unknown[]) => unknown).apply(target, args);
-        } catch (cause) {
-          clear();
-          throw cause;
-        }
-        if (result instanceof Promise) return result.finally(clear);
-        clear();
-        return result;
-      };
-    },
-  });
-}
 
 export interface ReplayOutcome {
   /** True when every recorded action executed; the step self-finalizes. */
@@ -143,7 +102,7 @@ export interface ReplayOutcome {
   readonly derived?: DerivedReason;
   /**
    * How many executed actions found their control only by a fallback rung
-   * (`relocateRecorded`); absent when every one matched exactly.
+   * (`relocateWithFallbacks`); absent when every one matched exactly.
    */
   readonly relocated?: number;
 }
@@ -325,145 +284,190 @@ export async function replayTrace(
   let previous: RecordedAction | undefined;
   for (const action of trace.actions) {
     if (!host.traceEligible) return stop('action-failed');
-    // An action its recording saw change nothing waits only a beat for a
-    // change: the pace follows the recording, not the change timeout.
-    // Whether the grammar call of this action ran: only a failure it threw is
-    // an action that never reached the app, worth one more try; a look or a
-    // relocation that failed before it is not.
-    let dispatched = false;
-    const mark = () => {
-      dispatched = true;
-    };
-    const actions = markDispatch(action.quiet === true ? quietActions(host) : host.actions, mark);
-    // The grammar at the policy's pace, for the calls a quiet mark never applies to.
-    const paced = markDispatch(host.actions, mark);
-    const planned = planCall(action, actions);
+    const planned = planCall(action, host.actions);
     if (planned.kind === 'gap') {
       return { ...stop('gap'), ...(planned.derived === undefined ? {} : { derived: planned.derived }) };
     }
+    // Repeats of a folded scroll done before it failed moved the screen: the
+    // hand-off counts them as executed, so the executor is not told the
+    // screen is untouched.
+    let repeated = 0;
+    let fellBack = false;
+    let dispatched = false;
+    const run: ActionRun = {
+      // An action its recording saw change nothing waits only a beat for a
+      // change (`RecordedAction.quiet`): the pace follows the recording, not
+      // the change timeout.
+      dispatch: async (call, paceable = true) => {
+        dispatched = true;
+        host.onDispatch?.();
+        if (paceable && action.quiet === true && host.withChangeWait !== undefined) await host.withChangeWait(QUIET_CHANGE_WAIT_MS, call);
+        else await call();
+      },
+      refind: async (descriptor, look) => {
+        const result = await relocate(host, descriptor, look);
+        if (result.kind === 'found') run.noteFound(result);
+        return result;
+      },
+      noteFound: (found) => {
+        if (found.fallback !== undefined) fellBack = true;
+      },
+      onRepeat: () => {
+        repeated += 1;
+      },
+      looksBeforeFree: previous !== undefined && options.looksBeforeFree?.() === true,
+    };
+    const partial = (): string | undefined =>
+      repeated === 0 || planned.kind !== 'scroll' ? undefined : `${action.summary} (${String(repeated)} of ${String(planned.times)} repeats)`;
+    const failed = (cause: unknown): ReplayOutcome => {
+      if (isReplayFatal(cause, host.signal)) throw cause;
+      // Input may have reached the app (spec 09): the hand-off must name the
+      // uncertain action so the executor verifies before re-acting; the
+      // runner never repeats an unknown-commit operation itself.
+      if (isUncertainCommit(cause)) return { ...stop('action-uncertain', partial()), uncertainAction: action.summary };
+      return stop('action-failed', partial());
+    };
     // The look before this action: the start capture serves the first one;
     // after that, the previous action's settle policy says how far a fresh
     // capture settles.
-    let look: Look =
+    const look: Look =
       previous === undefined
         ? options.initial === undefined
           ? HELD_STILL
           : { kind: 'in-hand', screen: options.initial }
         : { kind: 'capture', settle: SETTLE_AFTER[previous.name].look };
-    // Repeats of a folded scroll done before it failed moved the screen: the
-    // hand-off counts them as executed, so the executor is not told the
-    // screen is untouched.
-    let repeated = 0;
-    // Whether this action's control was found only by a fallback rung,
-    // counted once the action ran.
-    let fellBack = false;
-    const note = (found: FoundTarget): void => {
-      if (found.fallback !== undefined) fellBack = true;
-    };
-    const refind = async (descriptor: TraceTargetDescriptor, from: Look): Promise<Relocated> => {
-      const result = await relocate(host, descriptor, from);
-      if (result.kind === 'found') note(result);
-      return result;
-    };
-    const partial = (): string | undefined =>
-      repeated === 0 || planned.kind !== 'scroll' ? undefined : `${action.summary} (${String(repeated)} of ${String(planned.times)} repeats)`;
-    // One more try for an action the engine says never reached the app: a tap
-    // that landed while a list re-rendered or a sheet slid in. The live loop
-    // does the same; the retry first waits for the screen to hold still and
-    // finds the target again, and an action that may have reached it never
-    // repeats.
-    for (let tries = 0; ; tries += 1) {
+    let stopped: ReplayHandOffReason | undefined;
+    try {
+      stopped = await runPlanned(host, planned, look, run);
+    } catch (cause) {
+      if (!retriesAfter(cause, dispatched, repeated)) return failed(cause);
+      // One more try for an action the engine says never reached the app: a
+      // tap that landed while a list re-rendered or a sheet slid in, which
+      // the live loop retries too. It waits for the screen to hold still and
+      // finds the target again first.
       try {
-        switch (planned.kind) {
-          case 'targeted': {
-            const found = await refind(planned.descriptor, look);
-            if (found.kind === 'failed') return stop(found.failure);
-            await planned.invoke({ id: found.id });
-            break;
-          }
-          case 'free':
-            if (previous !== undefined && options.looksBeforeFree?.() === true) await firstLook(host, look);
-            await planned.invoke();
-            break;
-          case 'scroll': {
-            // A scroll on a list is paced by the relocation before each repeat.
-            // A viewport scroll relocates nothing, so each later repeat takes a
-            // settled look of its own, as the live loop did between them. A
-            // list judged lost scrolls as the viewport from then on, instead of
-            // waiting out the relocation backoff again on every repeat.
-            let list = planned.list;
-            for (let index = 0; index < planned.times; index += 1) {
-              if (list === undefined) {
-                if (index > 0) await host.observe('held-still');
-                // A folded scroll is paced in full whatever its entry says.
-                await (planned.times > 1 ? paced : actions).scroll(planned.direction);
-              } else {
-                const scrolled = await scrollOnce(paced, refind, planned.direction, list, index === 0 ? look : HELD_STILL);
-                if (scrolled.kind === 'failed') return stop(scrolled.failure, partial());
-                if (scrolled.kind === 'viewport') list = undefined;
-              }
-              repeated += 1;
-            }
-            break;
-          }
-          case 'scrollUntil': {
-            if (planned.list === undefined) {
-              await actions.scrollUntil(planned.text, planned.direction);
-              break;
-            }
-            const found = await refind(planned.list.descriptor, look);
-            if (found.kind === 'found') await actions.scrollUntil(planned.text, planned.direction, { id: found.id });
-            else if ((planned.list.spans ?? 0) >= MAIN_LIST_SHARE) await actions.scrollUntil(planned.text, planned.direction);
-            else return stop(found.failure);
-            break;
-          }
-          case 'drag': {
-            const pair = await relocatePair(host, planned.source, planned.destination, look);
-            if (pair.kind === 'failed') return stop(pair.failure);
-            pair.ends.forEach(note);
-            await actions.drag({ id: pair.ends[0].id }, { id: pair.ends[1].id });
-            break;
-          }
-          case 'point': {
-            const screen = await firstLook(host, look);
-            if (screen.kind === 'pixels') return stop('action-failed');
-            const { viewport } = screen;
-            if (viewport.width !== planned.viewport.width || viewport.height !== planned.viewport.height) {
-              return stop('viewport-changed');
-            }
-            await planned.invoke(planned.point);
-            break;
-          }
-          case 'within': {
-            const found = await refind(planned.descriptor, look);
-            const at = placeWithin(found, planned);
-            if (at === undefined) return stop(found.kind === 'failed' ? found.failure : 'target-not-found');
-            await planned.invoke(at);
-            break;
-          }
-        }
-        break;
-      } catch (cause) {
-        if (isReplayFatal(cause, host.signal)) throw cause;
-        if (isUncertainCommit(cause)) {
-          // Input may have reached the app (spec 09): the hand-off must name
-          // the uncertain action so the executor verifies before re-acting —
-          // the runner never repeats an unknown-commit operation itself.
-          return { ...stop('action-uncertain', partial()), uncertainAction: action.summary };
-        }
-        if (dispatched && tries === 0 && repeated === 0 && !hasCause(cause, ({ code }) => typeof code === 'string' && NEVER_RETRIED.has(code))) {
-          dispatched = false;
-          look = HELD_STILL;
-          continue;
-        }
-        return stop('action-failed', partial());
+        stopped = await runPlanned(host, planned, HELD_STILL, run);
+      } catch (again) {
+        return failed(again);
       }
     }
+    if (stopped !== undefined) return stop(stopped, partial());
     summaries.push(action.summary);
     if (fellBack) relocated += 1;
     previous = action;
   }
   return { completed: true, executed: summaries.length, total, summaries, ...drift() };
+}
+
+/** What `runPlanned` needs from the replay of one action: the dispatch, the relocation, and what they report. */
+interface ActionRun {
+  /** Runs one grammar call of the action, at its recorded pace unless `paceable` is false (a folded scroll). */
+  readonly dispatch: (call: () => Promise<unknown>, paceable?: boolean) => Promise<void>;
+  /** Relocates a recorded target, noting a fallback match. */
+  readonly refind: (descriptor: TraceTargetDescriptor, look: Look) => Promise<Relocated>;
+  /** Notes a target found outside `refind` (a drag's ends). */
+  readonly noteFound: (found: FoundTarget) => void;
+  /** Counts one repeat of a folded scroll done. */
+  readonly onRepeat: () => void;
+  /** Whether a free action takes a look first (`ReplayOptions.looksBeforeFree`). */
+  readonly looksBeforeFree: boolean;
+}
+
+/**
+ * Runs one planned action against the live screen from `look`, returning the
+ * hand-off it stopped at, or undefined once it ran. Throws what the grammar
+ * throws; the caller decides whether that ends the replay.
+ */
+async function runPlanned(
+  host: ReplayHost,
+  planned: Exclude<PlannedCall, { kind: 'gap' }>,
+  look: Look,
+  run: ActionRun,
+): Promise<ReplayHandOffReason | undefined> {
+  switch (planned.kind) {
+    case 'targeted': {
+      const found = await run.refind(planned.descriptor, look);
+      if (found.kind === 'failed') return found.failure;
+      await run.dispatch(() => planned.invoke({ id: found.id }));
+      return undefined;
+    }
+    case 'free':
+      if (run.looksBeforeFree) await firstLook(host, look);
+      await run.dispatch(() => planned.invoke());
+      return undefined;
+    case 'scroll': {
+      // A scroll on a list is paced by the relocation before each repeat. A
+      // viewport scroll relocates nothing, so each later repeat takes a
+      // settled look of its own, as the live loop did between them. A list
+      // judged lost scrolls as the viewport from then on, instead of waiting
+      // out the relocation backoff again on every repeat. A folded scroll is
+      // paced in full whatever its entry says.
+      const scroll = (target?: ExecutorTarget) =>
+        run.dispatch(() => host.actions.scroll(planned.direction, target), planned.times === 1);
+      let list = planned.list;
+      for (let index = 0; index < planned.times; index += 1) {
+        if (list === undefined) {
+          if (index > 0) await host.observe('held-still');
+          await scroll();
+        } else {
+          const scrolled = await scrollOnce(scroll, run.refind, list, index === 0 ? look : HELD_STILL);
+          if (scrolled.kind === 'failed') return scrolled.failure;
+          if (scrolled.kind === 'viewport') list = undefined;
+        }
+        run.onRepeat();
+      }
+      return undefined;
+    }
+    case 'scrollUntil': {
+      if (planned.list === undefined) {
+        await run.dispatch(() => host.actions.scrollUntil(planned.text, planned.direction));
+        return undefined;
+      }
+      const found = await run.refind(planned.list.descriptor, look);
+      if (found.kind === 'found') await run.dispatch(() => host.actions.scrollUntil(planned.text, planned.direction, { id: found.id }));
+      else if ((planned.list.spans ?? 0) >= MAIN_LIST_SHARE) await run.dispatch(() => host.actions.scrollUntil(planned.text, planned.direction));
+      else return found.failure;
+      return undefined;
+    }
+    case 'drag': {
+      const pair = await relocatePair(host, planned.source, planned.destination, look);
+      if (pair.kind === 'failed') return pair.failure;
+      pair.ends.forEach(run.noteFound);
+      await run.dispatch(() => host.actions.drag({ id: pair.ends[0].id }, { id: pair.ends[1].id }));
+      return undefined;
+    }
+    case 'point': {
+      const screen = await firstLook(host, look);
+      if (screen.kind === 'pixels') return 'action-failed';
+      const { viewport } = screen;
+      if (viewport.width !== planned.viewport.width || viewport.height !== planned.viewport.height) return 'viewport-changed';
+      await run.dispatch(() => planned.invoke(planned.point));
+      return undefined;
+    }
+    case 'within': {
+      const found = await run.refind(planned.descriptor, look);
+      const at = placeWithin(found, planned);
+      if (at === undefined) return found.kind === 'failed' ? found.failure : 'target-not-found';
+      await run.dispatch(() => planned.invoke(at));
+      return undefined;
+    }
+  }
+}
+
+/**
+ * Whether a failed action gets one more try: only one whose grammar call ran
+ * and threw (a look or a relocation that failed before it is no action), on
+ * its first try, before any repeat of a folded scroll moved the screen, and
+ * not for a failure a second try cannot change (`NEVER_RETRIED`) or one that
+ * may have reached the app.
+ */
+function retriesAfter(cause: unknown, dispatched: boolean, repeated: number): boolean {
+  return (
+    dispatched &&
+    repeated === 0 &&
+    !isUncertainCommit(cause) &&
+    !hasCause(cause, ({ code }) => typeof code === 'string' && NEVER_RETRIED.has(code))
+  );
 }
 
 /**
@@ -522,16 +526,21 @@ async function relocate(
   look: Look,
 ): Promise<Relocated> {
   let last: Relocated = { kind: 'failed', failure: 'target-not-found' };
-  const sighting = new FallbackSighting();
+  let sighted: string | undefined;
   const settled = await pollSettled(host, (screen): Relocated | undefined => {
-    const result = relocateRecorded(descriptor, screen.nodes);
+    const result = relocateWithFallbacks(descriptor, screen.nodes);
     if (result.kind === 'failed') {
-      sighting.reset();
+      sighted = undefined;
       last = result.failure === 'target-not-found' ? result : { ...result, screen };
       return retryable(result, descriptor) ? undefined : last;
     }
     const node = screen.nodes.get(result.id);
-    if (node === undefined || !sighting.confirms([result], screen.nodes)) return undefined;
+    if (node === undefined) return undefined;
+    const key = sightingKey([result], screen.nodes);
+    if (key !== undefined && key !== sighted) {
+      sighted = key;
+      return undefined;
+    }
     return { ...result, node };
   }, look);
   return settled ?? last;
@@ -544,29 +553,19 @@ async function relocate(
  * test id of this page's "Save") can hold a node that part fits. So a node a
  * fallback found is acted on only when the next look finds the same node,
  * by the same rung, in the same place, again: a screen that moved on in
- * between fails the check, and the poll looks once more. The place is the
- * node's box, which also tells apart identical twins that swapped order
- * between the two looks, where the descriptor alone could not.
+ * between fails the check, and the poll looks once more. This is what a
+ * look's matches read as for that comparison, or undefined when none came
+ * from a fallback. The place is the node's box, so a control still sliding
+ * in is not confirmed until it holds still.
  */
-class FallbackSighting {
-  private previous: string | undefined;
-
-  /** Forgets the last sighting: a look that found nothing breaks the run. */
-  reset(): void {
-    this.previous = undefined;
-  }
-
-  /** Whether `results` stand, recording them as the last sighting when a fallback found any of them. */
-  confirms(results: readonly Extract<RelocationResult, { kind: 'found' }>[], nodes: ObservedNodes): boolean {
-    if (results.every((result) => result.fallback === undefined)) return true;
-    const seen = JSON.stringify(results.map((result) => {
+function sightingKey(results: readonly FoundTarget[], nodes: ObservedNodes): string | undefined {
+  if (results.every((result) => result.fallback === undefined)) return undefined;
+  return JSON.stringify(
+    results.map((result) => {
       const node = nodes.get(result.id);
       return [result.fallback ?? null, node === undefined ? null : describeTarget(node) ?? null, placeOf(node)];
-    }));
-    const confirmed = seen === this.previous;
-    this.previous = seen;
-    return confirmed;
-  }
+    }),
+  );
 }
 
 /** A node's box rounded to whole pixels, or null without one: where it sits, as two looks compare it. */
@@ -593,18 +592,22 @@ async function relocatePair(
   | { readonly kind: 'failed'; readonly failure: RelocationFailure }
 > {
   let last: RelocationFailure = 'target-not-found';
-  const sighting = new FallbackSighting();
+  let sighted: string | undefined;
   const failed = (descriptor: TraceTargetDescriptor, result: Extract<RelocationResult, { kind: 'failed' }>) => {
-    sighting.reset();
+    sighted = undefined;
     last = result.failure;
     return retryable(result, descriptor) ? undefined : { kind: 'failed' as const, failure: result.failure };
   };
   const settled = await pollSettled(host, (screen) => {
-    const from = relocateRecorded(source, screen.nodes);
+    const from = relocateWithFallbacks(source, screen.nodes);
     if (from.kind === 'failed') return failed(source, from);
-    const to = relocateRecorded(destination, screen.nodes);
+    const to = relocateWithFallbacks(destination, screen.nodes);
     if (to.kind === 'failed') return failed(destination, to);
-    if (!sighting.confirms([from, to], screen.nodes)) return undefined;
+    const key = sightingKey([from, to], screen.nodes);
+    if (key !== undefined && key !== sighted) {
+      sighted = key;
+      return undefined;
+    }
     return { kind: 'found' as const, ends: [from, to] as const };
   }, look);
   return settled ?? { kind: 'failed', failure: last };
@@ -689,19 +692,18 @@ function usableBox(rect: SemanticNode['rect']): Box | undefined {
  * the step off on.
  */
 async function scrollOnce(
-  actions: ExecutorActions,
-  refind: (descriptor: TraceTargetDescriptor, look: Look) => Promise<Relocated>,
-  direction: ScrollDirection,
+  scroll: (target?: ExecutorTarget) => Promise<void>,
+  refind: ActionRun['refind'],
   list: ScrolledList,
   look: Look,
 ): Promise<{ readonly kind: 'list' | 'viewport' } | { readonly kind: 'failed'; readonly failure: RelocationFailure }> {
   const relocated = await refind(list.descriptor, look);
   if (relocated.kind === 'found') {
-    await actions.scroll(direction, { id: relocated.id });
+    await scroll({ id: relocated.id });
     return { kind: 'list' };
   }
   if ((list.spans ?? 0) < MAIN_LIST_SHARE) return { kind: 'failed', failure: relocated.failure };
-  await actions.scroll(direction);
+  await scroll();
   return { kind: 'viewport' };
 }
 

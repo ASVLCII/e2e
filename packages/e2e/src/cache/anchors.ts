@@ -254,7 +254,8 @@ const VOLATILE_SPANS: readonly RegExp[] = VOLATILE_TEXT.map((pattern) => new Reg
  * expires at 17:42` and `Session expires at 17:45` are the same alert, which
  * a replay must neither miss nor mistake for one the recording never saw,
  * and `Saved at 10:42` the same status. A recording whose only effect reads
- * a time would otherwise fail its own replay on every run.
+ * a time would otherwise fail its own replay on every run. A field's value
+ * is never masked: a date picked or a duration typed is the step's effect.
  */
 function anchorShape(anchor: TraceTargetDescriptor): TraceTargetDescriptor {
   const mask = (text: string) => VOLATILE_SPANS.reduce((masked, span) => masked.replace(span, '#'), text);
@@ -262,7 +263,6 @@ function anchorShape(anchor: TraceTargetDescriptor): TraceTargetDescriptor {
     ...anchor,
     ...(anchor.name === undefined ? {} : { name: mask(anchor.name) }),
     ...(anchor.text === undefined ? {} : { text: mask(anchor.text) }),
-    ...(anchor.value === undefined ? {} : { value: mask(anchor.value) }),
   };
 }
 
@@ -346,12 +346,11 @@ function identityKey(descriptor: TraceTargetDescriptor): string {
  */
 function anchorIn(anchor: TraceTargetDescriptor, nodes: readonly AnchorNode[]): boolean {
   const states = statesKey(anchor.states);
-  const value = anchor.value === undefined ? undefined : anchorShape(anchor).value;
   return descriptorTiers(anchor).some((tier) => {
     const recorded = anchorShape(tier);
     return nodes.some(
       (node) =>
-        node.shape.value === value && statesKey(node.descriptor.states) === states && fieldsEqual(recorded, node.shape, ANCHOR_FIELDS),
+        node.descriptor.value === anchor.value && statesKey(node.descriptor.states) === states && fieldsEqual(recorded, node.shape, ANCHOR_FIELDS),
     );
   });
 }

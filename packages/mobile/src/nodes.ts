@@ -567,8 +567,9 @@ export function screenTitle(snapshot: ProjectedSnapshot): string | undefined {
     (entry) => entry.node.role === 'text' && entry.raw.label !== undefined && entry.raw.label.trim() !== '' && isWithin(entry, bar),
   );
   if (text !== undefined) return text.raw.label;
-  if (backLabelled && (bar.raw.identifier === undefined || bar.raw.identifier.trim() === '')) return bar.raw.label;
-  return bar.raw.identifier === undefined || bar.raw.identifier.trim() === '' ? undefined : bar.raw.identifier;
+  const identifier = bar.raw.identifier?.trim() ?? '';
+  // A back-labelled bar with neither still reads its label rather than nothing.
+  return identifier !== '' ? bar.raw.identifier : backLabelled ? bar.raw.label : undefined;
 }
 
 /** True when `entry` is a strict descendant of `ancestor`. */

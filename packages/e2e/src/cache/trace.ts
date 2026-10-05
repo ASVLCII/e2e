@@ -525,7 +525,7 @@ function readActionTrace(document: unknown): ActionTrace | undefined {
 function readAnchors(document: unknown): TraceTargetDescriptor[] | undefined {
   if (document === undefined) return [];
   if (!Array.isArray(document) || document.length > MAX_TRACE_ANCHORS) return undefined;
-  return each(document, (anchor) => readDescriptor(anchor, false));
+  return each(document, readAnchor);
 }
 
 function readRecordedAction(document: unknown): RecordedAction | undefined {
@@ -545,56 +545,56 @@ function readActionBody(raw: Record<string, unknown>): RecordedAction | undefine
 
   const name = raw['name'];
   if (isNodeActionName(name)) {
-    const target = readDescriptor(raw['target']);
+    const target = readTarget(raw['target']);
     return target === undefined ? undefined : { name, summary, target };
   }
   switch (name) {
     case 'type': {
-      const target = readDescriptor(raw['target']);
+      const target = readTarget(raw['target']);
       const value = readTypedValue(raw['value']);
       if (target === undefined || value === undefined) return undefined;
       return { name: 'type', summary, target, value };
     }
     case 'typeSecret': {
-      const target = readDescriptor(raw['target']);
+      const target = readTarget(raw['target']);
       const secret = readBoundedText(raw['secret'], MAX_TRACE_DESCRIPTOR_CHARS);
       if (target === undefined || secret === undefined) return undefined;
       return { name: 'typeSecret', summary, target, secret };
     }
     case 'press': {
-      const target = readDescriptor(raw['target']);
+      const target = readTarget(raw['target']);
       const key = readBoundedText(raw['key'], 64);
       if (target === undefined || key === undefined) return undefined;
       return { name: 'press', summary, target, key };
     }
     case 'select': {
-      const target = readDescriptor(raw['target']);
+      const target = readTarget(raw['target']);
       const value = readInputText(raw['value']);
       if (target === undefined || value === undefined) return undefined;
       return { name: 'select', summary, target, value };
     }
     case 'check': {
-      const target = readDescriptor(raw['target']);
+      const target = readTarget(raw['target']);
       const checked = raw['checked'];
       if (target === undefined || typeof checked !== 'boolean') return undefined;
       return { name: 'check', summary, target, checked };
     }
     case 'upload': {
-      const target = readDescriptor(raw['target']);
+      const target = readTarget(raw['target']);
       const paths = readInputPaths(raw['paths']);
       if (target === undefined || paths === undefined) return undefined;
       return { name: 'upload', summary, target, paths };
     }
     case 'drag': {
-      const target = readDescriptor(raw['target']);
-      const destination = readDescriptor(raw['destination']);
+      const target = readTarget(raw['target']);
+      const destination = readTarget(raw['destination']);
       if (target === undefined || destination === undefined) return undefined;
       return { name: 'drag', summary, target, destination };
     }
     case 'scroll': {
       const direction = raw['direction'];
       if (!isScrollDirection(direction)) return undefined;
-      const target = raw['target'] === undefined ? undefined : readDescriptor(raw['target']);
+      const target = raw['target'] === undefined ? undefined : readTarget(raw['target']);
       if (raw['target'] !== undefined && target === undefined) return undefined;
       const times = raw['times'];
       if (times !== undefined && (typeof times !== 'number' || !Number.isInteger(times) || times < 2)) return undefined;
@@ -613,7 +613,7 @@ function readActionBody(raw: Record<string, unknown>): RecordedAction | undefine
       const text = readInputText(raw['text']);
       const direction = raw['direction'];
       if (text === undefined || !isScrollDirection(direction)) return undefined;
-      const target = raw['target'] === undefined ? undefined : readDescriptor(raw['target']);
+      const target = raw['target'] === undefined ? undefined : readTarget(raw['target']);
       if (raw['target'] !== undefined && target === undefined) return undefined;
       const spans = raw['spans'];
       if (spans !== undefined && (typeof spans !== 'number' || !(spans >= 0 && spans <= 1))) return undefined;
@@ -682,7 +682,7 @@ function readViewport(document: unknown): TraceViewport | undefined {
 
 function readWithin(document: unknown): NonNullable<PointAction['within']> | undefined {
   const raw = readObject(document);
-  const target = raw === undefined ? undefined : readDescriptor(raw['target']);
+  const target = raw === undefined ? undefined : readTarget(raw['target']);
   const fx = raw?.['fx'];
   const fy = raw?.['fy'];
   if (target === undefined || !isFraction(fx) || !isFraction(fy)) return undefined;
@@ -838,8 +838,18 @@ function mapDescriptors(descriptors: readonly TraceTargetDescriptor[], map: Trac
   return each(descriptors, (descriptor) => mapDescriptorText(descriptor, map));
 }
 
-/** One descriptor; `target` allows the empty state list a tapped toggle that was off records, which an anchor never does. */
-function readDescriptor(document: unknown, target = true): TraceTargetDescriptor | undefined {
+/** One action's target descriptor. */
+function readTarget(document: unknown): TraceTargetDescriptor | undefined {
+  return readDescriptor(document, 'target');
+}
+
+/** One anchor's descriptor: unlike a target's, its state list is never empty. */
+function readAnchor(document: unknown): TraceTargetDescriptor | undefined {
+  return readDescriptor(document, 'anchor');
+}
+
+/** One descriptor; a target may carry the empty state list a tapped toggle that was off records, an anchor never does. */
+function readDescriptor(document: unknown, as: 'target' | 'anchor'): TraceTargetDescriptor | undefined {
   if (typeof document !== 'object' || document === null || Array.isArray(document)) {
     return undefined;
   }
@@ -859,8 +869,7 @@ function readDescriptor(document: unknown, target = true): TraceTargetDescriptor
   }
   if (raw['states'] !== undefined) {
     const states = readStates(raw['states']);
-    if (states !== undefined && states.length === 0 && !target) return undefined;
-    if (states === undefined) return undefined;
+    if (states === undefined || (states.length === 0 && as === 'anchor')) return undefined;
     descriptor['states'] = states;
   }
   return descriptor as TraceTargetDescriptor;

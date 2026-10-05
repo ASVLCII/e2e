@@ -63,7 +63,7 @@ named row, list item, or group) and `position` (its place among twins).
 Engines fill the first six from the node; the web engine does not emit
 per-node `selector`s, so the selector is provenance only and never matched.
 
-`relocateRecorded` walks a ladder. Each rung keeps less of the recording,
+`relocateWithFallbacks` walks a ladder. Each rung keeps less of the recording,
 most stable evidence first. The first rung that settles on exactly one node
 (or on the recorded `position` among the same count of twins) wins.
 
@@ -76,27 +76,24 @@ most stable evidence first. The first rung that settles on exactly one node
 | Accessible | `role`, `name` | test id, placeholder, or text changes | `accessible` |
 | Role family | `name`, role in the same family | `link` to `button`, `checkbox` to `switch`, `textbox` to `combobox` | `role-family` |
 
-Every rung compares fields as they read. There is deliberately no rung that
-reads a label by its shape (`Like (0 likes)` as `Like (1 like)`): it needs
-word rules (plurals, relative times, which numbers count and which name),
-review found it matching `Open item 3 menu` to `Open item 4 menu`, and a
-control whose label carries state is better served by a test id.
+Every rung compares fields as they read; no rung reads a label by its shape
+(`Like (0 likes)` as `Like (1 like)`). That would take word rules (plurals,
+relative times, which numbers count and which name), and a control whose
+label carries state is better served by a test id.
 
 What never loosens:
 
-- A tapped toggle (`TOGGLE_ROLES`: checkbox, switch, radio) records the state
-  it was in, and relocates only onto one in the same state on every rung. A
-  tap flips it: a recording that unchecked a box the model had checked by
-  accident would otherwise check it on a replay where the accident never
-  happened.
-
+- A toggle (`TOGGLE_ROLES`: checkbox, switch, radio, and their menu item
+  forms) a tap or double tap acted on records the state it was in, and
+  relocates only onto one in the same state on every rung. A tap flips it:
+  a recording that unchecked a box the model had checked by accident would
+  otherwise check it on a replay where the accident never happened.
 - `within` must hold on every rung. It is the first text of the nearest
   named row, list item, or group, unless that text is the label of another
   control of the target's own role: then the "container" is a list and the
-  text is its first row, which a scroll changes (a row of an Android list was
-  keyed by `Row 0499`, and the replay found `Row 0500` first). The same "Delete" in another row is
-  another control, and with only one row left the ladder would otherwise
-  delete the wrong record.
+  text is its first row, which a scroll changes. The same "Delete" in
+  another row is another control, and with only one row left the ladder
+  would otherwise delete the wrong record.
 - An ambiguous exact match diverges. Every fallback rung only widens the
   candidate set, so falling back cannot resolve it.
 - A control recorded among twins resolves only by its place among the same
@@ -110,9 +107,10 @@ What never loosens:
   on one node and the name rungs on another, the result is `target-ambiguous`.
   The same check guards the exact tier: a re-minted test id is forgiven only
   when no node still carries the recorded one.
-- A fallback match needs a second look (`FallbackSighting` in
+- A fallback match needs a second look (`sightingKey` in
   `agent/replay.ts`). A node found only by a fallback is acted on once the
-  next raw look finds the same node by the same rung again. A wizard's
+  next raw look finds the same node by the same rung, in the same box,
+  again. A wizard's
   outgoing page can hold "Next" under the test id of the incoming page's
   "Save"; the second look sees the page that replaced it. This costs one
   more poll of the settling backoff per drifted control (100 ms when the
@@ -122,8 +120,8 @@ What never loosens:
   keeps looking while the screen settles before it hands off.
 
 Live steps (`observation-feed.ts`, re-finding a node that went stale a moment
-ago) use the exact match only (`relocateDescriptor`). The ladder is for
-recordings made on another day.
+ago) use the exact match only (`relocateExact`), the moved-test-id check
+included. The ladder is for recordings made on another day.
 
 ### Healing
 
@@ -158,30 +156,24 @@ action whose effect the tree never shows (a right-click that opens a native
 menu, a key that moves a caret, a tap that only arms the next control) waits
 its whole change wait every time.
 
-The recording notes how each action settled. `ObservationFeed` reports
-whether any capture of a settled look left the shape the action was
-resolved against (a save that showed "Saving..." and came back changed the
-screen), the dispatcher tells the recorder which action armed the wait
-(`armedChange`), and an action that changed nothing is stored `quiet`. A
-note is kept only when it can answer for one action: when another action's
-wait was still pending, or another action landed before the look, nothing
-is marked. The pace is cleared once the call settles, so a call that fails
-before its action runs never hands it to the executor. A replay arms a 300 ms change wait for a
-quiet action instead (`QUIET_CHANGE_WAIT_MS`, `ActionDispatcher.paceNext`),
-so it is paced by what the recording saw rather than by timeouts. The held
-still check after it, relocation polling, and the end-state wait are
-unchanged, so a change that does come late is still waited for.
+The recording notes how each action settled. `TraceRecorder.record` returns
+a settle note for the action, the dispatcher arms the action's change wait
+with it (`ObservationFeed.armChange`), and the settled look that consumes the
+wait answers it: whether any capture left the shape the action was resolved
+against (a save that showed "Saving..." and came back did change the
+screen). An action that changed nothing is stored `quiet`. A note answers
+for one action only: a second wait armed before the look drops both notes,
+and a note goes stale once anything else is recorded before the look.
+
+A replay runs a quiet action at a 300 ms change wait instead
+(`QUIET_CHANGE_WAIT_MS`, `ActionDispatcher.withChangeWait`, scoped to the
+call), so it is paced by what the recording saw rather than by timeouts.
+The held-still check after it, relocation polling, and the end-state wait
+are unchanged, so a change that does come late is still waited for. A
+folded scroll is always paced in full.
 
 `quiet` is a timing, so it never counts as a new flow (`flowOf`). An entry
-recorded before pacing learns it once: from the next recording of the same
-flow, or from a whole replay, which waited every action's full change wait
-(`completeEntry`). A folded scroll is always paced in full.
-
-Measured on the web benchmark's agentic suite (median of three read-only
-runs each, every step replayed): the steps with a quiet action went from
-2.3 to 2.6 s down to 0.6 to 1.0 s, and the suite's replayed steps from
-28.9 s to 20.3 s, excluding one 431-page `scrollUntil` whose time is the
-paging itself. Run to run spread stays under 2%.
+recorded before pacing learns it from the next recording of the same flow.
 
 ## Anchors: the postcondition
 
@@ -199,10 +191,14 @@ when:
    measured from the first screen the replay saw on its end route. An
    outcome already on screen proves nothing.
 
-Anchors are compared by shape (`anchorShape`): ids, dates, times, and
-durations read as `#`, so `Saved at 10:42` is the effect `Saved at 10:45`
-repeats. Shapes are weaker than exact text, so volatile anchors are recorded
-only when nothing stable changed (alerts always). Counts that name what they
+An anchor's name and text are compared by shape (`anchorShape`): ids,
+dates, times, and durations read as `#`, so `Saved at 10:42` is the effect
+`Saved at 10:45` repeats. A field's value is compared exactly: a picked date
+is the effect. Shapes are weaker than exact text, so volatile anchors are
+recorded only when nothing stable changed (alerts always). Labels that read
+alike (a status, and a wrapper named after it, which one iOS backend reports
+and another omits) are one anchor (`onePerLabel`), a leaf with a test id
+preferred. Counts that name what they
 count (`3 records imported`) are the step's result when the step made them
 appear on its own screen, and data otherwise.
 
@@ -285,7 +281,7 @@ table when a rule here changes, and run it on `main` and the branch.
 | testid | `Save` relabeled `Save changes`, same test id | replays, `test-id`, heals |
 | likes | `Like (0 likes)` to `Like (3 likes)`, no test id | hands off (no shape rung) |
 | settings | link becomes a button | replays, `role-family`, heals |
-| clock | none; the effect reads the time | replays (failed every run before anchor shapes) |
+| clock | none; the effect reads the time | replays |
 | async | none; the control renders 1.2 s after load | replays after relocation polling |
 | shuffle | none; rows in random order | replays on the named row |
 | ago | `posted 2m ago` to `posted 5m ago`, no test id | hands off (no shape rung) |
@@ -293,74 +289,7 @@ table when a rule here changes, and run it on `main` and the branch.
 | removed | the control is gone | `target-not-found` |
 | ab | label picked per load under a stable test id | replays, `test-id` |
 
-Last run 2026-10-04, before the shape rung was dropped (likes and ago then
-replayed through it): every other row as expected on this branch; `main`
-handed off or missed on testid, settings, clock, and on ab when the label
-flipped.
-
-## On an iOS simulator
-
-Run 2026-10-04 on the mobile benchmark (iPhone 17 Pro, iOS 26.5), three
-scenarios recorded with a real model, then replayed read-only:
-
-- Before the fixes below, Modal Flow passed its end check 1 time in 3. One
-  cause per failure: agent-device switches between its XCTest and private-ax
-  backends from one capture to the next, and they report one screen
-  differently (a wrapper `other "Flow completed"` around the status in one,
-  absent in the other; a navigation bar labelled with the back button's text
-  in one and with the title in the other), and a capture taken while an
-  alert dismisses fails the runner's clip check.
-- Fixes: one anchor per label (`onePerLabel`), the navigation bar's
-  identifier as the screen title (`packages/mobile/src/nodes.ts`), and a
-  delayed retry of a capture the runner rejects mid-animation
-  (`packages/mobile/src/surface.ts`). After them: 12 of 12 replays with no
-  model call, Login 18.2 to 18.4 s, Modal Flow 6.1 to 6.2 s, Bottom Tabs 3.4 s.
-- Drift, recorded targets edited to an older app: a relabeled and a
-  re-placeholdered field with test ids replayed through the test id rung, a
-  control whose role changed through the test id alone, an alert button
-  recorded as a link through the role family; a renamed system sheet button
-  with no test id handed off.
-
-## Audit, 2026-10-03
-
-A full read of the subsystem, with an independent bug hunt that proved each
-finding with a probe against the real modules.
-
-PR #637 (`oskar/cache-relocate-label-drift`) took the first run at label
-drift. This change keeps its twins rule (its label fold was tried and
-dropped, see Relocation), and its drift
-probe (a scratch server whose pages differ between a recording run and a
-replay run) is how the ladder was checked end to end. It leaves out #637's
-element id rung: the same probe showed framework counter ids (`mat-input-2`)
-typing into the wrong field, and telling authored ids from counters needs a
-naming heuristic.
-
-Fixed in the change that added this file:
-
-- **No graceful degradation.** Relocation required every recorded field, so
-  a relabeled button with a stable test id handed off to the model on every
-  run, and drift was repaired only after a failed relocation. Now the ladder
-  above, healing, and the `relocated` count.
-- **A moved test id was forgiven.** The re-minted test id tier matched a
-  node by its other fields even when another node still carried the recorded
-  test id. Now `target-ambiguous`.
-- **Volatile-only anchors failed their own replay.** A step whose only effect
-  was `Saved at 10:42` recorded that text and compared it exactly, so every
-  replay ended in `end-mismatch` and rewrote the entry. Now every anchor is
-  compared by shape.
-- **`unique()` param keys with `|` or `}}`** wrote a placeholder that could not
-  be parsed back: `invalid-entry` forever, `REPLAY_STALE` under strict.
-  Pointers are now escaped; old placeholders still read.
-- **Device titles with record ids** (`Order 48213`) never matched across
-  runs. Their words now follow the path segment rules.
-- **Hash-bang routes** (`#!/companies`, `#!/settings`) all compared as one
-  screen. Now routed by the fragment.
-- **A soft assertion failure** did not stop later checks from confirming
-  entries staged before it. Settlement now stops at the first soft failure.
-- **A replay cut off by a hard stop** (step timeout) was not marked consumed,
-  so its entry survived the failure. Now evicted like any failed replay.
-
-Open, by decision or for later:
+## Known limits
 
 - `--repeat-each` repeats share one key; concurrent repeats can evict an
   entry another repeat just confirmed. The CLI help already suggests

@@ -57,8 +57,6 @@ export type StagedTrace = {
   | {
       readonly kind: 'keep';
       readonly recordedFor: TraceProvenance;
-      /** Indices of the actions the replay saw change nothing (`RecordedAction.quiet`), for an entry recorded before pacing was. */
-      readonly quiet?: readonly number[];
     }
 );
 
@@ -143,31 +141,15 @@ function flowOf(trace: ActionTrace): string {
 }
 
 /**
- * Completes a kept entry with what it was recorded without, leaving every
- * other entry untouched: the step's full provenance, for one recorded before
- * the occurrence fields were (its replay proved which step it belongs to, and
- * `cache.strict` matches only entries that say so exactly, `rekeyed.ts`), and
- * the actions its replay saw settle quietly, for one recorded before pacing
- * was. The replay waited every action's full change wait, so what it saw is
- * what a recording would have.
+ * Writes the step's full provenance into a kept entry recorded before the
+ * occurrence fields were, leaving every other entry untouched. Its replay
+ * proved which step it belongs to, and `cache.strict` matches only entries
+ * that say so exactly (`rekeyed.ts`).
  */
-async function completeEntry(
-  store: CacheStore,
-  keyHash: string,
-  recordedFor: TraceProvenance,
-  quiet: readonly number[] | undefined,
-): Promise<void> {
+async function completeProvenance(store: CacheStore, keyHash: string, recordedFor: TraceProvenance): Promise<void> {
   const existing = await store.read(keyHash);
-  if (existing.status !== 'hit') return;
-  const payload = existing.entry.payload;
-  const provenance = payload.recordedFor?.callIndex === undefined;
-  const pacing = quiet !== undefined && quiet.length > 0 && !isPaced(payload) && quiet.every((index) => index < payload.actions.length);
-  if (!provenance && !pacing) return;
-  await store.write(keyHash, {
-    ...payload,
-    ...(provenance ? { recordedFor } : {}),
-    ...(pacing ? { actions: payload.actions.map((action, index) => (quiet.includes(index) ? { ...action, quiet: true as const } : action)) } : {}),
-  });
+  if (existing.status !== 'hit' || existing.entry.payload.recordedFor?.callIndex !== undefined) return;
+  await store.write(keyHash, { ...existing.entry.payload, recordedFor });
 }
 
 /** How an attempt ended, as the settlement of its staged entries reads it. */
@@ -212,7 +194,7 @@ export async function flushStagedTraces(context: AgentCacheContext, settlement: 
         continue;
       }
       if (entry.kind === 'keep') {
-        await completeEntry(context.store, entry.keyHash, entry.recordedFor, entry.quiet);
+        await completeProvenance(context.store, entry.keyHash, entry.recordedFor);
         continue;
       }
       if (entry.replaces !== true && (await holdsSameFlow(context.store, entry.keyHash, entry.trace))) continue;

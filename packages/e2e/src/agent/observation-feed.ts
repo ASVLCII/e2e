@@ -8,8 +8,9 @@
  * the engine; the dispatcher and the pixel tier ask the feed.
  */
 
+import type { SettleNote } from '../cache/recorder.ts';
 import type { SemanticNode } from '../engine/surface.ts';
-import { relocateDescriptor } from '../cache/relocate.ts';
+import { relocateExact } from '../cache/relocate.ts';
 import { TestError } from '../internal/errors.ts';
 import { isEditable } from '../internal/roles.ts';
 import type { StepAgentDetails, VisionDegradation } from '../run/steps.ts';
@@ -72,15 +73,6 @@ export interface ObservationFeedOptions {
   readonly maxInputTokens: number;
 }
 
-/**
- * What arming a change wait measured: `measured` when it is the only wait
- * pending, so the next settled look answers for this action alone;
- * `stacked` when an earlier action's wait was still pending, so the look
- * will answer for both and says nothing about either; `none` when there was
- * no comparable shape to wait against.
- */
-export type ArmedChange = 'measured' | 'stacked' | 'none';
-
 export class ObservationFeed {
   private newest: AgentObservation | undefined;
   /** A cache probe may supply the executor's first look, once, before any action. */
@@ -99,14 +91,7 @@ export class ObservationFeed {
    * a tap on a link reads the old page, stable and wrong, and the model
    * repairs what already worked.
    */
-  private pendingChange: PendingChange | undefined;
-  /**
-   * Told, once a settled look consumed a pending change wait, whether the
-   * screen left the shape the action was resolved against. The trace
-   * recorder keeps the answer, so a replay paces each action the way its
-   * recording saw it settle (`RecordedAction.quiet`).
-   */
-  onChangeSettled: ((changed: boolean) => void) | undefined;
+  private pendingChange: (PendingChange & { readonly onSettled: SettleNote | undefined }) | undefined;
   /** The last pixel decision recorded on this step: `allowed`, or the withheld reason. */
   private pixelsDecided: string | undefined;
   /** Why requested pixels did not become model input, when they did not. */
@@ -203,13 +188,14 @@ export class ObservationFeed {
    * Gives the screen `waitMs` from this completed action to leave the newest
    * observation's shape. Captures and time before the next observation count
    * toward the window. Nothing is armed without a comparable shape.
+   * `onSettled` is told whether the screen left that shape (the trace
+   * recorder's note, `RecordedAction.quiet`), unless another action's wait
+   * was still pending: the look then answers for both, and neither note.
    */
-  armChange(waitMs: number): ArmedChange {
+  armChange(waitMs: number, onSettled?: SettleNote): void {
     const stacked = this.pendingChange !== undefined;
     const shape = this.newest === undefined ? undefined : changeShape(this.newest);
-    this.pendingChange = shape === undefined ? undefined : { shape, deadlineMs: Date.now() + waitMs };
-    if (shape === undefined) return 'none';
-    return stacked ? 'stacked' : 'measured';
+    this.pendingChange = shape === undefined ? undefined : { shape, deadlineMs: Date.now() + waitMs, onSettled: stacked ? undefined : onSettled };
   }
 
   /**
@@ -274,7 +260,7 @@ export class ObservationFeed {
     );
     this.publish(observation);
     if (observation.kind === 'pixels') return undefined;
-    const relocated = relocateDescriptor(descriptor, observation.nodes);
+    const relocated = relocateExact(descriptor, observation.nodes);
     if (relocated.kind !== 'found') return undefined;
     const node = observation.nodes.get(relocated.id);
     return node === undefined ? undefined : { node, observation };
@@ -356,9 +342,10 @@ export class ObservationFeed {
         },
       },
     );
-    if (changedFrom === undefined) return settled;
+    const note = changedFrom?.onSettled;
+    if (note === undefined) return settled;
     return settled.then((observation) => {
-      this.onChangeSettled?.(left);
+      note(left);
       return observation;
     });
   }
@@ -472,7 +459,7 @@ export class ObservationFeed {
     if (earlier === undefined) return undefined;
     const descriptor = describeTarget(earlier);
     if (descriptor === undefined) return undefined;
-    const relocated = relocateDescriptor(descriptor, latest.nodes);
+    const relocated = relocateExact(descriptor, latest.nodes);
     return relocated.kind === 'found' ? latest.nodes.get(relocated.id) : undefined;
   }
 

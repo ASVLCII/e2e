@@ -7,7 +7,7 @@
  * replace it behind the same seam; the fail-closed contract (one match or
  * hand off) is not tunable.
  *
- * A replay walks a ladder (`relocateRecorded`): the exact match first, then
+ * A replay walks a ladder (`relocateWithFallbacks`): the exact match first, then
  * fallbacks that each keep the most stable evidence the recording has left,
  * the test id before the accessible name. Every rung is still exactly one
  * match, a recorded container still holds, and two kinds of evidence that
@@ -46,7 +46,7 @@ export type RelocationFailure = 'target-not-found' | 'target-ambiguous';
 
 /**
  * Which fallback rung re-found a recorded target when the exact match found
- * nothing (`relocateRecorded`): `test-id`, its test id while its label,
+ * nothing (`relocateWithFallbacks`): `test-id`, its test id while its label,
  * text, or role changed; `accessible`, its role and accessible name while
  * its test id, placeholder, or text changed; `role-family`, its accessible
  * name on a control of the same kind under another role (a link that became
@@ -204,9 +204,9 @@ function describeNodes(nodes: ReadonlyMap<string, RedactedNode>): readonly Descr
  *
  * This is the exact match, what a live step uses to re-find a node it saw a
  * moment ago. A replay of a recording made on another day walks the
- * fallbacks too (`relocateRecorded`).
+ * fallbacks too (`relocateWithFallbacks`).
  */
-export function relocateDescriptor(
+export function relocateExact(
   descriptor: TraceTargetDescriptor,
   nodes: ReadonlyMap<string, RedactedNode>,
 ): RelocationResult {
@@ -224,7 +224,7 @@ export function relocateDescriptor(
 
 /**
  * Relocates a recorded target, falling back rung by rung when the exact
- * match (`relocateDescriptor`) finds nothing. Each rung keeps less of the
+ * match (`relocateExact`) finds nothing. Each rung keeps less of the
  * recording, most stable evidence first: the test id with the role, the test
  * id alone, the role and accessible name, then the name on a control of the
  * same kind (`fallbackRungs`). The first rung that settles on one node, or
@@ -236,11 +236,11 @@ export function relocateDescriptor(
  * When the test id names one node and the accessible name another, the
  * recording is evidence for both and the replay hands off.
  */
-export function relocateRecorded(
+export function relocateWithFallbacks(
   descriptor: TraceTargetDescriptor,
   nodes: ReadonlyMap<string, RedactedNode>,
 ): RelocationResult {
-  const exact = relocateDescriptor(descriptor, nodes);
+  const exact = relocateExact(descriptor, nodes);
   if (exact.kind === 'found' || exact.failure === 'target-ambiguous') return exact;
   const candidates = withinContainer(descriptor, nodes);
   const picks = new Map<RungEvidence, string>();
@@ -314,7 +314,7 @@ const ROLE_FAMILIES: readonly ReadonlySet<string>[] = [
  * leads: with the role, then alone. The accessible name follows: the role
  * and name alone (a test id, placeholder, or text that changed), then the
  * name across a role family. Each rung is evidence of one kind; the first match of each kind is compared with the
- * other's (`relocateRecorded`). None for an anonymous descriptor, whose
+ * other's (`relocateWithFallbacks`). None for an anonymous descriptor, whose
  * place among its twins is all it has.
  */
 function fallbackRungs(descriptor: TraceTargetDescriptor): readonly FallbackRung[] {
