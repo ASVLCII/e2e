@@ -64,9 +64,11 @@ target's place among its twins at record time (`describePosition`). Each
 splits what was recorded into identity, which node it is, and content, what
 it must read or be:
 
-- The candidates are the nodes in the recorded container (`within`) that
-  carry the content: a tapped toggle's state for a target; the value,
-  states, text, and sometimes the name for an anchor (see Anchors).
+- The candidates are the nodes that carry the content: a tapped toggle's
+  state for a target; the value, states, text, and sometimes the name for an
+  anchor (see Anchors). A target is also held to its recorded container
+  (`within`); anchors record none, so every node of the screen is a
+  candidate.
 - The identity walks the ladder below over those candidates.
 - Nodes still carrying the recorded test id veto a pick made without it,
   whatever they read, so the same reading elsewhere is never taken for them.

@@ -520,9 +520,20 @@ export async function verifyEndState(
  * out.
  */
 export async function awaitStartRoute(host: ReplayHost, startPath: string, initial: SemanticScreen): Promise<boolean> {
+  // The wait leaves the step clock its hand-off reserve, as the end wait
+  // does: a start that never arrives is a miss the executor still has to run.
+  const reserved: ReplayHost = {
+    get traceEligible() {
+      return host.traceEligible;
+    },
+    observe: (mode) => host.observe(mode),
+    actions: host.actions,
+    signal: host.signal,
+    remainingMs: () => host.remainingMs() - END_WAIT_RESERVE_MS,
+  };
   try {
     const arrived = await pollSettled(
-      host,
+      reserved,
       (screen) => (screen.path !== undefined && sameRoute(startPath, screen.path) ? true : undefined),
       { kind: 'in-hand', screen: initial },
     );
@@ -535,7 +546,7 @@ export async function awaitStartRoute(host: ReplayHost, startPath: string, initi
 
 /** Poll cadence while a replay waits for the recorded end state beyond the settling backoff. */
 const END_WAIT_POLL_MS = 1_000;
-/** Step clock kept back from that wait, so a hand-off still has room to act. */
+/** Step clock kept back from the end and start waits, so a hand-off still has room to act. */
 const END_WAIT_RESERVE_MS = 20_000;
 
 /**
