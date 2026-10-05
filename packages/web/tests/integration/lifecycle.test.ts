@@ -97,6 +97,59 @@ async function lastFrame(
   }, [...webm]);
 }
 
+/**
+ * Watches the frames the engine's screencast delivers, so a test can hold a
+ * video segment open until it received a painted one: Playwright writes a
+ * white frame for a segment stopped before its first frame arrived.
+ */
+function watchPaint() {
+  const painted = new WeakSet<Page>();
+  const restores: (() => void)[] = [];
+  const watchPage = (page: Page): void => {
+    const start = page.screencast.start.bind(page.screencast);
+    const spy = vi.spyOn(page.screencast, 'start').mockImplementation((options) => start({
+      ...options,
+      onFrame: async (frame) => {
+        const hasPaint = await page.evaluate(async (bytes) => {
+          const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }));
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const context = canvas.getContext('2d')!;
+          context.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+          for (let index = 0; index < data.length; index += 4) {
+            if (data[index]! < 200 || data[index + 1]! < 200 || data[index + 2]! < 200) return true;
+          }
+          return false;
+        }, [...frame.data]).catch(() => false);
+        if (hasPaint) painted.add(page);
+        await options?.onFrame?.(frame);
+      },
+    }));
+    restores.push(() => spy.mockRestore());
+  };
+  return {
+    /** Observes the context's pages, including those it opens later, before their recording starts. */
+    watchContext(context: BrowserContext): void {
+      context.on('page', watchPage);
+      for (const page of context.pages()) watchPage(page);
+    },
+    /** Waits for a painted frame delivered after this call, so a page that painted for an earlier segment cannot pass for this one. */
+    async settle(page: Page): Promise<void> {
+      painted.delete(page);
+      // A static page may not repaint after navigation overtakes its first screencast frame.
+      await page.screenshot();
+      await expect.poll(() => painted.has(page), { timeout: 5_000, message: 'the recorder received a painted frame' }).toBe(true);
+    },
+    /** Removes every observer, so none reaches the next test. */
+    restore(): void {
+      while (restores.length > 0) restores.pop()!();
+    },
+  };
+}
+
 async function withAttempt(
   engine: EngineHandle,
   app: FixtureApp,
@@ -934,55 +987,18 @@ describe('web engine lifecycle', () => {
     const engine = web();
     const videoDir = mkdtempSync(path.join(tmpdir(), 'e2e-video-'));
     const nodesOf = (snapshot: { root: SemanticNode }) => [...walk(snapshot.root)];
-    const painted = new WeakSet<Page>();
+    const paint = watchPaint();
     const restores: (() => void)[] = [];
-    /** Observe the same delivered frames the recorder writes, including on replacement pages. */
-    const watchPage = (page: Page): void => {
-      const start = page.screencast.start.bind(page.screencast);
-      const spy = vi.spyOn(page.screencast, 'start').mockImplementation((options) => start({
-        ...options,
-        onFrame: async (frame) => {
-          const hasPaint = await page.evaluate(async (bytes) => {
-            const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }));
-            const canvas = document.createElement('canvas');
-            canvas.width = bitmap.width;
-            canvas.height = bitmap.height;
-            const context = canvas.getContext('2d')!;
-            context.drawImage(bitmap, 0, 0);
-            bitmap.close();
-            const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-            for (let index = 0; index < data.length; index += 4) {
-              if (data[index]! < 200 || data[index + 1]! < 200 || data[index + 2]! < 200) return true;
-            }
-            return false;
-          }, [...frame.data]).catch(() => false);
-          if (hasPaint) painted.add(page);
-          await options?.onFrame?.(frame);
-        },
-      }));
-      restores.push(() => spy.mockRestore());
-    };
-    /** Install the frame observer before a newly created page starts its recording. */
-    const watchContext = (context: BrowserContext): void => {
-      context.on('page', watchPage);
-      for (const page of context.pages()) watchPage(page);
-    };
-    const settle = async (): Promise<void> => {
-      const page = surfaceOf(engine)!.page();
-      // A static page may not repaint after navigation overtakes its first screencast frame.
-      await page.screenshot();
-      await expect.poll(() => painted.has(page), { timeout: 5_000, message: 'the recorder received a painted frame' }).toBe(true);
-    };
     try {
       await withAttempt(engine, app, videoDir, 'v1', async () => {
         await engine.session!.open!(`${app.url}/form`, operation('v1'));
         const context = surfaceOf(engine)!.context();
-        watchContext(context);
+        paint.watchContext(context);
         const browser = context.browser()!;
         const newContext = browser.newContext.bind(browser);
         const contextSpy = vi.spyOn(browser, 'newContext').mockImplementation(async (options) => {
           const next = await newContext(options);
-          watchContext(next);
+          paint.watchContext(next);
           return next;
         });
         restores.push(() => contextSpy.mockRestore());
@@ -997,19 +1013,19 @@ describe('web engine lifecycle', () => {
         const textbox = observed.find((node) => node.role === 'textbox' && node.name === 'First');
         await engine.perform!(textbox!.ref, { kind: 'fill', value: 'recorded', sensitive: false }, operation('v1'));
         await engine.artifacts!.screenshot('shot', operation('v1'));
-        await settle();
+        await paint.settle(surfaceOf(engine)!.page());
         // A restart closes the page and opens another, blank until the harness
         // reopens the app: the recording continues in a second segment.
         await engine.session!.restart!(operation('v1'));
         expect(surfaceOf(engine)!.page()).not.toBe(page);
         expect(surfaceOf(engine)!.page().url()).toBe('about:blank');
         await engine.session!.open!(`${app.url}/form`, operation('v1'));
-        await settle();
+        await paint.settle(surfaceOf(engine)!.page());
         // A state reset recreates the context; the recording continues in a third.
         await engine.session!.reset!(operation('v1'));
         expect(surfaceOf(engine)!.page().url()).toBe('about:blank');
         await engine.session!.open!(`${app.url}/`, operation('v1'));
-        await settle();
+        await paint.settle(surfaceOf(engine)!.page());
         const segments = videoFiles(await engine.artifacts!.stopVideo!(operation('v1')));
         // The restart and the state reset each closed a trace segment before the final archive.
         expect(await engine.artifacts!.stopTrace!(operation('v1'))).toEqual([
@@ -1041,6 +1057,7 @@ describe('web engine lifecycle', () => {
       });
     } finally {
       for (const restore of restores) restore();
+      paint.restore();
       rmSync(videoDir, { recursive: true, force: true });
     }
   });
@@ -1048,18 +1065,20 @@ describe('web engine lifecycle', () => {
   it('splits a running trace around a video started mid-attempt, so every recording fills the viewport', async () => {
     const engine = web();
     const videoDir = mkdtempSync(path.join(tmpdir(), 'e2e-video-'));
+    const paint = watchPaint();
     try {
       await withAttempt(engine, app, videoDir, 'v3', async () => {
         // A host that records on demand: the trace already sized the screencast when the video starts.
         await engine.artifacts!.startTrace!(operation('v3'));
         await engine.session!.open!(`${app.url}/`, operation('v3'));
+        paint.watchContext(surfaceOf(engine)!.context());
         const viewer = surfaceOf(engine)!.page();
         const viewport = viewer.viewportSize()!;
         const segments: VideoFile[] = [];
         for (const url of [`${app.url}/form`, `${app.url}/`]) {
           await engine.artifacts!.startVideo!(operation('v3'));
           await engine.session!.open!(url, operation('v3'));
-          await viewer.screenshot();
+          await paint.settle(viewer);
           segments.push(...videoFiles(await engine.artifacts!.stopVideo!(operation('v3'))));
         }
         expect(segments.map((segment) => segment.path)).toEqual(['video/video.webm', 'video/video-part2.webm']);
@@ -1077,6 +1096,7 @@ describe('web engine lifecycle', () => {
         ]);
       });
     } finally {
+      paint.restore();
       rmSync(videoDir, { recursive: true, force: true });
     }
   });
