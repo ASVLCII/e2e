@@ -341,10 +341,9 @@ export async function replayTrace(
       stopped = await runPlanned(host, planned, look, run);
     } catch (cause) {
       if (!retriesAfter(cause, dispatched, repeated)) return failed(cause);
-      // One more try for an action the engine says never reached the app: a
-      // tap that landed while a list re-rendered or a sheet slid in, which
-      // the live loop retries too. It waits for the screen to hold still and
-      // finds the target again first.
+      // One more try for an action the engine says never reached the app,
+      // such as a tap on a row a list re-rendered. It waits for the screen to
+      // hold still and finds the target again first.
       try {
         stopped = await runPlanned(host, planned, HELD_STILL, run);
       } catch (again) {
@@ -458,15 +457,16 @@ async function runPlanned(
  * Whether a failed action gets one more try: only one whose grammar call ran
  * and threw (a look or a relocation that failed before it is no action), on
  * its first try, before any repeat of a folded scroll moved the screen, and
- * not for a failure a second try cannot change (`NEVER_RETRIED`) or one that
- * may have reached the app.
+ * only when the engine proved the input never reached the app
+ * (`NEVER_REACHED_APP`). An engine fault or a timeout proves nothing: the tap
+ * may have landed, so the executor gets the step instead.
  */
 function retriesAfter(cause: unknown, dispatched: boolean, repeated: number): boolean {
   return (
     dispatched &&
     repeated === 0 &&
     !isUncertainCommit(cause) &&
-    !hasCause(cause, ({ code }) => typeof code === 'string' && NEVER_RETRIED.has(code))
+    hasCause(cause, ({ code }) => typeof code === 'string' && NEVER_REACHED_APP.has(code))
   );
 }
 
@@ -761,8 +761,8 @@ async function pollSettled<T>(
   }
 }
 
-/** Failures a second try cannot change: the policy refused the action, or its arguments are wrong. */
-const NEVER_RETRIED: ReadonlySet<string> = new Set(['POLICY_DENIED', 'INVALID_ARGUMENT', 'UNSUPPORTED_CAPABILITY']);
+/** Engine codes raised before any input is sent: the node went stale, its frame is gone, or it was not actionable. */
+const NEVER_REACHED_APP: ReadonlySet<string> = new Set(['NODE_STALE', 'FRAME_NOT_FOUND', 'NOT_ACTIONABLE']);
 
 /** True when any error in the cause chain reports an unknown commit state. */
 function isUncertainCommit(cause: unknown): boolean {

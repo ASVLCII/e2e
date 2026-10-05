@@ -481,7 +481,7 @@ describe('replayTrace', () => {
       onAction: (name) => {
         if (name === 'tap' && failures > 0) {
           failures -= 1;
-          throw new AgentError('ACTION_FAILED', 'the list re-rendered under the tap');
+          throw new AgentError('ACTION_FAILED', 'the list re-rendered under the tap', { cause: { code: 'NODE_STALE' } });
         }
       },
     });
@@ -497,7 +497,7 @@ describe('replayTrace', () => {
       onAction: (name) => {
         if (name === 'scroll' && failures > 0) {
           failures -= 1;
-          throw new AgentError('ACTION_FAILED', 'the page was still loading');
+          throw new AgentError('ACTION_FAILED', 'the page was still loading', { cause: { code: 'NOT_ACTIONABLE' } });
         }
       },
     });
@@ -506,7 +506,14 @@ describe('replayTrace', () => {
     expect(host.calls).toEqual(['scroll', 'scroll', 'scroll']);
   });
 
-  it('never tries again an action the policy refused or that may have reached the app', async () => {
+  it('never tries again an action without proof it never reached the app', async () => {
+    const fault = makeHost({
+      onAction: (name) => {
+        if (name === 'tap') throw new AgentError('ACTION_FAILED', 'runner timed out', { cause: { code: 'ENGINE_FAILURE' } });
+      },
+    });
+    expect(await replayTrace(fault, trace([tapUpgrade]))).toMatchObject({ completed: false, stopReason: 'action-failed' });
+    expect(fault.calls).toEqual(['tap']);
     const denied = makeHost({
       onAction: (name) => {
         if (name === 'tap') throw new AgentError('POLICY_DENIED', 'not allowed');

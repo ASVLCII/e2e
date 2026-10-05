@@ -136,12 +136,12 @@ visible.
 
 ## A replayed action that never reached the app
 
-An action the engine reports as failed, and not as possibly committed
-(`ACTION_MAY_HAVE_COMMITTED`, which hands off as `action-uncertain`), gets one
-more try: the replay waits for the screen to hold still, finds the target
-again, and repeats it. A tap that landed while a debounced list re-rendered
-or a sheet slid in is what the live agent retries too. A policy refusal, a
-wrong argument, or a capability the engine lacks never repeats.
+An action the engine refused before sending any input (`NODE_STALE`,
+`FRAME_NOT_FOUND`, `NOT_ACTIONABLE`) gets one more try: the replay waits for
+the screen to hold still, finds the target again, and repeats it. A tap on a
+row a debounced list re-rendered is the usual case. Any other failure, an
+engine fault or a timeout included, may have reached the app and hands off to
+the executor.
 
 ## Pacing
 

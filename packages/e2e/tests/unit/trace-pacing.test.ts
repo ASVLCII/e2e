@@ -153,17 +153,22 @@ describe('replayTrace on a call that fails', () => {
     summary: 'uploaded',
   });
 
-  it('tries an engine failure once more, at the same pace both times', async () => {
-    const host = failing(new EngineError('ENGINE_FAILURE', 'the runner was busy', { retryable: false }));
+  it('tries a stale node once more, at the same pace both times', async () => {
+    const host = failing(new EngineError('NODE_STALE', 'the list re-rendered', { retryable: true }));
     expect(await replayTrace(host, upload())).toMatchObject({ completed: false, stopReason: 'action-failed' });
     expect(host.calls).toBe(2);
     expect(host.waits).toEqual([QUIET_CHANGE_WAIT_MS, QUIET_CHANGE_WAIT_MS]);
   });
 
-  it('never tries again a refused argument, such as an upload path outside the project', async () => {
-    const host = failing(new TestError('INVALID_ARGUMENT', 'the path is outside the project'));
-    expect(await replayTrace(host, upload())).toMatchObject({ completed: false, stopReason: 'action-failed' });
-    expect(host.calls).toBe(1);
+  it('never tries again an engine fault that may have landed, or a refused argument', async () => {
+    for (const cause of [
+      new EngineError('ENGINE_FAILURE', 'the runner timed out', { retryable: false }),
+      new TestError('INVALID_ARGUMENT', 'the path is outside the project'),
+    ]) {
+      const host = failing(cause);
+      expect(await replayTrace(host, upload())).toMatchObject({ completed: false, stopReason: 'action-failed' });
+      expect(host.calls).toBe(1);
+    }
   });
 });
 
