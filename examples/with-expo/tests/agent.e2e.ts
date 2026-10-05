@@ -1,5 +1,4 @@
-import { test } from '@e2e-dev/mobile';
-import { expect } from 'e2e';
+import { expect, test } from 'e2e';
 
 // Agent steps call the model in e2e.config.ts. Without a key these tests are skipped.
 const skip = process.env.AI_GATEWAY_API_KEY ? false : 'set AI_GATEWAY_API_KEY to run agent tests';

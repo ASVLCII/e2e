@@ -1,5 +1,6 @@
 import type { E2EConfig } from 'e2e';
 import { mobile } from '@e2e-dev/mobile';
+import { web } from '@e2e-dev/web';
 import { gateway } from 'ai';
 
 // The bundle id and package name from app.json. Build and install the app
@@ -16,10 +17,18 @@ export default {
       system: 'You are a thorough QA agent. Verify every outcome.',
     },
   },
-  // Pick one with --target: `npm run test:e2e:ios` or `npm run test:e2e:android`.
+  // Pick one with --target or the test:e2e:ios, test:e2e:android, and test:e2e:web scripts.
   targets: [
     { name: 'ios', engine: mobile({ platform: 'ios' }), app },
     { name: 'android', engine: mobile({ platform: 'android' }), app },
+    {
+      name: 'web',
+      engine: web(),
+      app: {
+        url: 'http://localhost:8081',
+        command: { executable: 'npm', args: ['run', 'web'], reuseExisting: true },
+      },
+    },
   ],
   workers: 1,
 } satisfies E2EConfig;

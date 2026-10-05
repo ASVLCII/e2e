@@ -1,5 +1,4 @@
-import { test } from '@e2e-dev/mobile';
-import { expect } from 'e2e';
+import { expect, test } from 'e2e';
 
 test('shows the greeting form', async ({ app, screen }) => {
   await app.open();

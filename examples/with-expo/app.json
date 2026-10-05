@@ -19,6 +19,9 @@
       },
       "predictiveBackGestureEnabled": false
     },
-    "plugins": ["expo-font"]
+    "plugins": [
+      "expo-font",
+      ["expo-build-properties", { "ios": { "enableSceneSupport": true } }]
+    ]
   }
 }
