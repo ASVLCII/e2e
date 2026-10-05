@@ -148,7 +148,7 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
     });
     transport = new StdioClientTransport({
       command: process.execPath,
-      args: [CLI, 'mcp', '--headless'],
+      args: [CLI, 'mcp'],
       cwd: project.dir,
       env: { ...(process.env as Record<string, string>), APP_URL: app.url, CI: '' },
       stderr: 'pipe',
@@ -173,7 +173,7 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
     expect(callTool.description).toContain('call {tool: "tap", args: {target: "n42"}, session: "<id>"}');
     expect(callTool.inputSchema).toMatchObject({ type: 'object', required: ['tool'] });
     expect(tools.find((tool) => tool.name === 'tools')?.annotations).toMatchObject({ readOnlyHint: true });
-    expect(tools.find((tool) => tool.name === 'open_session')?.inputSchema).toMatchObject({ properties: { target: {}, config: {} } });
+    expect(tools.find((tool) => tool.name === 'open_session')?.inputSchema).toMatchObject({ properties: { target: {}, config: {}, headed: { type: 'boolean' } } });
     expect(client.getInstructions()).toContain('call {tool, args} runs any catalog tool');
     expect(client.getInstructions()).toContain('Several sessions can be open at once');
 
@@ -479,6 +479,27 @@ describe('e2e mcp', { timeout: 120_000 }, () => {
     const closed = await invoke('close_session');
     expect(closed.isError, closed.text).toBe(false);
     expect(closed.text).not.toContain('Cleanup:');
+  });
+
+  it('opens sessions headed with --headed, and headless with the retired --headless', async () => {
+    for (const [flag, mode] of [['--headed', 'headed'], ['--headless', 'headless']] as const) {
+      const other = new Client({ name: 'e2e-mcp-flag-test', version: '0.0.0' });
+      await other.connect(
+        new StdioClientTransport({
+          command: process.execPath,
+          args: [CLI, 'mcp', flag, '--config', 'custom.config.ts', '--target', 'kiosk'],
+          cwd: project.dir,
+          env: { ...(process.env as Record<string, string>), APP_URL: app.url, CI: '' },
+          stderr: 'ignore',
+        }),
+      );
+      try {
+        const opened = (await other.callTool({ name: 'open_session', arguments: {} })) as { content: { text?: string }[] };
+        expect(opened.content[0]?.text, flag).toContain(`), ${mode};`);
+      } finally {
+        await other.close();
+      }
+    }
   });
 
   it('kept stdout for the protocol: the config\'s console.log landed on stderr', () => {
