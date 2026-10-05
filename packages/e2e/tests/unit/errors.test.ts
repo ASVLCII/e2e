@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   classifyError,
   combineExitCodes,
@@ -8,6 +8,7 @@ import {
   InfrastructureError,
   messageWithCauses,
   sanitizeText,
+  setErrorRedactor,
   withHint,
   serializeError,
   TestError,
@@ -225,5 +226,29 @@ describe('error details', () => {
     const serialized = serializeError(new TestError('ASSERTION_FAILED', 'nope'), { projectRoot });
     expect(serialized.source?.file).toBe('tests/unit/errors.test.ts');
     expect(serializeError(new TestError('ASSERTION_FAILED', 'nope')).source).toBeUndefined();
+  });
+});
+
+describe('serializeError default redactor', () => {
+  afterEach(() => {
+    setErrorRedactor(undefined);
+  });
+
+  it('uses the installed process redactor when no per-call redactor is given', () => {
+    setErrorRedactor((text) => text.replaceAll('hunter2', '<secret:password>'));
+    const serialized = serializeError(new TestError('ASSERTION_FAILED', 'expected hunter2'), { phase: 'body' });
+    expect(serialized.message).toBe('expected <secret:password>');
+  });
+
+  it('lets a per-call redactor win over the installed one', () => {
+    setErrorRedactor(() => 'installed');
+    const serialized = serializeError(new TestError('ASSERTION_FAILED', 'expected hunter2'), {
+      redact: (text) => text.replaceAll('hunter2', '<secret:per-call>'),
+    });
+    expect(serialized.message).toBe('expected <secret:per-call>');
+  });
+
+  it('is identity when no redactor is installed', () => {
+    expect(serializeError(new TestError('ASSERTION_FAILED', 'expected hunter2')).message).toBe('expected hunter2');
   });
 });

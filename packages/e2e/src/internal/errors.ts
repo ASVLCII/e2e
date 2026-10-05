@@ -1,6 +1,7 @@
 /** Runner-owned error taxonomy and exit-code mapping. */
 
 import { stripVTControlCharacters } from 'node:util';
+import { realmSlot } from './realm-slot.ts';
 import { sourceLocation, type SourceLocation } from './source.ts';
 import {
   ENGINE_ERROR_CODES,
@@ -12,6 +13,15 @@ import {
 /** Message of an arbitrary thrown value, for diagnostics that must not throw. */
 export function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** The redactor `serializeError` falls back to, on `globalThis` so a project's copy of e2e shares it. */
+const redactorSlot = realmSlot<(text: string) => string>('e2e.error-redactor.v1');
+
+/** Installs the process-wide redactor `serializeError` uses when none is given; `undefined` clears it. */
+export function setErrorRedactor(redact: ((text: string) => string) | undefined): void {
+  if (redact === undefined) redactorSlot.delete(globalThis);
+  else redactorSlot.set(globalThis, redact);
 }
 
 /**
@@ -373,12 +383,12 @@ export function serializeError(
     /**
      * Replaces secret values in the message, the details, and the stack: an
      * assertion that observed a secret on screen, or a message that quoted
-     * one, must not carry it into the report. Identity when omitted.
+     * one, must not carry it into the report. Defaults to `setErrorRedactor`'s.
      */
     redact?: ((text: string) => string) | undefined;
   } = {},
 ): SerializedError {
-  const redact = extras.redact ?? ((text: string): string => text);
+  const redact = extras.redact ?? redactorSlot.get(globalThis) ?? ((text: string): string => text);
   const serialized: SerializedError = {
     category: error.category,
     code: error.code,
