@@ -1,54 +1,33 @@
 # e2e with Vite
 
-A one-page Vite + React demo app with an e2e suite: three tests that use
-locators only, and two that hand a step to an agent and then check the result
-with a locator.
+A Vite + React greeting app with three locator tests and two agent tests.
 
-## Run it
+![Vite example app with the greeting "Hello, Ada!"](screenshot.png)
+
+## Run
+
+Use Node 22 or later. From this folder:
 
 ```bash
 npm install
 npm run test:e2e
 ```
 
-The runner starts `npm run dev` and waits for `http://localhost:5173` to
-answer. If the dev server is already running, it reuses it. The first run
-downloads Chromium.
+The runner starts the app at `http://localhost:5173`.
+It downloads Chromium on the first run if needed.
 
-The agent tests skip themselves without a model key. To run them, set a
-[Vercel AI Gateway](https://vercel.com/docs/ai-gateway) key, or swap the
-model in `e2e.config.ts` for [another provider](https://e2e.tester.army/docs/models):
+## Agent tests
 
-```bash
-AI_GATEWAY_API_KEY=... npm run test:e2e
-```
-
-## What e2e adds to a Vite app
-
-| File | What it does |
-| --- | --- |
-| `package.json` | `e2e`, `@e2e-dev/web`, and `playwright` as dev dependencies, plus `ai` and `zod` for the agent. The `test:e2e` script runs `e2e run`. |
-| `e2e.config.ts` | One web target. `app.url` is the dev server, and `app.command` starts it. `agents.default.model` is the model behind `agent.*` steps. |
-| `vite.config.ts` | Pins the dev server to port 5173 with `strictPort`, so the URL in the config is always right. |
-| `tests/greeting.e2e.ts` | Deterministic tests with `getByRole` and `getByLabel`. |
-| `tests/agent.e2e.ts` | `agent.act` and `agent.assert`, each followed by a locator check that does not depend on the model. |
-
-The app is `src/App.tsx`: a heading, a labelled name field, a Greet button,
-an `alert` when the name is empty, and a `status` with the greeting. The tests
-query those roles and labels, so the app needs no test ids.
-
-## Add e2e to your own Vite app
+Set a [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) key:
 
 ```bash
-npx e2e init
+AI_GATEWAY_API_KEY="your-key" npm run test:e2e
 ```
 
-Pick **Web**. Then copy the two things this example adds on top of what
-`init` writes: `app.command` in `e2e.config.ts`, and a fixed port in
-`vite.config.ts`.
+Without the key, the agent tests skip. Add `-- --no-cache` to use fresh
+model calls. Results are in `.e2e/report.json`.
 
-Docs: [Quickstart](https://e2e.tester.army/docs/quickstart),
-[Starting your app](https://e2e.tester.army/docs/starting-your-app),
-[Writing tests](https://e2e.tester.army/docs/writing-tests).
+See [e2e.config.ts](e2e.config.ts) and [tests/](tests/) for the setup.
+For your own app, follow the [Quickstart](https://e2e.tester.army/docs/quickstart).
 
 Last checked with e2e 0.15.2, @e2e-dev/web 0.11.1, Vite 8.3, and Node 22.

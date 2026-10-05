@@ -1,65 +1,33 @@
 # e2e with Next.js
 
-A one-page Next.js App Router demo app with an e2e suite: three tests that use
-locators only, and two that hand a step to an agent and then check the result
-with a locator.
+A Next.js App Router greeting app with three locator tests and two agent tests.
 
-## Run it
+![Next.js example app with the greeting "Hello, Ada!"](screenshot.png)
+
+## Run
+
+Use Node 22 or later. From this folder:
 
 ```bash
 npm install
 npm run test:e2e
 ```
 
-The runner starts `npm run dev` and waits for `http://localhost:3100` to
-answer. If the dev server is already running, it reuses it. The first run
-downloads Chromium.
+The runner starts the app at `http://localhost:3100`.
+It downloads Chromium on the first run if needed.
 
-The agent tests skip themselves without a model key. To run them, set a
-[Vercel AI Gateway](https://vercel.com/docs/ai-gateway) key, or swap the
-model in `e2e.config.ts` for [another provider](https://e2e.tester.army/docs/models):
+## Agent tests
 
-```bash
-AI_GATEWAY_API_KEY=... npm run test:e2e
-```
-
-## What e2e adds to a Next.js app
-
-| File | What it does |
-| --- | --- |
-| `package.json` | `e2e`, `@e2e-dev/web`, and `playwright` as dev dependencies, plus `ai` and `zod` for the agent. The `test:e2e` script runs `e2e run`. The `dev` script pins the port. |
-| `e2e.config.ts` | One web target. `app.url` is the dev server, and `app.command` starts it. `agents.default.model` is the model behind `agent.*` steps. |
-| `tests/greeting.e2e.ts` | Deterministic tests with `getByRole` and `getByLabel`. |
-| `tests/agent.e2e.ts` | `agent.act` and `agent.assert`, each followed by a locator check that does not depend on the model. |
-
-The page is `app/page.tsx`, and the form is the client component in
-`app/greeting-form.tsx`: a labelled name field, a Greet button, an `alert`
-when the name is empty, and a `status` with the greeting. The tests query
-those roles and labels, so the app needs no test ids.
-
-## Things Next.js adds to the page
-
-- **A second `alert`.** Next.js renders an empty `role="alert"` route
-  announcer on every page, so `getByRole('alert')` matches two nodes. The
-  tests narrow it with `.filter({ hasText })`.
-- **The Dev Tools button.** `next dev` adds an "Open Next.js Dev Tools"
-  button. Name the buttons you query, as the tests do, or run the suite
-  against `npm run build && npm run start` in CI.
-- **Port 3000 is often taken.** With `reuseExisting`, the runner tests
-  whatever already answers on the URL, even a different app. That's why this
-  example uses port 3100.
-
-## Add e2e to your own Next.js app
+Set a [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) key:
 
 ```bash
-npx e2e init
+AI_GATEWAY_API_KEY="your-key" npm run test:e2e
 ```
 
-Pick **Web**. Then copy `app.command` from `e2e.config.ts` so the runner
-starts the dev server for you.
+Without the key, the agent tests skip. Add `-- --no-cache` to use fresh
+model calls. Results are in `.e2e/report.json`.
 
-Docs: [Quickstart](https://e2e.tester.army/docs/quickstart),
-[Starting your app](https://e2e.tester.army/docs/starting-your-app),
-[Writing tests](https://e2e.tester.army/docs/writing-tests).
+See [e2e.config.ts](e2e.config.ts) and [tests/](tests/) for the setup.
+For your own app, follow the [Quickstart](https://e2e.tester.army/docs/quickstart).
 
 Last checked with e2e 0.15.2, @e2e-dev/web 0.11.1, Next.js 16.3, and Node 22.
