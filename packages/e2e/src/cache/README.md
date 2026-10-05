@@ -139,9 +139,10 @@ visible.
 An action the engine refused before sending any input (`NODE_STALE`,
 `FRAME_NOT_FOUND`, `NOT_ACTIONABLE`) gets one more try: the replay waits for
 the screen to hold still, finds the target again, and repeats it. A tap on a
-row a debounced list re-rendered is the usual case. Any other failure, an
-engine fault or a timeout included, may have reached the app and hands off to
-the executor.
+row a debounced list re-rendered is the usual case. Any other action failure,
+an engine fault or a timeout included, may have reached the app and hands off
+to the executor. Cancellation and runtime hard stops are not hand-offs: they
+end the step.
 
 ## Pacing
 
