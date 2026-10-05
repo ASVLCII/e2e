@@ -320,11 +320,15 @@ describe('agent.act verdict mapping', () => {
         const observation = await context.observe();
         const password = nodeIdFor(observation.text, /textbox "Password"/);
         await context.actions.typeSecret({ id: password }, 'admin.password');
-        // Undeclared names are refused before any policy check runs.
+        // A configured secret the step never declared is refused before any policy check runs.
         try {
-          await context.actions.typeSecret({ id: password }, 'other');
+          await context.actions.typeSecret({ id: password }, 'stripe-key');
           return { status: 'failed' as const, summary: 'undeclared secret was accepted' };
-        } catch {
+        } catch (cause) {
+          const { code, message } = cause as { code?: string; message?: string };
+          if (code !== 'POLICY_DENIED' || message?.includes('was not declared in this step') !== true) {
+            return { status: 'failed' as const, summary: `unexpected refusal: ${String(code)} ${String(message)}` };
+          }
           return { status: 'passed' as const, summary: 'filled the declared secret only' };
         }
       },
@@ -337,6 +341,7 @@ describe('agent.act verdict mapping', () => {
           tests: 'tests/**/*.e2e.ts',
           agents: { default: { executor } },
           credentials: { admin: { username: 'admin', password: 'admin-pass' } },
+          secrets: { 'stripe-key': 'sk_live_generic_4242' },
         },
       },
     );
