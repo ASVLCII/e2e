@@ -7,10 +7,28 @@
 
 import type { Locator as PwLocator, Page } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
-import { EngineError, type LocatorAction } from 'e2e/engine';
-import { TestError } from 'e2e/engine';
+import { EngineError, TestError, type LocatorAction } from 'e2e/engine';
 import { classifyActionError, dispatchLocatorAction, dispatchPointerAction } from '../../src/actions.ts';
 import type { ActionTarget } from '../../src/support.ts';
+
+vi.mock('node:timers/promises', () => ({
+  setTimeout: (ms: number, value?: unknown, options?: { signal?: AbortSignal }) =>
+    new Promise((resolve, reject) => {
+      if (options?.signal?.aborted) {
+        reject(options.signal.reason ?? new Error('aborted'));
+        return;
+      }
+      const timer = globalThis.setTimeout(() => resolve(value), ms);
+      options?.signal?.addEventListener(
+        'abort',
+        () => {
+          globalThis.clearTimeout(timer);
+          reject(options?.signal?.reason ?? new Error('aborted'));
+        },
+        { once: true },
+      );
+    }),
+}));
 
 function pwTimeout(callLog: readonly string[]): Error {
   const error = new Error(`locator.click: Timeout 5000ms exceeded.\nCall log:\n${callLog.map((line) => `  - ${line}`).join('\n')}\n`);
@@ -212,7 +230,9 @@ describe('dispatchPointerAction', () => {
   function stubPage() {
     const calls: string[] = [];
     const mouse = {
-      move: async (x: number, y: number) => { calls.push(`move ${x},${y}`); },
+      move: async (x: number, y: number) => {
+        calls.push(`move ${x},${y}`);
+      },
       down: async () => { calls.push('down'); },
       up: async () => { calls.push('up'); },
       click: async (x: number, y: number, options?: { button?: string; delay?: number }) => {
@@ -245,6 +265,46 @@ describe('dispatchPointerAction', () => {
     const { page, calls } = stubPage();
     await dispatchPointerAction(page, { x: 10, y: 20 }, { kind: 'swipeTo', target: { x: 110, y: 20 } });
     expect(calls).toEqual(['move 10,20', 'down', 'move 60,20', 'move 110,20', 'up']);
+  });
+
+  it('swipes along a path with duration as a multi-step drag paced over time', async () => {
+    vi.useFakeTimers();
+    try {
+      const { page, calls } = stubPage();
+      const promise = dispatchPointerAction(page, { x: 10, y: 20 }, { kind: 'swipeTo', target: { x: 70, y: 20 }, durationMs: 48 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual(['move 10,20', 'down']);
+      await vi.advanceTimersByTimeAsync(16);
+      expect(calls).toEqual(['move 10,20', 'down', 'move 30,20']);
+      await vi.advanceTimersByTimeAsync(16);
+      expect(calls).toEqual(['move 10,20', 'down', 'move 30,20', 'move 50,20']);
+      await vi.advanceTimersByTimeAsync(16);
+      expect(calls).toEqual(['move 10,20', 'down', 'move 30,20', 'move 50,20', 'move 70,20', 'up']);
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops dispatching moves when aborted and releases the mouse', async () => {
+    vi.useFakeTimers();
+    try {
+      const { page, calls } = stubPage();
+      const controller = new AbortController();
+      const promise = dispatchPointerAction(
+        page,
+        { x: 10, y: 20 },
+        { kind: 'swipeTo', target: { x: 70, y: 20 }, durationMs: 48 },
+        controller.signal,
+      );
+      await vi.advanceTimersByTimeAsync(16);
+      expect(calls).toEqual(['move 10,20', 'down', 'move 30,20']);
+      controller.abort();
+      await expect(promise).rejects.toThrow();
+      expect(calls).toEqual(['move 10,20', 'down', 'move 30,20', 'up']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('swipes in a direction as a wheel gesture over the point, sized by the viewport', async () => {

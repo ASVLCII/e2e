@@ -798,9 +798,9 @@ export class PlaywrightSurface {
 
   /** One pointer action at a viewport point in CSS pixels, with nothing resolved behind it; see `dispatchPointerAction`. */
   performAt(point: ViewportPoint, action: PointerAction, operation: OperationContext): Promise<void> {
-    return this.guard(operation, `${action.kind} at point`, () => {
+    return this.guard(operation, `${action.kind} at point`, (currentOperation) => {
       this.requireSession().requireObservation();
-      return dispatchPointerAction(this.requirePage(), point, action);
+      return dispatchPointerAction(this.requirePage(), point, action, currentOperation.signal);
     }, classifyInputError);
   }
 

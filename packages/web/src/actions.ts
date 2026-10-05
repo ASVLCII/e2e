@@ -170,7 +170,12 @@ export async function dispatchLocatorAction(
  * behind it: no actionability wait, because there is no element to wait on,
  * and the page decides what the gesture lands on, as it does for a person.
  */
-export async function dispatchPointerAction(page: Page, at: ViewportPoint, action: PointerAction): Promise<void> {
+export async function dispatchPointerAction(
+  page: Page,
+  at: ViewportPoint,
+  action: PointerAction,
+  signal?: AbortSignal,
+): Promise<void> {
   const { mouse } = page;
   const point = nearestPixel(at);
   switch (action.kind) {
@@ -190,9 +195,11 @@ export async function dispatchPointerAction(page: Page, at: ViewportPoint, actio
       await mouse.move(point.x, point.y);
       return;
     case 'dragTo':
+      await performPointDrag(mouse, point, action.target, undefined, signal);
+      return;
     case 'swipeTo':
       // A swipe along a path is a pointer drag on a document platform.
-      await performPointDrag(mouse, point, action.target);
+      await performPointDrag(mouse, point, action.target, action.durationMs, signal);
       return;
     case 'swipe':
       // The pointer moves to the point first so the scrollable under it receives the wheel.

@@ -209,14 +209,23 @@ class ScreenImpl implements Screen {
 
   async swipe(options: SwipeOptions | SwipePathOptions): Promise<void> {
     if (isSwipePath(options)) {
-      rejectUnknownOptions('swipe', options, ['from', 'to']);
+      rejectUnknownOptions('swipe', options, ['from', 'to', 'duration']);
       const from = requirePoint(options.from, 'swipe from');
       const to = requirePoint(options.to, 'swipe to');
+      const durationMs = validateSwipeDuration(options.duration);
       await this.context.steps.run(
         'screen',
         'screen.swipe',
         `${describePoint(from)} → ${describePoint(to)}`,
-        () => this.context.engine.performAt(from, { kind: 'swipeTo', target: to }),
+        () =>
+          this.context.engine.performAt(
+            from,
+            obj({
+              kind: 'swipeTo' as const,
+              target: to,
+              durationMs,
+            }),
+          ),
       );
       return;
     }
@@ -688,6 +697,18 @@ function validateLongPress(durationMs: number | undefined): number | undefined {
     );
   }
   return durationMs;
+}
+
+/** Validates the shared swipe duration bound; none named leaves the gesture to the engine's default. */
+function validateSwipeDuration(duration: number | undefined): number | undefined {
+  if (duration === undefined) return undefined;
+  if (!Number.isInteger(duration) || duration < 16 || duration > 10_000) {
+    throw new TestError(
+      'INVALID_ARGUMENT',
+      `swipe duration must be an integer from 16 through 10000, got ${String(duration)}`,
+    );
+  }
+  return duration;
 }
 
 /**

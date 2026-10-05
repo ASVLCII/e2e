@@ -1,5 +1,6 @@
 /** Shared error translation, filename, and swipe helpers for the Playwright engine. */
 
+import { setTimeout } from 'node:timers/promises';
 import type { ElementHandle, Locator as PwLocator, Mouse, Page } from 'playwright-core';
 import { EngineError, withinCleanupBudget, type EngineCleanupContext, type Momentum, type ScrollDirection, type ViewportPoint, type ViewportSize } from 'e2e/engine';
 import { ConfigurationError, InfrastructureError, TestError } from 'e2e/engine';
@@ -412,16 +413,38 @@ export function nearestPixel(point: ViewportPoint): ViewportPoint {
   return { x: Math.round(point.x), y: Math.round(point.y) };
 }
 
-/** A pointer drag from one viewport point to another, on whole pixels, with an intermediate move so drag handlers see motion. */
-export async function performPointDrag(mouse: Mouse, start: ViewportPoint, end: ViewportPoint): Promise<void> {
+/** A pointer drag from one viewport point to another, on whole pixels, with an intermediate move so drag handlers see motion; paced over `durationMs` when given. */
+export async function performPointDrag(
+  mouse: Mouse,
+  start: ViewportPoint,
+  end: ViewportPoint,
+  durationMs?: number,
+  signal?: AbortSignal,
+): Promise<void> {
   const from = nearestPixel(start);
   const to = nearestPixel(end);
   const middle = nearestPixel({ x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 });
   await mouse.move(from.x, from.y);
   await mouse.down();
-  await mouse.move(middle.x, middle.y);
-  await mouse.move(to.x, to.y);
-  await mouse.up();
+  try {
+    if (durationMs !== undefined) {
+      const steps = Math.max(2, Math.round(durationMs / 16));
+      const startedAt = performance.now();
+      for (let step = 1; step <= steps; step += 1) {
+        const due = startedAt + (durationMs * step) / steps;
+        await setTimeout(Math.max(0, due - performance.now()), undefined, { signal });
+        await mouse.move(
+          from.x + ((to.x - from.x) * step) / steps,
+          from.y + ((to.y - from.y) * step) / steps,
+        );
+      }
+    } else {
+      await mouse.move(middle.x, middle.y);
+      await mouse.move(to.x, to.y);
+    }
+  } finally {
+    await mouse.up();
+  }
 }
 
 export async function performElementSwipe(

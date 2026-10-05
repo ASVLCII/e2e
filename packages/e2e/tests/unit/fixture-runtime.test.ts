@@ -666,7 +666,8 @@ describe('coordinate input', () => {
       perform: async (_ref, action) => { performed.push(action.kind); },
       pointerActions: ['tap', 'swipeTo'],
       performAt: async (point, action) => {
-        const path = action.kind === 'swipeTo' ? ` -> ${action.target.x},${action.target.y}` : '';
+        const duration = action.kind === 'swipeTo' && action.durationMs !== undefined ? ` for ${action.durationMs}ms` : '';
+        const path = action.kind === 'swipeTo' ? ` -> ${action.target.x},${action.target.y}${duration}` : '';
         performedAt.push(`${action.kind} @ ${point.x},${point.y}${path}`);
       },
     });
@@ -750,14 +751,38 @@ describe('coordinate input', () => {
     await fixtures.screen.swipe({ from: { x: 10, y: 20 }, to: { x: 10, y: 300 } });
     expect(performedAt).toEqual(['swipeTo @ 10,20 -> 10,300']);
     expect(steps.all().at(-1)).toMatchObject({ kind: 'screen', api: 'screen.swipe', label: '(10, 20) → (10, 300)', status: 'passed' });
+    await fixtures.screen.swipe({ from: { x: 10, y: 20 }, to: { x: 10, y: 300 }, duration: 400 });
+    expect(performedAt.at(-1)).toEqual('swipeTo @ 10,20 -> 10,300 for 400ms');
+    await fixtures.screen.swipe({ from: { x: 540, y: 1560 }, to: { x: 540, y: 840 }, duration: 300 });
+    expect(performedAt.at(-1)).toEqual('swipeTo @ 540,1560 -> 540,840 for 300ms');
+    expect(steps.all().at(-1)).toMatchObject({ kind: 'screen', api: 'screen.swipe', label: '(540, 1560) → (540, 840)', status: 'passed' });
+    await expect(fixtures.screen.swipe({ from: { x: 1, y: 1 }, to: { x: 2, y: 2 }, duration: 0 } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT', message: 'swipe duration must be an integer from 16 through 10000, got 0',
+    });
+    await expect(fixtures.screen.swipe({ from: { x: 1, y: 1 }, to: { x: 2, y: 2 }, duration: 15 } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT', message: 'swipe duration must be an integer from 16 through 10000, got 15',
+    });
+    await expect(fixtures.screen.swipe({ from: { x: 1, y: 1 }, to: { x: 2, y: 2 }, duration: 10_001 } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT', message: 'swipe duration must be an integer from 16 through 10000, got 10001',
+    });
+    await expect(fixtures.screen.swipe({ from: { x: 1, y: 1 }, to: { x: 2, y: 2 }, duration: 1.5 } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT', message: 'swipe duration must be an integer from 16 through 10000, got 1.5',
+    });
     await expect(fixtures.screen.swipe({ direction: 'up', to: { x: 1, y: 1 } } as never)).rejects.toMatchObject({
       code: 'INVALID_ARGUMENT', message: expect.stringContaining('swipe options has no key "direction"'),
+    });
+    await expect(fixtures.screen.swipe({ direction: 'up', duration: 300 } as never)).rejects.toMatchObject({
+      code: 'INVALID_ARGUMENT', message: expect.stringContaining('swipe options has no key "duration"'),
     });
     await expect(fixtures.screen.swipe({ from: { x: 1, y: 1 } } as never)).rejects.toMatchObject({
       code: 'INVALID_ARGUMENT', message: 'swipe to requires a point { x, y } of finite numbers',
     });
     await expect(fixtures.screen.swipe({ direction: 'up' })).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
-    expect(performedAt).toEqual(['swipeTo @ 10,20 -> 10,300']);
+    expect(performedAt).toEqual([
+      'swipeTo @ 10,20 -> 10,300',
+      'swipeTo @ 10,20 -> 10,300 for 400ms',
+      'swipeTo @ 540,1560 -> 540,840 for 300ms',
+    ]);
   });
 });
 
