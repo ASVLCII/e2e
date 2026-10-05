@@ -30,7 +30,7 @@ export function setErrorRedactor(redact: ((text: string) => string) | undefined)
  * other value is its message alone.
  */
 export function codedMessage(cause: unknown): string {
-  const code = cause instanceof E2EError || isForeignE2EError(cause) ? `${(cause as { code: string }).code}: ` : '';
+  const code = isE2EError(cause) ? `${cause.code}: ` : '';
   return `${code}${errorMessage(cause)}`;
 }
 
@@ -226,8 +226,13 @@ const CATEGORIES: ReadonlySet<ErrorCategory> = new Set([
   'interrupted',
 ]);
 
-/** Detects an E2EError created by another copy of this module. */
-export function isForeignE2EError(value: unknown): value is Error & {
+/**
+ * True for an E2EError from this module copy or another. An engine imported by
+ * a config file loads its own copy of the runner, so its errors fail
+ * `instanceof E2EError` and every subclass check; test for runner errors with
+ * this, and read the subclass off `category` and `code`.
+ */
+export function isE2EError(value: unknown): value is Error & {
   category: ErrorCategory;
   code: string;
   retryable: boolean;
@@ -307,7 +312,7 @@ export function combineExitCodes(codes: readonly number[]): 0 | 1 | 2 | 3 | 4 | 
  * non-retryable infrastructure ENGINE_FAILURE.
  */
 export function translateEngineError(cause: unknown, suffix = ''): E2EError {
-  if (cause instanceof E2EError) return cause;
+  if (isE2EError(cause)) return classifyError(cause);
   const engineError = asEngineError(cause);
   if (engineError !== undefined) {
     switch (engineError.code) {
@@ -345,7 +350,7 @@ export function translateEngineError(cause: unknown, suffix = ''): E2EError {
  * `Error` from an installer - is infrastructure.
  */
 export function translateProvisioningError(cause: unknown, suffix = ''): E2EError {
-  if (cause instanceof E2EError || isForeignE2EError(cause)) return classifyError(cause);
+  if (isE2EError(cause)) return classifyError(cause);
   if (asEngineError(cause)?.code === 'CANCELLED') return translateEngineError(cause);
   return new InfrastructureError('ENGINE_FAILURE', `${errorMessage(cause)}${suffix}`, { cause });
 }
@@ -353,7 +358,7 @@ export function translateProvisioningError(cause: unknown, suffix = ''): E2EErro
 /** Classifies an arbitrary thrown value into an E2EError; unknown values become test failures. */
 export function classifyError(value: unknown): E2EError {
   if (value instanceof E2EError) return value;
-  if (isForeignE2EError(value)) {
+  if (isE2EError(value)) {
     const details = (value as { details?: unknown }).details;
     return new E2EError(value.category, value.code, value.message, {
       retryable: value.retryable,

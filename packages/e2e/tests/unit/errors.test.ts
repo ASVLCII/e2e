@@ -12,6 +12,7 @@ import {
   withHint,
   serializeError,
   TestError,
+  translateEngineError,
   translateProvisioningError,
   truncateUtf8,
 } from '../../src/internal/errors.ts';
@@ -44,6 +45,17 @@ describe('translateProvisioningError', () => {
     expect(config.category).toBe('configuration');
     const infra = translateProvisioningError(new InfrastructureError('BROWSER_INSTALL_FAILED', 'exit 1'));
     expect(infra.code).toBe('BROWSER_INSTALL_FAILED');
+  });
+});
+
+describe('translateEngineError', () => {
+  it('keeps the code of a runner error from another module copy', () => {
+    const foreign = new TestError('INVALID_LOCATOR', 'bad selector');
+    Object.setPrototypeOf(foreign, Error.prototype);
+    expect(foreign instanceof E2EError).toBe(false);
+    const translated = translateEngineError(foreign);
+    expect(translated).toBeInstanceOf(E2EError);
+    expect(translated).toMatchObject({ category: 'test', code: 'INVALID_LOCATOR', message: 'bad selector' });
   });
 });
 

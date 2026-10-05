@@ -1246,7 +1246,7 @@ function classifyAttemptStatus(
   interrupted: boolean,
 ): 'failed' | 'timed-out' | 'interrupted' {
   if (interrupted && !timedOut) return 'interrupted';
-  if (timedOut || failure instanceof TestTimeoutError || failure.code === 'TEST_TIMEOUT') {
+  if (timedOut || failure.code === 'TEST_TIMEOUT') {
     return 'timed-out';
   }
   return 'failed';
