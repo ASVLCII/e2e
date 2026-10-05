@@ -309,20 +309,23 @@ export function isTestErrorCode(cause: unknown, code: string): cause is Error & 
  * | `TimeoutError` on an action, log shows the dispatch started     | ACTION_MAY_HAVE_COMMITTED |
  * | element detached / not attached / no element / resolved hidden  | NODE_STALE (retryable)    |
  * | execution context destroyed / frame detached by a navigation    | NODE_STALE (retryable)    |
+ * | strict mode violation, log ends before the input dispatch       | NODE_STALE (retryable)    |
+ * | strict mode violation, log shows the dispatch started           | ACTION_MAY_HAVE_COMMITTED |
  * | not an input / not editable / not checkable                     | NOT_ACTIONABLE            |
- * | strict mode violation, anything else                            | ENGINE_FAILURE           |
+ * | anything else                                                   | ENGINE_FAILURE            |
  *
  * The action split is read from the call log Playwright appends to a timeout
- * message: `performing <x> action`, `<x> action done`, and `waiting for
- * scheduled navigations to finish` are only logged once the input is being (or
- * has been) dispatched, so a timeout whose log reaches them is uncertain and
- * the harness must not blindly repeat it. Every earlier line (`waiting for
- * element to be visible, enabled and stable`, `scrolling into view if
- * needed`, `retrying <x> action`) precedes dispatch and is a plain
- * actionability miss.
+ * or strict mode message: `performing <x> action`, `<x> action done`, and
+ * `waiting for scheduled navigations to finish` are only logged once the input
+ * is being (or has been) dispatched, so a failure whose log reaches them is
+ * uncertain and the harness must not blindly repeat it. Every earlier line
+ * (`waiting for element to be visible, enabled and stable`, `scrolling into
+ * view if needed`, `retrying <x> action`) precedes dispatch and is a plain
+ * actionability miss. Only whole `- ` log lines count, so a locator or element
+ * text quoting those words never does.
  */
 export const POST_DISPATCH_PATTERN =
-  /performing \w+ action|\w+ action done|waiting for scheduled navigations to finish/i;
+  /^\s*- (performing \w+ action|[\w ]+ action done|waiting for scheduled navigations to finish)\s*$/im;
 
 /** Translates an unexpected Playwright error at the contract boundary. */
 export function translatePwError(cause: unknown, operation: string): Error {
