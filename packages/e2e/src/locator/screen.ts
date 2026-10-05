@@ -43,7 +43,7 @@ import {
   testIdQuery,
   textQuery,
 } from './expression.ts';
-import { type Deadline, POLL_INTERVAL_MS, pollCondition, sleep } from '../internal/time.ts';
+import { cutOffAtDeadline, type Deadline, POLL_INTERVAL_MS, pollCondition, sleep } from '../internal/time.ts';
 
 export interface SecretResolver {
   /**
@@ -253,8 +253,17 @@ class ScreenImpl implements Screen {
           details: locatorDetails(internals.expression, Date.now() - startedMs),
           ...(cause === undefined ? {} : { cause }),
         });
+      let sampled = false;
       for (;;) {
-        const { node } = await engine.tryRead(internals.expression, deadline);
+        const startedWithMs = deadline.remaining();
+        let node: SemanticNode | null;
+        try {
+          ({ node } = await engine.tryRead(internals.expression, deadline));
+        } catch (cause) {
+          if (sampled && cutOffAtDeadline(cause, startedWithMs)) throw notVisible(cause);
+          throw cause;
+        }
+        sampled = true;
         if (isNodeVisible(node)) return;
         if (deadline.expired()) throw notVisible();
         try {
@@ -575,9 +584,10 @@ class LocatorImpl extends ScreenImpl implements Locator {
           const { node } = await engine.tryRead(this.expression, deadline, ABSENCE_STATES.has(state) ? 'empty' : 'wait');
           return inWaitForState(node, state);
         },
-        onTimeout: () =>
+        onTimeout: (cause) =>
           new TestError('LOCATOR_NOT_FOUND', `locator did not become ${state}: ${this.label}`, {
             details: locatorDetails(this.expression, Date.now() - startedMs),
+            ...(cause === undefined ? {} : { cause }),
           }),
       });
     }, { verifies: true });

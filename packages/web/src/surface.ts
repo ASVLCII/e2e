@@ -37,7 +37,7 @@ import {
   type ViewportSize,
 } from 'e2e/engine';
 import { matchesText } from 'e2e/engine';
-import { classifyActionError, dispatchLocatorAction, dispatchPointerAction } from './actions.ts';
+import { classifyActionError, classifyInputError, dispatchLocatorAction, dispatchPointerAction } from './actions.ts';
 import { BrowserConnection, connectCdp, type BrowserName } from './browser-connection.ts';
 import { AttemptSession, type StorageState } from './attempt-session.ts';
 import type { CdpEndpointResolver } from './cdp-recovery.ts';
@@ -48,7 +48,7 @@ import { applyPostSteps, frameSelectors, projectExpression } from './locators.ts
 import { ROOT_NODE_ID, toSemanticNode } from './observation.ts';
 import { captureObservation } from './observation-capture.ts';
 import { maskOptions, secureFieldMasks } from './observe.ts';
-import { connectionAbort } from './operation-budget.ts';
+import { connectionAbort, withOperationDeadline, type OperationBound } from './operation-budget.ts';
 import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from './closed-shadow.ts';
 import { ConfiguredInitScripts, type WebInitScript } from './init-scripts.ts';
 import { SECURE_FIELD_SELECTOR, type RawNodeData } from './read-node.ts';
@@ -611,21 +611,24 @@ export class PlaywrightSurface {
    * The single entry of every operation: rethrows an error latched on an
    * unawaited path, refuses a cancelled operation, races `fn` against the
    * operation signal so an abort mid-call surfaces as `CANCELLED` instead of
-   * waiting out Playwright, and translates raw errors at the contract
+   * waiting out Playwright, bounds it by the operation's budget so a call a
+   * hung page never answers is `OPERATION_TIMEOUT`, and translates raw errors at the contract
    * boundary. `translate` overrides the default translation for operations
-   * with a documented retryable failure mode.
+   * with a documented retryable failure mode; `bound` is `test-code` for an
+   * operation that runs the test's own code, which the deadline never cuts.
    */
   async guard<T>(
     operation: OperationContext,
     label: string,
     fn: (operation: OperationContext) => Promise<T>,
     translate: (cause: unknown, label: string) => Error = translatePwError,
+    bound: OperationBound = 'deadline',
   ): Promise<T> {
     this.latch.throwPending();
     try {
       return this.session === undefined
-        ? await raceAbort(() => fn(operation), operation.signal, label)
-        : await this.session.run(operation, label, fn);
+        ? await withOperationDeadline(operation, label, (remaining) => fn({ ...operation, ...remaining() }), bound)
+        : await this.session.run(operation, label, fn, bound);
     } catch (cause) {
       throw translate(cause, label);
     }
@@ -798,7 +801,7 @@ export class PlaywrightSurface {
     return this.guard(operation, `${action.kind} at point`, () => {
       this.requireSession().requireObservation();
       return dispatchPointerAction(this.requirePage(), point, action);
-    });
+    }, classifyInputError);
   }
 
   /**
@@ -828,7 +831,7 @@ export class PlaywrightSurface {
         checkpoint();
       }
       await page.keyboard.type(text);
-    });
+    }, classifyInputError);
   }
 
   /** Sends one key to whatever holds focus, in the contract's key grammar Playwright shares. */
@@ -836,7 +839,7 @@ export class PlaywrightSurface {
     return this.guard(operation, 'keyboard.press', () => {
       this.requireSession().requireObservation();
       return this.requirePage().keyboard.press(key);
-    });
+    }, classifyInputError);
   }
 
   /**
