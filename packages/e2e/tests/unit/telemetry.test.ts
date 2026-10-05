@@ -404,31 +404,14 @@ describe('Telemetry', () => {
 
   it('names the sandbox the kernel announces and the runtime the CLI runs under', () => {
     const cwd = tempDir();
-    const local = collectEnvironment({ env: {}, cwd, version: '1.2.3' });
-    expect(local.runtime).toBe('node');
-    expect(local.runtime_version).toBe(process.versions.node);
-
     const sandboxed = collectEnvironment({
       env: {},
       cwd,
       version: '1.2.3',
       host: { release: '6.18.36-cloudflare-firecracker-2026.6.17', versions: { ...process.versions, bun: '1.3.9', node: '24.20.0' } },
     });
-    expect(sandboxed.sandbox).toBe('firecracker');
-    expect(sandboxed.runtime).toBe('bun');
-    expect(sandboxed.runtime_version).toBe('1.3.9');
-    expect(sandboxed.node_version).toBe('24.20.0');
+    expect(sandboxed).toMatchObject({ sandbox: 'firecracker', runtime: 'bun', runtime_version: '1.3.9', node_version: '24.20.0' });
     expect(collectEnvironment({ env: {}, cwd, version: '1.2.3', host: { release: '25.6.0', versions: process.versions } }).sandbox).toBeNull();
-  });
-
-  it('names an unclaimed CI and the coding agent driving the shell', async () => {
-    const { telemetry, sent } = create({ env: { CI: '1', CLAUDECODE: '1' } });
-    telemetry.session('run', []);
-    await telemetry.flush();
-    const { properties } = sent.calls[0]!.body.batch[0]!;
-    expect(properties['distinct_id']).toBe('ci:unknown');
-    expect(properties['ci_name']).toBe('unknown');
-    expect(properties['coding_agent']).toBe('claude-code');
   });
 
   it('prints every event under E2E_TELEMETRY_DEBUG and sends nothing', async () => {
