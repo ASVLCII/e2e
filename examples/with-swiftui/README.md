@@ -3,6 +3,8 @@
 A SwiftUI greeting app with three locator tests and two agent tests.
 The test project is in `e2e/`, next to the Xcode project.
 
+<img src="screenshot-greeting.png" alt="SwiftUI app with the greeting Hello, Ada!" width="300" /> <img src="screenshot-error.png" alt="SwiftUI app with the error Enter a name first." width="300" />
+
 ## Run
 
 Open `HelloApp.xcodeproj` in Xcode. Select the **HelloApp** scheme and an
