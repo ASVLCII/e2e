@@ -6,7 +6,7 @@ A Vite + React greeting app with three locator tests and two agent tests.
 
 ## Run
 
-Use Node 22 or later. From this folder:
+Use Node 22.22.3+, 24.8+, or 26+. From this folder:
 
 ```bash
 npm install

@@ -11,7 +11,7 @@ Open `HelloApp.xcodeproj` in Xcode. Select the **HelloApp** scheme and an
 iPhone simulator. Press **Run** to build and install the app. Stop the
 Xcode run before you start the tests.
 
-Use Node 22 or later for the tests. From this folder:
+Use Node 22.22.3+, 24.8+, or 26+ for the tests. From this folder:
 
 ```bash
 cd e2e

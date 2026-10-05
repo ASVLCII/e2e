@@ -4,7 +4,7 @@ An Expo greeting app with three locator tests and two agent tests per platform.
 
 ## Run
 
-Use Node 22 or later. From this folder:
+Use Node 22.22.3+, 24.8+, or 26+. From this folder:
 
 ```bash
 npm install
@@ -20,7 +20,7 @@ Choose one platform:
 
 For native builds, follow [Expo's setup guide](https://docs.expo.dev/get-started/set-up-your-environment/).
 Start a simulator or emulator before building. Rebuild after app changes.
-If `ios/` already exists, run `npx expo prebuild --platform ios` after config changes.
+After config changes, run `npx expo prebuild` to update existing native projects.
 
 ## Agent tests
 
