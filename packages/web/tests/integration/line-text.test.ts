@@ -8,6 +8,7 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import type { SemanticNode } from 'e2e/engine';
+import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from '../../src/closed-shadow.ts';
 import { captureDocument } from '../../src/observation.ts';
 
 let browser: Browser;
@@ -16,6 +17,8 @@ let page: Page;
 beforeAll(async () => {
   browser = await chromium.launch();
   page = await browser.newPage();
+  await page.addInitScript(CLOSED_SHADOW_ROOTS_INIT_SCRIPT);
+  await page.goto('about:blank');
 });
 
 afterAll(async () => {
@@ -79,9 +82,35 @@ it('separates words at block children, line breaks, and form controls, and reads
     <label>Show <select><option>10</option></select> per page</label>
     <p>Shown <span style="display:none">gone</span><span aria-hidden="true">decor</span><span style="visibility:hidden">ghost</span> end</p>
     <p>Price <span style="display:inline-block;width:0;height:0;overflow:hidden">$99</span><span style="font-size:0">$98</span> today</p>
+    <p>extra<wbr>ordinary</p>
   `);
   const texts = nodes.filter((node) => node.role === undefined).map((node) => node.text);
-  expect(texts).toEqual(['Intro tail', 'Block', 'one two', 'Show per page', 'Shown end', 'Price today']);
+  expect(texts).toEqual(['Intro tail', 'Block', 'one two', 'Show per page', 'Shown end', 'Price today', 'extraordinary']);
+});
+
+it('reads the shadow tree an inline custom element renders, open or closed, and the light text it slots', async () => {
+  const nodes = await observe(`
+    <p>Signed in as <open-name></open-name>, welcome back.</p>
+    <p>Your plan: <closed-plan></closed-plan> until May.</p>
+    <p>Hello <slot-greet>Ada <unused-light style="display:none">x</unused-light></slot-greet>!</p>
+    <script>
+      customElements.define('open-name', class extends HTMLElement {
+        connectedCallback() { this.attachShadow({ mode: 'open' }).innerHTML = '<b>Ada</b> <a href="/me">Lovelace</a>'; }
+      });
+      customElements.define('closed-plan', class extends HTMLElement {
+        connectedCallback() { this.attachShadow({ mode: 'closed' }).innerHTML = '<strong>Pro</strong>'; }
+      });
+      customElements.define('slot-greet', class extends HTMLElement {
+        connectedCallback() { this.attachShadow({ mode: 'open' }).innerHTML = 'dear <em><slot></slot></em>'; }
+      });
+    </script>
+  `);
+  expect(lines(nodes)).toEqual([
+    'Signed in as Ada Lovelace, welcome back.',
+    'link "Lovelace" Lovelace',
+    'Your plan: Pro until May.',
+    'Hello dear Ada !',
+  ]);
 });
 
 it('keeps listing the inline text of a line too long for the text bound, so nothing past the cut is lost', async () => {

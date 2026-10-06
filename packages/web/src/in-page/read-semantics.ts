@@ -721,23 +721,56 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * True when an element's text flows in its parent's line: a visible
    * inline-level box (`inline`, `inline-block`, `ruby`), or `display:
    * contents`, whose children lay out as the parent's own. Visible as the
-   * walk reads it (`isHidden`): a box with no size shows no words.
+   * walk reads it (`isHidden`): a box with no size shows no words. A slot
+   * shows the nodes assigned to it, which are read on their own, so only
+   * its style counts.
    */
   const flowsInLine = memoized((el: Element): boolean => {
     if (LINE_BREAKING_TAGS.indexOf(el.tagName.toLowerCase()) !== -1 || isEditingHost(el)) return false;
     const style = styleOf(el);
-    if (style === undefined || hidesSubtree(el, style) || isHidden(el, style)) return false;
-    return style.display.startsWith('inline') || style.display.startsWith('ruby') || style.display === 'contents';
+    if (style === undefined || hidesSubtree(el, style)) return false;
+    if (!(el instanceof HTMLSlotElement) && isHidden(el, style)) return false;
+    return isInlineLevel(style);
   });
 
-  /** An element's text nodes with each inline descendant's text in place; anything else in the line reads as a space. */
+  /** True for a box laid out in its parent's line, or for `display: contents`, which lays out none of its own. */
+  const isInlineLevel = (style: CSSStyleDeclaration): boolean =>
+    style.display.startsWith('inline') || style.display.startsWith('ruby') || style.display === 'contents';
+
+  /**
+   * The nodes an element renders in its place, as the walk reaches them: a
+   * shadow host's shadow tree (a closed one through the record), a slot's
+   * assigned nodes or else its fallback content, any other element's children.
+   */
+  const renderedChildrenOf = (el: Element): Node[] => {
+    const shadow = shadowRootOf(el);
+    if (shadow !== null) return Array.from(shadow.childNodes);
+    if (el instanceof HTMLSlotElement) {
+      const assigned = el.assignedNodes();
+      if (assigned.length > 0) return assigned;
+    }
+    return Array.from(el.childNodes);
+  };
+
+  /**
+   * An element's rendered text with each inline descendant's text in place.
+   * Anything else in the line reads as a space, except a hidden inline
+   * element (a `<wbr>`, a zero-size span), which shows nothing.
+   */
   const lineRunOf = (el: Element): string => {
     let out = '';
-    for (const child of Array.from(el.childNodes)) {
+    for (const child of renderedChildrenOf(el)) {
       if (child.nodeType === 3) out += child.nodeValue ?? '';
-      else if (child.nodeType !== 1) continue;
-      else if (flowsInLine(child as Element)) out += lineRunOf(child as Element);
-      else if (!hidesSubtree(child as Element, styleOf(child as Element))) out += ' ';
+      if (child.nodeType !== 1) continue;
+      const inner = child as Element;
+      if (flowsInLine(inner)) {
+        out += lineRunOf(inner);
+        continue;
+      }
+      const style = styleOf(inner);
+      if (style === undefined || hidesSubtree(inner, style)) continue;
+      const breaking = LINE_BREAKING_TAGS.indexOf(inner.tagName.toLowerCase()) !== -1;
+      if (breaking || !isInlineLevel(style) || !isHidden(inner, style)) out += ' ';
     }
     return out;
   };
@@ -760,7 +793,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * descendants stay listed and nothing past the cut is lost.
    */
   const isReadInLine = memoized((el: Element): boolean => {
-    const parent = el.parentElement;
+    const parent = el.assignedSlot ?? parentOrHostOf(el);
     if (parent === null || !flowsInLine(el)) return false;
     if (directTextOf(parent) === '') return isReadInLine(parent);
     const fits = projection.textLimit === null || lineTextOf(parent).length <= projection.textLimit;
