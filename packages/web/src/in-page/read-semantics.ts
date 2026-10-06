@@ -722,14 +722,15 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * inline-level box (`inline`, `inline-block`, `ruby`), or `display:
    * contents`, whose children lay out as the parent's own. Visible as the
    * walk reads it (`isHidden`): a box with no size shows no words. A slot
-   * shows the nodes assigned to it, which are read on their own, so only
-   * its style counts.
+   * has no box and shows the nodes assigned to it, so only its visibility
+   * counts: a hidden one hides the text they inherit it with, and a child
+   * that shows itself again is listed on its own.
    */
   const flowsInLine = memoized((el: Element): boolean => {
     if (LINE_BREAKING_TAGS.indexOf(el.tagName.toLowerCase()) !== -1 || isEditingHost(el)) return false;
     const style = styleOf(el);
     if (style === undefined || hidesSubtree(el, style)) return false;
-    if (!(el instanceof HTMLSlotElement) && isHidden(el, style)) return false;
+    if (el instanceof HTMLSlotElement ? style.visibility !== 'visible' : isHidden(el, style)) return false;
     return isInlineLevel(style);
   });
 

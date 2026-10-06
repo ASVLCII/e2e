@@ -113,6 +113,19 @@ it('reads the shadow tree an inline custom element renders, open or closed, and 
   ]);
 });
 
+it('reads no slotted text a hidden slot hides, and lists a slotted child that shows itself again', async () => {
+  const nodes = await observe(`
+    <p>Status <hidden-slot>secret <span style="visibility:visible">shown</span></hidden-slot> end</p>
+    <script>
+      customElements.define('hidden-slot', class extends HTMLElement {
+        connectedCallback() { this.attachShadow({ mode: 'open' }).innerHTML = '<slot style="visibility:hidden"></slot>'; }
+      });
+    </script>
+  `);
+  expect(lines(nodes)).toEqual(['Status end', 'shown']);
+  expect(await page.locator('p').innerText()).toBe('Status shown end');
+});
+
 it('keeps listing the inline text of a line too long for the text bound, so nothing past the cut is lost', async () => {
   const nodes = await observe(`<p>${'word '.repeat(120)}<strong>Total: $42</strong></p>`);
   expect(nodes.map((node) => node.text)).toEqual([expect.stringMatching(/^word word/), 'Total: $42']);
