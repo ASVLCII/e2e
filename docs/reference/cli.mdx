@@ -155,6 +155,9 @@ the link and its target, and an interactive run offers to replace a linked
 skill directory with a copy, or with the link where the link goes. A
 copy with a directory where a file goes, or a file where a directory goes, is
 skipped with a warning naming the entry; `init` removes nothing to repair it.
+An MCP config file reached through a symlink, or under a linked directory, is
+skipped with the same warning and left unchanged, so the server is not
+registered there; a plain config is merged as usual.
 
 Cancellation leaves files untouched and exits 0. An invalid `package.json`
 exits 2 before any write. Without a terminal on stdin and stdout, `init`
