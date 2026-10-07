@@ -543,6 +543,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--repeat-each <n>', 'run every selected test this many times, each run its own result (pair with --no-cache to exercise the model each time)', parsePositiveInt)
     .option('--no-cache', 'run with the replay cache off, whatever the config says')
     .option('--strict-cache', 'fail a step whose recording no longer replays (REPLAY_STALE) instead of handing it to the agent; never writes the cache')
+    .option('-u, --update-snapshots', 'rewrite the stored screenshots toHaveScreenshot finds different')
     .optionsGroup('Output:')
     .option('--reporter <ids>', `comma-separated reporters: ${BUILTIN_REPORTERS.join(', ')}`, parseReporters)
     .option('--output <dir>', 'results directory: report, artifacts, sessions (default: output in the config, else .e2e)')
@@ -568,6 +569,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           'e2e run --max-failures 3',
           'e2e run --repeat-each 5 --no-cache tests/checkout.e2e.ts',
           'CI=1 e2e run --strict-cache',
+          'e2e run --update-snapshots tests/home.e2e.ts',
           'e2e run --agent ux tests/onboarding.e2e.ts',
           'e2e run --agent buyer,admin tests/checkout.e2e.ts',
           'AI_GATEWAY_API_KEY=... e2e run --no-cache',
@@ -596,6 +598,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
           /** Commander negation: `--no-cache` parses as `cache: false`. */
           cache?: boolean;
           strictCache?: boolean;
+          updateSnapshots?: boolean;
           debug?: boolean;
           aiTrace?: boolean;
           trace?: RecordingMode | true;
@@ -622,6 +625,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
               output: options.output,
               noCache: options.cache === false,
               strictCache: options.strictCache,
+              updateSnapshots: options.updateSnapshots,
               debug: options.debug,
               aiTrace: options.aiTrace,
               trace: recordingOption(options.trace),

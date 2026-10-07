@@ -1,5 +1,6 @@
 /** Attempt-scoped fixture graph. */
 
+import path from 'node:path';
 import { BUILT_IN_AGENT } from '../agent/agent-brand.ts';
 import { createAgentFixture } from '../agent/index.ts';
 import type { AgentContext, AgentSelection } from '../agent/invocation.ts';
@@ -26,6 +27,7 @@ import {
   type SecretResolver,
 } from '../locator/screen.ts';
 import { engineAppInfo } from '../config/app.ts';
+import type { ScreenshotContext } from '../expect/screenshot.ts';
 import type { ResolvedAgentConfig, ResolvedConfig, ResolvedTarget } from '../config/resolve.ts';
 import type { Agent, App, Expectable, SetupSession, TestFixtures } from '../types.ts';
 import type { StepRecord, StepRecorder } from './steps.ts';
@@ -75,6 +77,8 @@ export interface AttemptEnvironment {
   readonly debug?: DebugTrace;
   /** The worker's model adapters, checked once on the first `agent` acquisition. */
   readonly models: WorkerModels;
+  /** The test the attempt runs, which `toHaveScreenshot` keeps its screenshots beside; absent for a session with no test (`e2e mcp`). */
+  readonly test?: { readonly file: string; readonly titlePath: readonly string[] };
 }
 
 /** Builds the lazy fixture graph for one attempt. */
@@ -112,6 +116,7 @@ export function createFixtures(environment: AttemptEnvironment): AttemptFixtures
     steps: environment.steps,
     secrets,
     projectRoot: environment.config.projectRoot,
+    ...(environment.test === undefined ? {} : { screenshots: screenshotContext(environment, environment.test, exposure) }),
   };
   const screen = createScreen(screenContext);
   const app = createApp(environment, engine, exposure);
@@ -397,6 +402,24 @@ function unreachableApp(cause: unknown, url: string): InfrastructureError | unde
     `nothing answered at ${url} (${match[0]}); start the app there, point the target's app.url at where it runs, or give the target an app.command so the runner starts it`,
     { cause },
   );
+}
+
+/** Where the attempt's `toHaveScreenshot` calls keep their screenshots: beside the test file, one per target and operating system. */
+function screenshotContext(
+  environment: AttemptEnvironment,
+  test: NonNullable<AttemptEnvironment['test']>,
+  exposure: SecretExposure,
+): ScreenshotContext {
+  const { projectRoot } = environment.config;
+  return {
+    projectRoot,
+    directory: path.join(projectRoot, `${test.file}-snapshots`),
+    suffix: `-${environment.target.name}-${process.platform}`,
+    titlePath: test.titlePath,
+    update: environment.config.updateSnapshots,
+    artifacts: environment.artifacts,
+    withholdsPixels: () => exposure.withholdsPixels,
+  };
 }
 
 /** Builds the portable app fixture with the session's shared screenshot policy. */

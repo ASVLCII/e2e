@@ -45,6 +45,7 @@ import {
 } from './expression.ts';
 import { cutOffAtDeadline, type Deadline, POLL_INTERVAL_MS, pollCondition, sleep } from '../internal/time.ts';
 import { SampleHistory } from '../expect/samples.ts';
+import type { ScreenshotContext } from '../expect/screenshot.ts';
 
 export interface SecretResolver {
   /**
@@ -60,6 +61,8 @@ export interface ScreenContext {
   readonly secrets: SecretResolver;
   /** Base directory for resolving relative file paths, e.g. uploads. */
   readonly projectRoot?: string;
+  /** Where `toHaveScreenshot` keeps screenshots; absent outside a test. */
+  readonly screenshots?: ScreenshotContext;
 }
 
 /** Internal accessor used by expect() to reach a locator's expression/engine. */
@@ -73,6 +76,14 @@ export interface LocatorInternals {
  * an expect() imported in an isolated test-module realm can still reach them.
  */
 const internalsSlot = realmSlot<LocatorInternals>('e2e.locatorInternals.v1');
+
+/** The context of a `screen` (or a locator, which is one too), for `expect(screen)`, under the same kind of slot. */
+const screenSlot = realmSlot<ScreenContext>('e2e.screenContext.v1');
+
+/** The context behind a screen object; undefined for anything else. */
+export function screenContextOf(screen: unknown): ScreenContext | undefined {
+  return screenSlot.get(screen);
+}
 
 export function locatorInternals(locator: unknown): LocatorInternals | undefined {
   if (typeof locator !== 'object' || locator === null) return undefined;
@@ -152,7 +163,9 @@ class ScreenImpl implements Screen {
     protected readonly scope: LocatorExpression | undefined,
     /** When set, every query expression is passed through it before use. */
     protected readonly wrap: ((expression: LocatorExpression) => LocatorExpression) | undefined = undefined,
-  ) {}
+  ) {
+    screenSlot.set(this, context);
+  }
 
   private build(expression: LocatorExpression): LocatorExpression {
     return this.wrap === undefined ? expression : this.wrap(expression);

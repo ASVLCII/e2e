@@ -970,7 +970,7 @@ export class AgentDeviceSurface {
     this.generation = new Map(projected.index.map((entry) => [entry.id, this.bind(entry, projected.index)]));
     const viewport = await this.viewportFor(projected, operation.signal);
     const location = screenLocation(raw.appBundleId ?? raw.appName ?? this.appIdentity, screenTitle(projected));
-    const capture = options?.pixels === true ? await this.capturePixels(operation, projected, viewport) : undefined;
+    const capture = options?.pixels === true ? await this.capturePixels(operation, projected, viewport, options.comparable === true) : undefined;
     return {
       root: screenRoot(projected.roots, viewport),
       viewport,
@@ -1462,9 +1462,13 @@ export class AgentDeviceSurface {
     return relative;
   }
 
-  /** Raw device pixels; cleanup follows the capture even when its caller abandons it. */
-  private rawScreenshot(signal?: AbortSignal): Promise<Uint8Array> {
-    return this.captureScreenshot(signal, async (shot, file) => new Uint8Array(readFileSync(shot.path ?? file)));
+  /**
+   * Raw device pixels; cleanup follows the capture even when its caller
+   * abandons it. `normalizeStatusBar` shows the status bar in a fixed state
+   * (time, battery, signal), for a screenshot compared against a stored one.
+   */
+  private rawScreenshot(signal?: AbortSignal, normalizeStatusBar = false): Promise<Uint8Array> {
+    return this.captureScreenshot(signal, async (shot, file) => new Uint8Array(readFileSync(shot.path ?? file)), normalizeStatusBar);
   }
 
   /**
@@ -1475,12 +1479,13 @@ export class AgentDeviceSurface {
   private captureScreenshot<T>(
     signal: AbortSignal | undefined,
     read: (shot: RawScreenshotResult, file: string) => Promise<T>,
+    normalizeStatusBar = false,
   ): Promise<T> {
     return this.command('screenshot', async (client) => {
       const directory = mkdtempSync(path.join(tmpdir(), 'e2e-agent-device-'));
       const file = path.join(directory, 'screenshot.png');
       try {
-        return await read(await client.capture.screenshot({ path: file }), file);
+        return await read(await client.capture.screenshot({ path: file, ...(normalizeStatusBar ? { normalizeStatusBar: true } : {}) }), file);
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }
@@ -1520,10 +1525,11 @@ export class AgentDeviceSurface {
     operation: OperationContext,
     projected: ProjectedSnapshot,
     viewport: ViewportSize,
+    comparable: boolean,
   ): Promise<{ pixels: ObservationPixels; masked: number } | undefined> {
     let raw: Uint8Array;
     try {
-      raw = await this.rawScreenshot(operation.signal);
+      raw = await this.rawScreenshot(operation.signal, comparable);
     } catch {
       return undefined;
     }

@@ -278,6 +278,17 @@ works on `toHaveText`, `toContainText`, `toHaveAccessibleName`,
 `toHaveAttribute(name, value)`, and `expect(browser).toHaveURL`. Any other option, `indeterminate` or
 `useInnerText` included, is `INVALID_ARGUMENT`, in JavaScript too.
 
+Screenshots: `await expect(screen).toHaveScreenshot('home.png')` compares the
+screen, `expect(locator).toHaveScreenshot()` one element's box, against
+`<test file>-snapshots/<name>-<target>-<os>.png`, on web, iOS, and Android
+alike. The first run writes the file and fails: look at it, commit it, rerun.
+`--update-snapshots` (`-u`) rewrites files that differ after an intended UI
+change. Options: `threshold`, `maxDiffPixels`, `maxDiffPixelRatio`, `mask`
+(locators painted over, for clocks and other changing content), `maskColor`,
+`timeout`. A failure attaches `-expected`, `-actual`, and `-diff` images to the
+step. Baselines written on a Mac do not match Linux CI for web targets; write
+them where they run.
+
 ## Sign-in sessions
 
 Sign in once in a setup test, save the state under a name, and let other

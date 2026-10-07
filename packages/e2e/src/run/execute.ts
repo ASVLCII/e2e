@@ -1024,6 +1024,7 @@ export class TargetExecutor implements SerialHost {
         ...(cache === undefined ? {} : { cache }),
         debug: this.debug,
         models: this.models,
+        test: { file: pair.test.file, titlePath: pair.test.titlePath },
       });
       // `expect.poll` and `expect.soft` take no fixture, so the attempt they
       // run on is published here and cleared when `attemptEnd` fires in `finally`.

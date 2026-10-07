@@ -311,6 +311,17 @@ void expect.poll(() => 'x').toBe(1);
 void expect.poll('x').toBe('x');
 // @ts-expect-error the synchronous matchers take no options; a value that is still settling goes through expect.poll
 expect('x').toBe('x', { timeout: 1000 });
+// expect(screen) and expect(locator) compare screenshots; screen gets no locator matcher.
+void (expect(screen).toHaveScreenshot('home.png') satisfies Promise<void>);
+void (expect(screen).not.toHaveScreenshot({ maxDiffPixelRatio: 0.01, mask: [screen.getByTestId('clock')] }) satisfies Promise<void>);
+void (expect(screen.getByRole('button')).toHaveScreenshot({ threshold: 0.1, maxDiffPixels: 10, maskColor: '#000000', timeout: 1000 }) satisfies Promise<void>);
+void (expect.soft(screen).toHaveScreenshot() satisfies Promise<void>);
+// @ts-expect-error a page screenshot option the cross-platform matcher does not take
+void expect(screen).toHaveScreenshot({ fullPage: true });
+// @ts-expect-error masks are locators, not selectors
+void expect(screen).toHaveScreenshot({ mask: ['#clock'] });
+// @ts-expect-error screen is not a locator
+void expect(screen).toBeVisible();
 screen.getByRole('button', { name: 'Save', visible: true });
 screen.getByRole('heading', { name: 'Dashboard', level: 1 });
 // The vocabulary names composite widgets and structure, and takes ARIA's img as an alias of image.

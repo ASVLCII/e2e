@@ -787,6 +787,42 @@ export interface AsyncExpectation {
   toHaveCount(expected: number, options?: { timeout?: number }): Promise<void>;
   /** Waits for an accessible name. */
   toHaveAccessibleName(expected: TextMatch, options?: TextMatcherOptions): Promise<void>;
+  /**
+   * Waits for the one match to look like its stored screenshot, `name` or
+   * one named after the test. A missing one is written and the matcher fails;
+   * `--update-snapshots` rewrites one that differs.
+   */
+  toHaveScreenshot(name: string, options?: ScreenshotOptions): Promise<void>;
+  toHaveScreenshot(options?: ScreenshotOptions): Promise<void>;
+}
+
+/** The `expect(screen)` matchers. */
+export interface ScreenExpectation {
+  /** Inverts the matcher: waits for the screen to differ from its stored screenshot. */
+  readonly not: ScreenExpectation;
+  /**
+   * Waits for the screen to look like its stored screenshot, `name` or one
+   * named after the test. A missing one is written and the matcher fails;
+   * `--update-snapshots` rewrites one that differs.
+   */
+  toHaveScreenshot(name: string, options?: ScreenshotOptions): Promise<void>;
+  toHaveScreenshot(options?: ScreenshotOptions): Promise<void>;
+}
+
+/** Options of `toHaveScreenshot`. */
+export interface ScreenshotOptions {
+  /** How far one pixel's color may drift and still count as the same, from 0 (exact) to 1. Default `0.2`. */
+  threshold?: number;
+  /** How many pixels may differ. Default `0`. */
+  maxDiffPixels?: number;
+  /** What share of the pixels may differ, from 0 to 1. Default `0`. */
+  maxDiffPixelRatio?: number;
+  /** Locators painted over before comparing, for content that changes from run to run. */
+  mask?: readonly Locator[];
+  /** Color of the `mask` boxes, `#rrggbb`. Default `#ff00ff`. */
+  maskColor?: string;
+  /** Assertion budget in milliseconds. */
+  timeout?: number;
 }
 
 /** Options of a locator matcher that compares text. */
@@ -930,9 +966,10 @@ export type NegatedPollExpectation<T> = {
   readonly [K in ValueMatcherName]: (...args: Parameters<ValueExpectation<T>[K]>) => Promise<void>;
 };
 
-/** The `expect(actual)` call: a locator, an engine fixture, or a value, told apart by the argument. */
+/** The `expect(actual)` call: a locator, `screen`, an engine fixture, or a value, told apart by the argument. */
 export interface ExpectCall {
   (actual: Locator): AsyncExpectation;
+  (actual: Screen): ScreenExpectation;
   <E extends object>(actual: Expectable<E>): E;
   /** `message` opens the failure text, so a bare `expected false to be true` says which check it was. */
   <T>(actual: T, message?: string): ValueExpectation<T>;
@@ -941,6 +978,7 @@ export interface ExpectCall {
 /** The `expect.soft(actual)` call: `expect(actual)` whose failures are kept instead of thrown. */
 export interface SoftExpectCall {
   (actual: Locator): AsyncExpectation;
+  (actual: Screen): ScreenExpectation;
   <E extends object>(actual: Expectable<E>): E;
   /** `message` opens the failure text, so a bare `expected false to be true` says which check it was. */
   <T>(actual: T, message?: string): SoftValueExpectation<T>;
