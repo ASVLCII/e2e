@@ -405,9 +405,11 @@ trees, on both platforms, without a device.
   tracked, the testbed's ignores its own, since fixture-app recordings are
   worth nothing to anyone). CI replays the entries read-only and calls the
   model for a step with no recording, so those suites gate a pull request at
-  deterministic speed and cost, for this repository's branches only: a fork's
-  pull request has no key. Re-record with the package's `test:agent` and
-  commit the changed entries in the same pull request as the scenario change.
+  deterministic speed and cost. On a pull request they run for this
+  repository's branches only, since a fork's has no key; the merge queue runs
+  them, with the key, for every queued pull request the change reaches.
+  Re-record with the package's `test:agent` and commit the changed entries in
+  the same pull request as the scenario change.
   The web benchmark's agent job runs with `--strict-cache`, so a recording a
   change broke fails with `REPLAY_STALE` instead of quietly calling the model.
   That includes a change to the cache key (`REPLAY_POLICY_VERSION`, a new key
@@ -478,23 +480,34 @@ trees, on both platforms, without a device.
     names, and never let a label become a path component.
   - Test, config, and engine code run with the runner's full OS authority;
     nothing here sandboxes them. Untrusted PR code belongs in an external
-    sandbox with no secrets or write tokens.
+    sandbox with no secrets or write tokens. The merge queue runs a queued
+    pull request's code with the repository's secrets, fork or not, so
+    enqueueing (auto-merge included) is the trust decision: review a fork's
+    test, config, and engine changes before you enqueue it.
 
 - CI: `.github/workflows/spec.yml` runs lint, typecheck, and the testbed on
   Node 26, `pnpm test` on the newest Node 22, 24, and 26 and on the
   `engines.node` floors (22.22.3, 24.8.0), and `scripts/install-smoke.ts`, a
   fresh install of the packed packages with pnpm 11 and 12; `benchmark.yml` runs the
   web benchmark's two suites; `mobile.yml` runs the mobile benchmark's on an
-  iOS simulator and an Android emulator (KVM on x64 Linux). The two
-  benchmark workflows gate on paths: a `changes` job (dorny/paths-filter
-  over `.github/filters.yml`) skips the suites when the change reaches
-  neither the runner, the engine, nor the benchmark app, and a manual
-  dispatch always runs them. Skipped satisfies the ruleset's required
-  checks; a workflow-level `paths:` filter would leave them pending, so
-  never gate those workflows that way. The mobile suites are four named
-  jobs sharing steps through YAML anchors, not a matrix: a skipped matrix
-  job reports under its unexpanded name and the required check never
-  arrives. A new build input or benchmark dependency goes into
+  iOS simulator and an Android emulator (KVM on x64 Linux); `docs.yml`
+  checks the docs. All four run on pull requests and in the merge queue
+  (`merge_group`), which is the merge gate: auto-merge enqueues, and the
+  queue merges only when every check is green on the queued tree. Each
+  workflow ends in a `<workflow> gate` job, the only checks the `Main`
+  ruleset requires (`spec gate`, `benchmark gate`, `mobile gate`, `docs
+  gate`); it fails when any job it needs failed or was cancelled and passes
+  over a skipped one, so a new job gates merges once it is in its gate's
+  `needs`. The benchmark and docs workflows gate on paths: a `changes` job
+  (dorny/paths-filter over `.github/filters.yml`) skips the suites when the
+  change cannot reach them, and a manual dispatch always runs them. Never
+  use a workflow-level `paths:` filter: the gate would never report and the
+  merge would wait forever. A suite that cannot run (the agentic ones on a
+  fork's or Dependabot's pull request, which get no model key) is skipped at
+  the job level, never at the step level, so it boots no device for nothing.
+  A push to main runs `spec` and the web benchmark; `mobile` only rebuilds
+  the Expo app on a cache miss, since main's caches are the ones every pull
+  request restores. A new build input or benchmark dependency goes into
   `filters.yml` in the same change. Every workflow
   pins actions by SHA; keep new actions SHA-pinned. Every job runs on
   Blacksmith, like the tester-army repos. Linux jobs use
