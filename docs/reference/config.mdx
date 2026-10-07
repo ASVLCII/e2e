@@ -57,6 +57,7 @@ entry. Discovery visits
 only directories that could match, never enters one an exclusion takes whole,
 skips `node_modules`, and ignores symlinks. A dot directory is included only
 when a glob segment explicitly starts with a dot.
+`?` matches one Unicode code point, including an emoji.
 
 e2e loads no `.env` file itself. Load one at the top of `e2e.config.ts` with
 Node's `process.loadEnvFile()`; every worker imports the config again, so the
