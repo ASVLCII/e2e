@@ -205,6 +205,7 @@ Without the indicator, stopping takes about two seconds.
 - Defaults `maxIdleTimeMinutes` to 10. A run that dies before the engine
   stops its sessions leaves them idle, and EAS stops them after that long.
 - Starts each daemon at the agent-device version `@e2e-dev/mobile` pins.
+- Starts no session for a request cancelled before creation.
 - Stops a session that errors, is cancelled, stays queued while another
   session of the run idles to `maxIdleTimeMinutes`, or is still booting 15
   minutes after leaving the queue, and treats one EAS no longer knows as
