@@ -782,10 +782,32 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * policy</a> for details.</p>` reads as the whole sentence while the link
    * stays a node of its own. Block-level descendants are nodes of their own
    * and only separate words. An element with no text of its own owns none: a
-   * wrapper of elements leaves them to say what they say.
+   * wrapper of elements leaves them to say what they say (`ownsLine`).
    */
   const lineTextOf = memoized((el: Element): string =>
-    directTextOf(el) === '' ? '' : lineRunOf(el).replace(/\s+/g, ' ').trim());
+    ownsLine(el) ? lineRunOf(el).replace(/\s+/g, ' ').trim() : '');
+
+  /**
+   * True when an element reads its own line: it has text of its own, or it
+   * offers an action inside an ancestor's line, where its words are what a
+   * person aims at.
+   */
+  const ownsLine = (el: Element): boolean => directTextOf(el) !== '' || (offersAction(el) && isReadInLine(el));
+
+  /**
+   * True when an element with no role still says it can be acted on: it is
+   * focusable through `tabindex`, it has a click handler set as an attribute
+   * or a property (`onclick`), or it is an `<a>` with no `href`, which an app
+   * wires up by script. Such an element stays listed inside a line, so it
+   * keeps an id to act on. A handler added with `addEventListener` leaves
+   * nothing the page can read.
+   */
+  const offersAction = memoized((el: Element): boolean => {
+    const tabindex = el.getAttribute('tabindex');
+    if (tabindex !== null && /^\s*[-+]?\d/.test(tabindex)) return true;
+    if (el.tagName.toLowerCase() === 'a' || el.hasAttribute('onclick')) return true;
+    return el instanceof HTMLElement && el.onclick !== null;
+  });
 
   /**
    * True when an element's text is already read in an ancestor's line
@@ -796,7 +818,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
   const isReadInLine = memoized((el: Element): boolean => {
     const parent = el.assignedSlot ?? parentOrHostOf(el);
     if (parent === null || !flowsInLine(el)) return false;
-    if (directTextOf(parent) === '') return isReadInLine(parent);
+    if (!ownsLine(parent)) return isReadInLine(parent);
     const fits = projection.textLimit === null || lineTextOf(parent).length <= projection.textLimit;
     return fits && !isHidden(parent);
   });
@@ -1416,6 +1438,7 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
     if (el.hasAttribute(options.testIdAttribute)) return true;
     if (implicitRole(el) !== null && !isPresentational(el)) return true;
     if (accessibleName(el) !== null) return true;
+    if (offersAction(el) && isReadInLine(el)) return lineTextOf(el) !== '';
     return directTextOf(el) !== '' && !isReadInLine(el);
   };
 

@@ -70,6 +70,29 @@ it('keeps an inline node named by a test id while its words stay in the sentence
   expect(nodes[1]!.testId).toBe('total');
 });
 
+it('keeps an inline element that offers an action listed, its words still in the sentence', async () => {
+  const nodes = await observe(`
+    <p>Text <span onclick="" tabindex="0">change</span> here</p>
+    <p>Or <span id="wired">resend</span> the code</p>
+    <p>See <a>the note</a> below</p>
+    <p>Pick <span tabindex="-1"><b>this</b></span> now</p>
+    <div tabindex="-1"><span>Outside</span> <span tabindex="0"><b>any</b></span></div>
+    <script>document.getElementById('wired').onclick = () => undefined;</script>
+  `);
+  expect(lines(nodes)).toEqual([
+    'Text change here',
+    'change',
+    'Or resend the code',
+    'resend',
+    'See the note below',
+    'the note',
+    'Pick this now',
+    'this',
+    'Outside',
+    'any',
+  ]);
+});
+
 it('lists the children of a wrapper with no text of its own, as before', async () => {
   const nodes = await observe('<div><span>One</span><span>Two</span></div><button><span>Save</span></button>');
   expect(lines(nodes)).toEqual(['One', 'Two', 'button "Save"', 'Save']);
