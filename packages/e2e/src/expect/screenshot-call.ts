@@ -98,10 +98,9 @@ function unnamedStem(store: ScreenshotContext): string {
   const count = (unnamedCalls.get(store) ?? 0) + 1;
   unnamedCalls.set(store, count);
   const whole = store.titlePath.join(' ');
-  const title = whole
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '');
+  // Every run of other characters is one dash, so at most one sits at each end.
+  const dashed = whole.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-');
+  const title = dashed.slice(dashed.startsWith('-') ? 1 : 0, dashed.length > 1 && dashed.endsWith('-') ? -1 : undefined);
   const cut = cutToBytes(title, MAX_TITLE_NAME_BYTES);
   const fitted = cut === title ? title : `${cut}-${createHash('sha256').update(whole).digest('hex').slice(0, 8)}`;
   return `${fitted === '' ? 'screenshot' : fitted}-${count}`;
