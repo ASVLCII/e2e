@@ -4,7 +4,7 @@ import { Any, Anything, ArrayContaining, ObjectContaining, StringContaining, Str
 import type { AsymmetricMatcher, AsyncExpectation, Class, Expect, Expectable, Locator, Screen, ScreenExpectation, SoftValueExpectation, ValueExpectation } from '../types.ts';
 import { expectationBrand } from '../internal/brands.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
-import { locatorInternals, screenContextOf } from '../locator/screen.ts';
+import { locatorInternals, screenInternals } from '../locator/screen.ts';
 import { createAsyncExpectation } from './async.ts';
 import { createPollExpectation } from './poll.ts';
 import { createScreenExpectation } from './screenshot.ts';
@@ -28,8 +28,8 @@ function dispatch(actual: unknown, message?: string): AsyncExpectation | ScreenE
   if (internals !== undefined) return createAsyncExpectation(internals);
   const attached = expectationSlot.get(actual);
   if (attached !== undefined) return attached;
-  const screen = screenContextOf(actual);
-  if (screen !== undefined) return createScreenExpectation(screen);
+  const screen = screenInternals(actual);
+  if (screen !== undefined) return createScreenExpectation(screen.context, screen.scoped);
   return createValueExpectation(actual, message);
 }
 

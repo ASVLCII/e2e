@@ -281,13 +281,15 @@ works on `toHaveText`, `toContainText`, `toHaveAccessibleName`,
 Screenshots: `await expect(screen).toHaveScreenshot('home.png')` compares the
 screen, `expect(locator).toHaveScreenshot()` one element's box, against
 `<test file>-snapshots/<name>-<target>-<os>.png`, on web, iOS, and Android
-alike. The first run writes the file and fails: look at it, commit it, rerun.
-`--update-snapshots` (`-u`) rewrites files that differ after an intended UI
+alike. Commit the files. The first run writes the file and fails: look at it,
+commit it, rerun. A CI run writes nothing into the project and attaches a
+missing one at `snapshots/<path>` in the test's results. `--update-snapshots`
+(`-u`) writes missing and different files and passes, after an intended UI
 change. Options: `threshold`, `maxDiffPixels`, `maxDiffPixelRatio`, `mask`
 (locators painted over, for clocks and other changing content), `maskColor`,
 `timeout`. A failure attaches `-expected`, `-actual`, and `-diff` images to the
-step. Baselines written on a Mac do not match Linux CI for web targets; write
-them where they run.
+step. Files are per target and OS (`-web-linux.png`): screenshots written on a
+Mac never serve Linux CI, so write CI's from a CI job with `-u`.
 
 ## Sign-in sessions
 

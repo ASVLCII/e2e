@@ -45,7 +45,7 @@ import {
 } from './expression.ts';
 import { cutOffAtDeadline, type Deadline, POLL_INTERVAL_MS, pollCondition, sleep } from '../internal/time.ts';
 import { SampleHistory } from '../expect/samples.ts';
-import type { ScreenshotContext } from '../expect/screenshot.ts';
+import type { ScreenshotContext } from '../run/screenshots.ts';
 
 export interface SecretResolver {
   /**
@@ -77,11 +77,17 @@ export interface LocatorInternals {
  */
 const internalsSlot = realmSlot<LocatorInternals>('e2e.locatorInternals.v1');
 
-/** The context of a `screen` (or a locator, which is one too), for `expect(screen)`, under the same kind of slot. */
-const screenSlot = realmSlot<ScreenContext>('e2e.screenContext.v1');
+/** What `expect(screen)` reads off a screen object: its context, and whether it is scoped to part of the screen (a frame). */
+interface ScreenInternals {
+  readonly context: ScreenContext;
+  readonly scoped: boolean;
+}
 
-/** The context behind a screen object; undefined for anything else. */
-export function screenContextOf(screen: unknown): ScreenContext | undefined {
+/** A screen's internals, for `expect(screen)`, under the same kind of slot as a locator's. */
+const screenSlot = realmSlot<ScreenInternals>('e2e.screenInternals.v1');
+
+/** The internals behind a screen object; undefined for anything else. */
+export function screenInternals(screen: unknown): ScreenInternals | undefined {
   return screenSlot.get(screen);
 }
 
@@ -164,7 +170,7 @@ class ScreenImpl implements Screen {
     /** When set, every query expression is passed through it before use. */
     protected readonly wrap: ((expression: LocatorExpression) => LocatorExpression) | undefined = undefined,
   ) {
-    screenSlot.set(this, context);
+    screenSlot.set(this, { context, scoped: wrap !== undefined });
   }
 
   private build(expression: LocatorExpression): LocatorExpression {

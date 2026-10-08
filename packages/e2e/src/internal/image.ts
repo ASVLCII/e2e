@@ -100,21 +100,19 @@ export function cropImage(image: RgbaImage, box: ImageBox): RgbaImage {
   return { width: box.width, height: box.height, data };
 }
 
-/** Paints each box, clipped to the image, opaque in `color`, in place. */
-export function fillBoxes(image: RgbaImage, boxes: readonly ImageBox[], color: readonly [number, number, number]): void {
+/** A copy of the image with each box, clipped to it, painted opaque in `color`. */
+export function fillBoxes(image: RgbaImage, boxes: readonly ImageBox[], color: readonly [number, number, number]): RgbaImage {
+  const data = image.data.slice();
   for (const box of boxes) {
     const clipped = clipBox(image, box);
     if (clipped === undefined) continue;
     for (let y = clipped.y; y < clipped.y + clipped.height; y += 1) {
       for (let x = clipped.x; x < clipped.x + clipped.width; x += 1) {
-        const at = (y * image.width + x) * 4;
-        image.data[at] = color[0];
-        image.data[at + 1] = color[1];
-        image.data[at + 2] = color[2];
-        image.data[at + 3] = 255;
+        data.set([color[0], color[1], color[2], 255], (y * image.width + x) * 4);
       }
     }
   }
+  return { width: image.width, height: image.height, data };
 }
 
 /** How far two images may differ and still match. */

@@ -5,7 +5,7 @@
  * beside the test file, and rewritten under `updateSnapshots`.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
@@ -55,11 +55,16 @@ const WHITE: Rgb = [255, 255, 255];
 const BLUE: Rgb = [0, 0, 255];
 const RED: Rgb = [255, 0, 0];
 
-/** A fake engine whose screen is `current()`, recording every observe option it was asked for. */
-function screenEngine(current: () => ObservationPixels, tree: SemanticNode = TREE): { fake: FakeEngineHandle; asked: EngineObserveOptions[] } {
+/** A fake engine whose screen is `current()`, recording every observe option it was asked for; `delayMs` slows every observation. */
+function screenEngine(
+  current: () => ObservationPixels | undefined,
+  tree: SemanticNode = TREE,
+  delayMs: () => number = () => 0,
+): { fake: FakeEngineHandle; asked: EngineObserveOptions[] } {
   const asked: EngineObserveOptions[] = [];
   const fake = createFakeEngine({
     tree,
+    observe: () => new Promise((resolve) => setTimeout(resolve, delayMs())),
     locate: (expression) => {
       if (expression.kind === 'query' && expression.query.kind === 'role') return [tree.children![0]!];
       if (expression.kind === 'query' && expression.query.kind === 'testId') return [tree.children![1]!];
@@ -67,7 +72,8 @@ function screenEngine(current: () => ObservationPixels, tree: SemanticNode = TRE
     },
     pixels: (options) => {
       asked.push(options);
-      return { pixels: current() };
+      const pixels = current();
+      return pixels === undefined ? undefined : { pixels };
     },
   });
   return { fake, asked };
@@ -109,6 +115,7 @@ describe('toHaveScreenshot', () => {
         expect(first.error?.code).toBe('ASSERTION_FAILED');
         expect(first.error?.message).toContain(`no stored screenshot at tests/home.e2e.ts-snapshots/home${SUFFIX}.png`);
         expect(existsSync(stored)).toBe(true);
+        expect(asked.length).toBeGreaterThan(0);
         expect(asked.every((option) => option.comparable === true)).toBe(true);
 
         const second = await runExisting(project, options);
@@ -231,7 +238,7 @@ test('tolerant', async ({ app, screen }) => {
       const { fake } = screenEngine(() => screenPng(WHITE, BLUE), secureTree);
       const unmasked = await runProject({ 'tests/home.e2e.ts': SCREEN_TEST }, { appUrl: FAKE_APP_URL, config: fakeConfig(fake) });
       try {
-        expect(attemptOf(unmasked.outcome, 'home').error?.code).toBe('POLICY_DENIED');
+        expect(attemptOf(unmasked.outcome, 'home').error).toMatchObject({ category: 'configuration', code: 'POLICY_DENIED' });
         expect(existsSync(path.join(unmasked.project.dir, 'tests', 'home.e2e.ts-snapshots'))).toBe(false);
       } finally {
         unmasked.project.cleanup();
@@ -251,10 +258,168 @@ test('after a fill', async ({ app, screen }) => {
         { appUrl: FAKE_APP_URL, config: fakeConfig(plain, { secrets: { token: 'a-very-secret-token' } }) },
       );
       try {
-        expect(attemptOf(afterFill.outcome, 'after a fill').error?.code).toBe('POLICY_DENIED');
+        expect(attemptOf(afterFill.outcome, 'after a fill').error).toMatchObject({ category: 'configuration', code: 'POLICY_DENIED' });
         expect(existsSync(path.join(afterFill.project.dir, 'tests', 'fill.e2e.ts-snapshots'))).toBe(false);
       } finally {
         afterFill.project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'reports the mismatch it saw when a later capture comes back without pixels, as a read the deadline cut short does',
+    async () => {
+      let captures = 0;
+      let changed = false;
+      const { fake } = screenEngine(() => {
+        if (!changed) return screenPng(WHITE, BLUE);
+        captures += 1;
+        return captures === 1 ? screenPng(WHITE, RED) : undefined;
+      });
+      const options = { appUrl: FAKE_APP_URL, config: fakeConfig(fake) };
+      const { project } = await runProject({ 'tests/home.e2e.ts': SCREEN_TEST }, options);
+      try {
+        changed = true;
+        const attempt = attemptOf(await runExisting(project, options), 'home');
+        expect(attempt.error?.message).toContain(`${BUTTON.width * BUTTON.height} pixels`);
+        expect(attempt.artifacts.map((artifact) => path.posix.basename(artifact.path ?? ''))).toContain('home-diff.png');
+      } finally {
+        project.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    'writes a missing screenshot and passes under updateSnapshots',
+    async () => {
+      const { fake } = screenEngine(() => screenPng(WHITE, BLUE));
+      const { outcome, project } = await runProject(
+        { 'tests/home.e2e.ts': SCREEN_TEST },
+        { appUrl: FAKE_APP_URL, config: fakeConfig(fake), runOptions: { updateSnapshots: true } },
+      );
+      try {
+        expect(attemptOf(outcome, 'home').error).toBeUndefined();
+        expect(existsSync(path.join(project.dir, 'tests', 'home.e2e.ts-snapshots', `home${SUFFIX}.png`))).toBe(true);
+      } finally {
+        project.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    'never passes a retry against the screenshot its first attempt wrote, and in CI writes none into the project, attaching it under the path it belongs at',
+    async () => {
+      const { fake } = screenEngine(() => screenPng(WHITE, BLUE));
+      const local = await runProject({ 'tests/home.e2e.ts': SCREEN_TEST }, { appUrl: FAKE_APP_URL, config: fakeConfig(fake, { retries: 1 }) });
+      try {
+        const result = local.outcome.report.run.results.find((candidate) => candidate.titlePath.at(-1) === 'home')!;
+        expect(result.status).toBe('failed');
+        expect(result.attempts.map((attempt) => attempt.error?.message)).toEqual([
+          expect.stringContaining('wrote this run\'s there'),
+          expect.stringContaining('written by an earlier attempt of this run'),
+        ]);
+      } finally {
+        local.project.cleanup();
+      }
+
+      const ci = await runProject(
+        { 'tests/home.e2e.ts': SCREEN_TEST },
+        { appUrl: FAKE_APP_URL, config: fakeConfig(fake, { retries: 1 }), runOptions: { env: { ...process.env, CI: '1' } } },
+      );
+      try {
+        const result = ci.outcome.report.run.results.find((candidate) => candidate.titlePath.at(-1) === 'home')!;
+        expect(result.status).toBe('failed');
+        expect(result.attempts).toHaveLength(2);
+        expect(existsSync(path.join(ci.project.dir, 'tests', 'home.e2e.ts-snapshots'))).toBe(false);
+        const attempt = result.attempts.at(-1)!;
+        expect(attempt.error?.message).toContain('CI writes none');
+        const kept = attempt.artifacts.find((artifact) => artifact.path?.endsWith(`snapshots/tests/home.e2e.ts-snapshots/home${SUFFIX}.png`));
+        expect(kept).toBeDefined();
+        expect(readPng(path.join(ci.project.dir, '.e2e', 'results', kept!.path!)).width).toBe(WIDTH);
+      } finally {
+        ci.project.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'paints a mask at the right place inside a locator\'s box',
+    async () => {
+      const { fake } = screenEngine(() => screenPng(WHITE, BLUE));
+      const test = `import { test, expect } from 'e2e';
+
+test('masked button', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen.getByRole('button')).toHaveScreenshot('button', { mask: [screen.getByRole('button')], maskColor: '#00ff00' });
+});
+`;
+      const { project } = await runProject({ 'tests/mask.e2e.ts': test }, { appUrl: FAKE_APP_URL, config: fakeConfig(fake) });
+      try {
+        const button = readPng(path.join(project.dir, 'tests', 'mask.e2e.ts-snapshots', `button${SUFFIX}.png`));
+        expect([button.width, button.height]).toEqual([BUTTON.width, BUTTON.height]);
+        expect([...button.data.subarray(0, 3)]).toEqual([0, 255, 0]);
+      } finally {
+        project.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    'fails on a screen of another size, on a .not that still matches, and with one screenshot before the timeout; honors threshold',
+    async () => {
+      let screen = screenPng(WHITE, BLUE);
+      let delayMs = 0;
+      const { fake } = screenEngine(() => screen, TREE, () => delayMs);
+      const test = `import { test, expect } from 'e2e';
+
+test('size', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen).toHaveScreenshot('small', { timeout: 500 });
+});
+
+test('negated', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen).not.toHaveScreenshot('home', { timeout: 500 });
+});
+
+test('threshold', async ({ app, screen }) => {
+  await app.open('/');
+  await expect(screen).toHaveScreenshot('home', { timeout: 500 });
+  await expect(screen).toHaveScreenshot('home', { threshold: 0, timeout: 500 });
+});
+`;
+      const options = { appUrl: FAKE_APP_URL, config: fakeConfig(fake) };
+      // The first run writes every screenshot; the small one is then replaced by one of another size.
+      const { project } = await runProject({ 'tests/edges.e2e.ts': test }, options);
+      try {
+        const directory = path.join(project.dir, 'tests', 'edges.e2e.ts-snapshots');
+        const small = new PNG({ width: 10, height: 10 });
+        small.data.fill(255);
+        writeFileSync(path.join(directory, `small${SUFFIX}.png`), PNG.sync.write(small));
+
+        screen = screenPng(WHITE, [0, 0, 250]);
+        const outcome = await runExisting(project, options);
+        expect(attemptOf(outcome, 'size').error?.message).toContain(`a ${WIDTH}x${HEIGHT} screenshot where tests/edges.e2e.ts-snapshots/small${SUFFIX}.png is 10x10`);
+        expect(attemptOf(outcome, 'negated').error?.message).toContain('the screen still matches');
+        const threshold = attemptOf(outcome, 'threshold');
+        expect(threshold.error?.message).toContain(`${BUTTON.width * BUTTON.height} pixels`);
+        expect(threshold.steps.filter((step) => step.api === 'expect.toHaveScreenshot').map((step) => step.status)).toEqual(['passed', 'failed']);
+
+        // One capture outlasts the whole 1 s budget.
+        delayMs = 1_100;
+        const late = await runProject({ 'tests/late.e2e.ts': SCREEN_TEST }, options);
+        try {
+          expect(attemptOf(late.outcome, 'home').error?.message).toContain('took 1 screenshot before the timeout');
+        } finally {
+          late.project.cleanup();
+        }
+      } finally {
+        project.cleanup();
       }
     },
     60_000,

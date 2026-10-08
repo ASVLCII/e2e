@@ -24,8 +24,9 @@ describe('image', () => {
   });
 
   it('crops the pixels of a box and paints boxes clipped to the image', () => {
-    const image = gray(4, 4, 0);
-    fillBoxes(image, [{ x: 2, y: 2, width: 10, height: 10 }], [255, 0, 0]);
+    const blank = gray(4, 4, 0);
+    const image = fillBoxes(blank, [{ x: 2, y: 2, width: 10, height: 10 }], [255, 0, 0]);
+    expect(blank).toEqual(gray(4, 4, 0));
     expect([...cropImage(image, { x: 1, y: 1, width: 2, height: 2 }).data]).toEqual([
       0, 0, 0, 255, 0, 0, 0, 255,
       0, 0, 0, 255, 255, 0, 0, 255,
@@ -41,8 +42,7 @@ describe('image', () => {
   it('reports a size mismatch, and counts differing pixels against maxDiffPixels and maxDiffPixelRatio, the smaller one when both are set', () => {
     expect(compareImages(gray(2, 2, 0), gray(2, 3, 0), exact)).toMatchObject({ kind: 'size' });
     const expected = gray(10, 10, 255);
-    const actual = gray(10, 10, 255);
-    fillBoxes(actual, [{ x: 0, y: 0, width: 5, height: 1 }], [0, 0, 0]);
+    const actual = fillBoxes(gray(10, 10, 255), [{ x: 0, y: 0, width: 5, height: 1 }], [0, 0, 0]);
     expect(compareImages(expected, actual, exact)).toMatchObject({ kind: 'pixels', diffPixels: 5, ratio: 0.05 });
     expect(compareImages(expected, actual, { ...exact, maxDiffPixels: 5 })).toMatchObject({ kind: 'match' });
     expect(compareImages(expected, actual, { ...exact, maxDiffPixelRatio: 0.05 })).toMatchObject({ kind: 'match' });

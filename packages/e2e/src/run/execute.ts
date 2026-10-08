@@ -194,6 +194,8 @@ export class TargetExecutor implements SerialHost {
   private readonly storedRecordings: StoredRecordings | undefined;
   /** Resolves once the engine's init hook completed for this worker. */
   private engineReady: Promise<void> | undefined;
+  /** The stored screenshots attempts here wrote, so a retry never passes against its first attempt's. */
+  private readonly writtenScreenshots = new Set<string>();
 
   constructor(private readonly options: TargetExecutorOptions) {
     this.target = options.target;
@@ -1025,6 +1027,7 @@ export class TargetExecutor implements SerialHost {
         debug: this.debug,
         models: this.models,
         test: { file: pair.test.file, titlePath: pair.test.titlePath },
+        writtenScreenshots: this.writtenScreenshots,
       });
       // `expect.poll` and `expect.soft` take no fixture, so the attempt they
       // run on is published here and cleared when `attemptEnd` fires in `finally`.

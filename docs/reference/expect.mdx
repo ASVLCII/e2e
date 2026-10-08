@@ -13,7 +13,7 @@ instead of throwing it, and `expect.any` and the other
 structural comparison.
 
 ```ts
-/** The `expect(actual)` call: a locator, an engine fixture, or a value, told apart by the argument. */
+/** The `expect(actual)` call: a locator, `screen`, an engine fixture, or a value, told apart by the argument. */
 export interface ExpectCall {
   (actual: Locator): AsyncExpectation;
   (actual: Screen): ScreenExpectation;
@@ -236,17 +236,19 @@ export interface ScreenshotOptions {
 | Property | Value |
 | --- | --- |
 | Stored at | `<test file>-snapshots/<name>-<target>-<os>.png`; `.png` is added to a name without it |
-| Unnamed | The test's title path and a count: `checkout-pays-by-card-1` |
-| Missing | Written from two screenshots in a row that are the same, then `ASSERTION_FAILED` |
+| Unnamed | The test's title path, lowercase, and a count: `checkout-pays-by-card-1` |
+| Missing | Taken from two screenshots in a row that are the same within the tolerance, then `ASSERTION_FAILED`. Written beside the test; in CI only attached to the results, at `snapshots/<path in the project>` |
+| Written by an earlier attempt | A retry never passes against the screenshot its first attempt wrote: `ASSERTION_FAILED` until it is committed |
 | Different | Retried until one matches or the timeout; then `ASSERTION_FAILED` with `-expected`, `-actual`, and `-diff` images on the step |
-| `--update-snapshots`, `-u` | A stored screenshot that differs is rewritten from a screen that holds still, and the matcher passes |
+| `--update-snapshots`, `-u` | A missing or different stored screenshot is written from a screen that holds still, and the matcher passes |
 | `.not` | Passes once the screen differs; with nothing stored it is `ASSERTION_FAILED` |
 | Tolerance | Both `maxDiffPixels` and `maxDiffPixelRatio` set: the smaller wins |
 | After a secret fill | `POLICY_DENIED`, as for `app.screenshot()` |
 
 A name with a path separator, an option the matcher does not take (Playwright's
 `fullPage`, `animations`, `clip`), or a value out of range is
-`INVALID_ARGUMENT` before the screen is read.
+`INVALID_ARGUMENT` before the screen is read, and so is `expect` on a screen
+scoped to a frame: compare a locator inside it instead.
 
 ```ts
 await expect(screen).toHaveScreenshot('home.png');
