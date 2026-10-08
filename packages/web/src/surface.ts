@@ -51,7 +51,7 @@ import { ROOT_NODE_ID, toSemanticNode } from './observation.ts';
 import { captureObservation } from './observation-capture.ts';
 import { maskOptions, secureFieldMasks } from './observe.ts';
 import { connectionAbort, withOperationDeadline, type OperationBound } from './operation-budget.ts';
-import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from './closed-shadow.ts';
+import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT, CLOSED_SHADOW_ROOTS_KEY } from './closed-shadow.ts';
 import { ConfiguredInitScripts, type WebInitScript } from './init-scripts.ts';
 import { SECURE_FIELD_SELECTOR, type RawNodeData } from './read-node.ts';
 import { readSelector, takeReadsFunction } from './read-selector.ts';
@@ -902,18 +902,26 @@ export class PlaywrightSurface {
     const editable = await Promise.all(
       page.frames().map((frame) =>
         frame
-          .evaluate(() => {
-            const active = document.activeElement;
+          .evaluate((key) => {
+            const recorded: unknown = Reflect.get(globalThis, Symbol.for(key));
+            let active = document.activeElement;
+            while (active !== null) {
+              const root: ShadowRoot | undefined | null = active.shadowRoot ?? (recorded instanceof WeakMap ? recorded.get(active) : undefined);
+              const leaf = root?.activeElement;
+              if (leaf === undefined || leaf === null) break;
+              active = leaf;
+            }
             if (active === null || active === document.body || active === document.documentElement) return false;
             if (active instanceof HTMLInputElement) {
               return !active.disabled && !active.readOnly && !['button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color'].includes(active.type);
             }
             if (active instanceof HTMLTextAreaElement) return !active.disabled && !active.readOnly;
-            if (active instanceof HTMLSelectElement || active instanceof HTMLButtonElement || active instanceof HTMLAnchorElement) {
+            if (active instanceof HTMLSelectElement || active instanceof HTMLButtonElement || active instanceof HTMLAnchorElement ||
+                active instanceof HTMLIFrameElement || active instanceof HTMLFrameElement) {
               return false;
             }
             return true;
-          })
+          }, CLOSED_SHADOW_ROOTS_KEY)
           .catch(() => false),
       ),
     );
