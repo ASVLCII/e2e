@@ -82,9 +82,6 @@ its own tools.
 | `e2e cache stats` | Directory, entry count, total size. |
 | `e2e cache clear` | Deletes the entries and the directory; files the runner never wrote stay. |
 
-`cache ls` aligns columns by displayed width, including test file names with
-wide characters, combining marks, or emoji.
-
 ## Output
 
 `<output>` (`.e2e` by default) holds `report.json`, `junit.xml`,
