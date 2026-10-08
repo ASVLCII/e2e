@@ -1,7 +1,8 @@
 /**
  * A `frameLocator` chain resolves each frame inside the one before it: the
  * inner selector is looked up in the outer frame's document, never in the
- * page, so validation and Playwright's own `frameLocator` chain agree.
+ * page, so validation and Playwright's own `frameLocator` chain agree. A
+ * located node's box is in the top-level viewport, as the contract asks.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -88,6 +89,18 @@ describe('nested frame locators', () => {
     expect(matches.map((node) => node.name)).toEqual(['Inner button']);
     await engine.perform!(matches[0]!.ref, { kind: 'tap' }, operation);
     expect(await page.frameLocator('#outer').frameLocator('#inner').getByRole('button').innerText()).toBe('Inner clicked');
+  });
+
+  it('reports a located node\'s box in the top-level viewport, shifted by its frame\'s box', async () => {
+    // The inner document's one button, whatever an earlier test renamed it to.
+    const button: LocatorExpression = { kind: 'query', query: { kind: 'role', value: { kind: 'string', value: 'button', exact: true } } };
+    const [node] = await engine.locate!(withinFrames(['#outer', '#inner'], button), operation);
+    const frame = (await page.frameLocator('#outer').locator('#inner').boundingBox())!;
+    const own = await page.frameLocator('#outer').frameLocator('#inner').getByRole('button').evaluate((element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    });
+    expect(node!.rect).toEqual({ x: frame.x + own.x, y: frame.y + own.y, width: own.width, height: own.height });
   });
 
   it('resolves a three-level chain, counting the last frame inside the second', async () => {

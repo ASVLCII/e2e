@@ -6,7 +6,7 @@ import { isKeyModifier, KEY_MODIFIERS, type KeyModifier } from '../engine/contra
 import type { LocatorAction, LocatorExpression, SemanticNode } from '../engine/surface.ts';
 import { locatorBrand } from '../internal/brands.ts';
 import { isSecret } from '../secrets.ts';
-import { asEngineError, TestError } from '../internal/errors.ts';
+import { TestError } from '../internal/errors.ts';
 import { requireFinitePoint } from '../internal/geometry.ts';
 import { isPlainObject, rejectUnknownOptions } from '../internal/options.ts';
 import { realmSlot } from '../internal/realm-slot.ts';
@@ -43,7 +43,7 @@ import {
   testIdQuery,
   textQuery,
 } from './expression.ts';
-import { cutOffAtDeadline, type Deadline, POLL_INTERVAL_MS, pollCondition, sleep } from '../internal/time.ts';
+import { cutOffAtDeadline, type Deadline, isOperationTimeout, POLL_INTERVAL_MS, pollCondition, sleep } from '../internal/time.ts';
 import { SampleHistory } from '../expect/samples.ts';
 import type { ScreenshotContext } from '../run/screenshots.ts';
 
@@ -118,15 +118,6 @@ export function createLocator(context: ScreenContext, expression: LocatorExpress
   return new LocatorImpl(context, expression);
 }
 
-/**
- * Whether a swipe failed because the operation budget it was given ran out:
- * the engine's `OPERATION_TIMEOUT` as a viewport swipe raises it, or wrapped
- * as the `ACTION_FAILED` the locator engine translates it into.
- */
-function timedOut(cause: unknown): boolean {
-  const engineError = asEngineError(cause) ?? asEngineError(cause instanceof Error ? cause.cause : undefined);
-  return engineError?.code === 'OPERATION_TIMEOUT';
-}
 
 /** The keys of `TextMatchOptions`, what every text-family query takes. */
 const TEXT_OPTION_KEYS = ['exact', 'visible'] as const;
@@ -302,7 +293,7 @@ class ScreenImpl implements Screen {
           // engine's timer can wake a millisecond before this clock reads the
           // deadline, so a swipe that ran out of its budget within a poll
           // interval of the deadline is the deadline too, whichever timer fired first.
-          if (deadline.expired() || (timedOut(cause) && deadline.remaining() < POLL_INTERVAL_MS)) {
+          if (deadline.expired() || (isOperationTimeout(cause) && deadline.remaining() < POLL_INTERVAL_MS)) {
             throw notVisible(cause);
           }
           throw cause;

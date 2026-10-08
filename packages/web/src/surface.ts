@@ -9,7 +9,7 @@
 
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { Browser, BrowserContext, ElementHandle, FrameLocator, Page, Route } from 'playwright-core';
+import type { Browser, BrowserContext, ElementHandle, FrameLocator, Locator, Page, Route } from 'playwright-core';
 import {
   EngineError,
   raceAbort,
@@ -47,7 +47,7 @@ import { TraceFeed } from './trace-feed.ts';
 import { DialogRouter } from './dialogs.ts';
 import { ensureBrowsersInstalled } from './install.ts';
 import { applyPostSteps, frameSelectors, projectExpression } from './locators.ts';
-import { ROOT_NODE_ID, toSemanticNode } from './observation.ts';
+import { placeRectInFrame, ROOT_NODE_ID, toSemanticNode } from './observation.ts';
 import { captureObservation } from './observation-capture.ts';
 import { maskOptions, secureFieldMasks } from './observe.ts';
 import { connectionAbort, withOperationDeadline, type OperationBound } from './operation-budget.ts';
@@ -732,7 +732,7 @@ export class PlaywrightSurface {
         const token = session.token();
         const refs = session.refs;
         const page = this.requirePage();
-        await this.validateFrames(expression);
+        const frame = await this.frameBox(expression);
         const projected = projectExpression(page, expression, this.testIdAttribute);
         const { displayValue, name, steps } = projected;
         // Every match is read by the `e2e-read` selector engine in the task that finds it, so a
@@ -813,7 +813,7 @@ export class PlaywrightSurface {
           const id = refs.storeLocated(
             pinned === undefined ? { kind: 'locator', locator } : { kind: 'element', element: pinned },
           );
-          return toSemanticNode({ id, revision: '' }, raw);
+          return inFrame(toSemanticNode({ id, revision: '' }, raw), frame);
         });
       },
       staleOr,
@@ -932,8 +932,15 @@ export class PlaywrightSurface {
    * the same chain; a frame-scoped `count` is 0 until that frame's document
    * has loaded, which is what makes `FRAME_NOT_FOUND` worth retrying.
    */
-  private async validateFrames(expression: LocatorExpression): Promise<void> {
+  /**
+   * Checks that every frame the expression enters matches exactly one
+   * element, and returns the innermost one's box in the top-level viewport:
+   * undefined for an expression in the main document, null for a frame with
+   * no box. A child document measures its nodes against its own viewport.
+   */
+  private async frameBox(expression: LocatorExpression): Promise<Rect | null | undefined> {
     let scope: Page | FrameLocator = this.requirePage();
+    let element: Locator | undefined;
     for (const selector of frameSelectors(expression)) {
       let count: number;
       try {
@@ -951,7 +958,14 @@ export class PlaywrightSurface {
           retryable: false,
         });
       }
+      element = scope.locator(selector);
       scope = scope.frameLocator(selector);
+    }
+    if (element === undefined) return undefined;
+    try {
+      return await element.boundingBox();
+    } catch (cause) {
+      throw translatePwError(cause, 'frame resolution');
     }
   }
 
@@ -1077,4 +1091,18 @@ export class PlaywrightSurface {
       throw cause;
     }
   }
+}
+
+type Rect = NonNullable<SemanticNode['rect']>;
+
+/**
+ * A located node in the top-level viewport's space, as the observation tree
+ * reports it: its box shifted by the frame's and clipped to it, and dropped
+ * when the frame has no box or the node lies outside it.
+ */
+function inFrame(node: SemanticNode, frame: Rect | null | undefined): SemanticNode {
+  if (frame === undefined || node.rect === undefined) return node;
+  const { rect, ...rest } = node;
+  const placed = frame === null ? undefined : placeRectInFrame(rect, frame);
+  return placed === undefined ? rest : { ...rest, rect: placed };
 }

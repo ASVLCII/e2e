@@ -24,8 +24,14 @@ const DEFAULT_THRESHOLD = 0.2;
 const DEFAULT_MASK_COLOR: readonly [number, number, number] = [255, 0, 255];
 /** Characters a stored screenshot's name may not hold: path separators, controls, and what Windows refuses in a file name. */
 const UNSAFE_NAME = /[\\/<>:"|?*\p{Cc}]/u;
-/** Characters of a test title kept in an unnamed screenshot's name; a longer title is cut and a hash of the whole added. */
-const MAX_TITLE_NAME_CHARS = 80;
+/**
+ * UTF-8 bytes a name may take. A file name holds 255 bytes on every common
+ * file system; the target and system suffix, an attachment's `-expected`,
+ * and an atomic write's temporary suffix take the rest.
+ */
+const MAX_NAME_BYTES = 150;
+/** UTF-8 bytes of a test title an unnamed screenshot keeps; a longer title is cut and a hash of the whole added. */
+const MAX_TITLE_NAME_BYTES = 100;
 
 /** Unnamed calls per attempt, keyed by the attempt's screenshot context, so names count from 1 in each attempt. */
 const unnamedCalls = new WeakMap<ScreenshotContext, number>();
@@ -77,6 +83,9 @@ function namedStem(api: string, name: string): string {
   if (stem.trim() === '' || stem === '.' || stem === '..' || UNSAFE_NAME.test(stem)) {
     throw new TestError('INVALID_ARGUMENT', `${api} name must be a file name with no path separators, got ${JSON.stringify(name)}`);
   }
+  if (Buffer.byteLength(stem) > MAX_NAME_BYTES) {
+    throw new TestError('INVALID_ARGUMENT', `${api} name must take at most ${MAX_NAME_BYTES} bytes, got ${Buffer.byteLength(stem)}`);
+  }
   return stem;
 }
 
@@ -93,10 +102,21 @@ function unnamedStem(store: ScreenshotContext): string {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '');
-  const fitted = title.length <= MAX_TITLE_NAME_CHARS
-    ? title
-    : `${title.slice(0, MAX_TITLE_NAME_CHARS)}-${createHash('sha256').update(whole).digest('hex').slice(0, 8)}`;
+  const cut = cutToBytes(title, MAX_TITLE_NAME_BYTES);
+  const fitted = cut === title ? title : `${cut}-${createHash('sha256').update(whole).digest('hex').slice(0, 8)}`;
   return `${fitted === '' ? 'screenshot' : fitted}-${count}`;
+}
+
+/** The longest start of `text` that takes at most `maxBytes` UTF-8 bytes, cut between code points. */
+function cutToBytes(text: string, maxBytes: number): string {
+  let bytes = 0;
+  let end = 0;
+  for (const point of text) {
+    bytes += Buffer.byteLength(point);
+    if (bytes > maxBytes) break;
+    end += point.length;
+  }
+  return text.slice(0, end);
 }
 
 /** The `mask` option's locators as expressions. */

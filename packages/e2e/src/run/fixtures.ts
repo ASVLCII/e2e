@@ -13,7 +13,7 @@ import type { DebugTrace } from '../internal/debug.ts';
 import { ConfigurationError, errorMessage, InfrastructureError, TestError } from '../internal/errors.ts';
 import { Deadline } from '../internal/time.ts';
 import { didYouMean } from '../internal/suggest.ts';
-import { createScreenshotContext } from './screenshots.ts';
+import { createScreenshotContext, type WrittenScreenshots } from './screenshots.ts';
 import { resolveSecretValue, sessionSecrecy, type SecretExposure } from './secrecy.ts';
 import { resolveNavigationUrl } from '../internal/urls.ts';
 import { FixtureRecorder } from './fixture-recording.ts';
@@ -76,10 +76,12 @@ export interface AttemptEnvironment {
   readonly debug?: DebugTrace;
   /** The worker's model adapters, checked once on the first `agent` acquisition. */
   readonly models: WorkerModels;
-  /** The test the attempt runs, which `toHaveScreenshot` keeps its screenshots beside; absent for a session with no test (`e2e mcp`). */
-  readonly test?: { readonly file: string; readonly titlePath: readonly string[] };
-  /** The stored screenshots this run wrote so far, shared by every attempt of the executor. */
-  readonly writtenScreenshots?: Set<string>;
+  /**
+   * The test the attempt runs, which `toHaveScreenshot` keeps its screenshots
+   * beside, and the screenshots the run wrote; absent for a session with no
+   * test (`e2e mcp`).
+   */
+  readonly test?: { readonly file: string; readonly titlePath: readonly string[]; readonly writtenScreenshots: WrittenScreenshots };
 }
 
 /** Builds the lazy fixture graph for one attempt. */
@@ -127,7 +129,7 @@ export function createFixtures(environment: AttemptEnvironment): AttemptFixtures
             targetName: environment.target.name,
             file: environment.test.file,
             titlePath: environment.test.titlePath,
-            written: environment.writtenScreenshots ?? new Set(),
+            written: environment.test.writtenScreenshots,
             artifacts: environment.artifacts,
             withholdsPixels: () => exposure.withholdsPixels,
           }),

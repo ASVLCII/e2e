@@ -308,12 +308,21 @@ type Rect = NonNullable<SemanticNode['rect']>;
 /** The tree with every box translated into the frame's space and clipped to its box; a box left empty by the clip is dropped. */
 function placeInFrame(node: SemanticNode, frame: Rect): SemanticNode {
   const { rect, ...rest } = node;
-  const placed = rect === undefined ? undefined : clipRect(offsetRect(rect, frame), frame);
+  const placed = rect === undefined ? undefined : placeRectInFrame(rect, frame);
   return {
     ...rest,
     ...(placed === undefined ? {} : { rect: placed }),
     ...(node.children === undefined ? {} : { children: node.children.map((child) => placeInFrame(child, frame)) }),
   };
+}
+
+/**
+ * A box a child document measured against its own viewport, in the top-level
+ * viewport's space: shifted by the frame's box and clipped to it; undefined
+ * when nothing of it is inside the frame.
+ */
+export function placeRectInFrame(rect: Rect, frame: Rect): Rect | undefined {
+  return clipRect(offsetRect(rect, frame), frame);
 }
 
 function offsetRect(rect: Rect, by: Rect): Rect {

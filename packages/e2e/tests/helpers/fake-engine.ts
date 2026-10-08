@@ -402,6 +402,9 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
               describe(): string {
                 return `gadget on ${context.targetName}`;
               },
+              frame() {
+                return context.screen((expression) => ({ kind: 'frame', selector: '#pay', source: expression }));
+              },
               broken(): never {
                 throw new Error('accessor broke');
               },

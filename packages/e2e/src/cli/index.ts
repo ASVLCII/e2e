@@ -543,7 +543,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--repeat-each <n>', 'run every selected test this many times, each run its own result (pair with --no-cache to exercise the model each time)', parsePositiveInt)
     .option('--no-cache', 'run with the replay cache off, whatever the config says')
     .option('--strict-cache', 'fail a step whose recording no longer replays (REPLAY_STALE) instead of handing it to the agent; never writes the cache')
-    .option('-u, --update-snapshots', 'rewrite the stored screenshots toHaveScreenshot finds different')
+    .option('-u, --update-snapshots', 'write the stored screenshots toHaveScreenshot finds missing or different, and pass')
     .optionsGroup('Output:')
     .option('--reporter <ids>', `comma-separated reporters: ${BUILTIN_REPORTERS.join(', ')}`, parseReporters)
     .option('--output <dir>', 'results directory: report, artifacts, sessions (default: output in the config, else .e2e)')

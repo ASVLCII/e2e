@@ -81,12 +81,12 @@ export async function expectScreenshot(
     const capture = screenshotCapturer(context, { api, subject, masks: call.masks, maskColor: call.maskColor }, deadline);
     const run: Run = { context, store, api, call, stored, capture };
     const expected = existsSync(file) ? readStored(api, stored) : undefined;
+    if (expected !== undefined && (negated || !store.update) && store.written.has(file)) {
+      throw failure(api, `${stored.shown} was written earlier in this run and is not reviewed yet: look at it, commit it, and run again`, stored, 'unreviewed stored screenshot');
+    }
     if (negated) {
       await expectDifferent(run, expected, deadline);
       return;
-    }
-    if (expected !== undefined && !store.update && store.written.has(file)) {
-      throw failure(api, `${stored.shown} was written by an earlier attempt of this run and is not reviewed yet: look at it, commit it, and run again`, stored, 'unreviewed stored screenshot');
     }
     const settled = await matchOrSettle(run, expected, deadline);
     if (settled !== undefined) await keep(run, expected, settled);
