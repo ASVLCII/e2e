@@ -1295,8 +1295,8 @@ export interface AgentOptions {
   maxInputTokens?: number;
   /**
    * Provider options every model call carries, e.g. a reasoning effort.
-   * OpenAI and Azure OpenAI calls also carry `store: false` and a prompt
-   * cache key unless set here.
+   * OpenAI and Azure OpenAI Responses calls also carry `store: false` and a
+   * prompt cache key unless set here.
    */
   providerOptions?: ProviderOptions;
   /** Never set: an entry is not itself a `StepExecutor`; a custom brain goes under `executor`. */
