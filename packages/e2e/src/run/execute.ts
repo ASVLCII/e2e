@@ -1041,6 +1041,7 @@ export class TargetExecutor implements SerialHost {
         registered.fixtures,
         fixtures,
         this.target.engine?.name ?? 'none',
+        attemptAbort.signal,
       );
 
       /**
@@ -1071,8 +1072,10 @@ export class TargetExecutor implements SerialHost {
         try {
           enter('beforeEach');
           await extended.setUp();
+          attemptAbort.signal.throwIfAborted();
           for (const hook of beforeEachHooks) {
             await hook.fn(fixtures);
+            attemptAbort.signal.throwIfAborted();
           }
           enter('body');
           await (registered.fn as SetupFn)(fixtures);

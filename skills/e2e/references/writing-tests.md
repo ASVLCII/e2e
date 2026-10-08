@@ -392,7 +392,8 @@ the app opens itself (`target="_blank"`, `window.open`) is not followed:
   unsubscribe. Register it before the tap that opens the dialog. A handler
   gets `{ message, accept(text?), dismiss() }`, `accept` taking the prompt
   text; no handler, or one that neither accepts nor dismisses, fails the
-  next step with `INVALID_STATE`.
+  next step with `INVALID_STATE`. A throwing handler's unanswered dialog is
+  dismissed too, and its error fails the next step.
 - `waitForDownload(() => trigger, { timeout? })`: returns
   `{ path, suggestedFilename }`.
 - `keyboard.press(key)`, `keyboard.type(text)`, `mouse.*`: unfocused input;
