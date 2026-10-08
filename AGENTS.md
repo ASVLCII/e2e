@@ -155,9 +155,16 @@ suites that consume the built packages the way a user would.
   (gitignored) so the published package ships it; `src/cli/skill.ts` reads
   that copy first and the repo source as the fallback, and `e2e init` writes
   it into a project's `.agents/skills/` and `.claude/skills/`.
+- `skills/create-verification-skill/`: a generator skill for consumers;
+  it writes a project-local `verify-<app>` skill and feature map on top of
+  e2e, with the bug bash wired to the map. Installed with `npx skills add
+  tester-army/e2e --skill create-verification-skill`; not shipped in the
+  package and not read by `e2e guide`. `references/example/` is the skill
+  it generated and ran for `apps/testbed`: regenerate it when a playground
+  route, label, or test it names changes.
 - `.dev/skills/` — the skills we use to work on this repo (`babysit`,
   `ship-pr`, `verify`, `writing-pr`). `npx skills add tester-army/e2e`
-  offers `e2e` alone: its default scan never looks in `.dev/`, and it skips
+  offers only `skills/*`: its default scan never looks in `.dev/`, and it skips
   `.claude/skills/<name>`, the relative symlink to each that agents load
   them through, because it does not follow symlinked directories. Its
   `--full-depth` scan does reach `.dev/skills/`; there the frontmatter's
