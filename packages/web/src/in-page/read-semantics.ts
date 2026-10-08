@@ -131,7 +131,14 @@ export const readSemanticsFunction = <Mode extends SemanticMode>(
    * HTML-AAM scopes it to sectioning content and to the ARIA roles that stand
    * for it, so a `<div role="article">` scopes it like an `<article>`.
    */
-  const isPageLevel = (el: Element): boolean => el.closest(SECTIONING_SCOPE) === null;
+  const isPageLevel = (el: Element): boolean => {
+    for (let candidate: Element | null = el; candidate !== null;) {
+      if (candidate.closest(SECTIONING_SCOPE) !== null) return false;
+      const root = candidate.getRootNode();
+      candidate = root instanceof ShadowRoot ? root.host : null;
+    }
+    return true;
+  };
 
   /**
    * The root of a contenteditable region: editable itself, under a parent that
