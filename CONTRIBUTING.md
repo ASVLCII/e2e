@@ -49,7 +49,8 @@ This project is a pnpm monorepo. `packages/` holds what publishes to npm,
 - `apps/mobile-benchmark`: private Expo app of hard mobile surfaces plus the e2e suites written against them
 - `docs/`: the docs site, built with [Mintlify](https://mintlify.com)
 - `skills/e2e/`: the agent skill shipped with the package and installed by `e2e init`
-- `.dev/skills/`: the skills coding agents use to work on this repo, symlinked from `.claude/skills/` so `npx skills add tester-army/e2e` offers only `e2e`
+- `skills/create-verification-skill/`: the generator of a project-local `verify-<app>` skill, installed with `npx skills add tester-army/e2e --skill create-verification-skill`
+- `.dev/skills/`: the skills coding agents use to work on this repo, symlinked from `.claude/skills/` so `npx skills add tester-army/e2e` offers only `skills/*`
 
 On Windows, enable Developer Mode and clone with
 `git clone -c core.symlinks=true` so those symlinks check out as links rather
