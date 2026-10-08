@@ -141,6 +141,16 @@ const noEntry = fakeContext(async () => {
   throw new Error('no entry');
 });
 
+/** What the executor costs between the hand-off and its verdict: a model call and its looks. */
+const EXECUTOR_TURN_MS = 4_000;
+
+/** The margin `step-cache` adds to a measured end wait, mirrored here so the
+ * bound below moves when the runtime's moves. */
+const END_WAIT_MARGIN_MS = 10_000;
+
+/** What staging's own read costs, and room for the timer to round. */
+const SETTLED_READ_MS = 2_000;
+
 /** The recording a staged entry would write; an entry staged to keep fails the test. */
 function stagedTrace(context: AgentCacheContext, index = 0): ActionTrace {
   const staged = context.staged[index];
@@ -502,6 +512,106 @@ describe('StepTraceSession', () => {
     await session.conclude('passed', 'the customers page is open');
     expect(context.staged).toHaveLength(1);
     expect(stagedTrace(context).actions.map((action) => action.name)).toEqual(['navigate']);
+  });
+
+  it(
+    're-records no longer end wait than the entry it healed',
+    async () => {
+      vi.useFakeTimers();
+      vi.setTimerTickMode('nextTimerAsync');
+      let endWaitMs = 200;
+      const recorded = [endWaitMs];
+      for (let run = 0; run < 3; run += 1) {
+        const context = entryContext({ endPath: '/customers', endAnchors: [savedAnchor], endWaitMs });
+        let session: StepTraceSession | undefined;
+        const paths = ['/pricing', '/customers'];
+        let currentPath: string | undefined;
+        // This test host holds the replay on its end route while the fake clock settles it.
+        const host: StepCacheHost = {
+          observe: async () => {
+            const nextPath = paths.shift();
+            if (nextPath !== undefined) currentPath = nextPath;
+            return {
+              kind: 'semantic',
+              nodes: nodeMap([]),
+              viewport: { width: 1280, height: 720 },
+              ...(currentPath === undefined ? {} : { path: currentPath }),
+            };
+          },
+          actions: { navigate: async (url: string) => session?.record({ name: 'navigate', url }) } as unknown as ExecutorActions,
+          signal: new AbortController().signal,
+          remainingMs: () => 600_000,
+          traceEligible: true,
+          replaying: () => undefined,
+        };
+        session = makeSession(context, host);
+        await session.begin();
+        expect(session.replayedPrefix?.stopReason).toBe('end-mismatch');
+        await vi.advanceTimersByTimeAsync(EXECUTOR_TURN_MS);
+        await session.conclude('passed', 'the customers page is open');
+        endWaitMs = stagedTrace(context).endWaitMs ?? 0;
+        recorded.push(endWaitMs);
+      }
+      for (let index = 2; index < recorded.length; index += 1) {
+        expect(recorded[index]!).toBeLessThanOrEqual(recorded[index - 1]!);
+      }
+      for (const recordedWait of recorded.slice(1)) {
+        expect(recordedWait).toBeGreaterThanOrEqual(END_WAIT_MARGIN_MS);
+        expect(recordedWait).toBeLessThan(END_WAIT_MARGIN_MS + SETTLED_READ_MS);
+      }
+    },
+    60_000,
+  );
+
+  it('keeps app settling time after an executor action following an action-failed hand-off', async () => {
+    vi.useFakeTimers();
+    vi.setTimerTickMode('nextTimerAsync');
+    const context = entryContext({
+      actions: [
+        { name: 'navigate', url: '/first', summary: 'opened first' },
+        { name: 'navigate', url: '/second', summary: 'opened second' },
+      ],
+      startPath: '/start',
+    });
+    let session: StepTraceSession | undefined;
+    let replayed = 0;
+    const paths = ['/start'];
+    const screens: (readonly SemanticNode[])[] = [[], [savedMarker]];
+    let currentPath: string | undefined;
+    // This test host holds the failed replay on its route for staging.
+    const host: StepCacheHost = {
+      observe: async () => {
+        const nextPath = paths.shift();
+        if (nextPath !== undefined) currentPath = nextPath;
+        return {
+          kind: 'semantic',
+          nodes: nodeMap((screens.length > 1 ? screens.shift() : screens[0]) ?? []),
+          viewport: { width: 1280, height: 720 },
+          ...(currentPath === undefined ? {} : { path: currentPath }),
+        };
+      },
+      actions: {
+        navigate: async (url: string) => {
+          replayed += 1;
+          if (replayed === 1) session?.record({ name: 'navigate', url });
+          else throw new Error('simulated second replay action failure');
+        },
+      } as unknown as ExecutorActions,
+      signal: new AbortController().signal,
+      remainingMs: () => 600_000,
+      traceEligible: true,
+      replaying: () => undefined,
+    };
+    session = makeSession(context, host);
+    await session.begin();
+    expect(session.replayedPrefix?.stopReason).toBe('action-failed');
+    await vi.advanceTimersByTimeAsync(EXECUTOR_TURN_MS);
+    session.record({ name: 'tap', node: redacted({ ref: { id: 'save', revision: 'r2' }, role: 'button', name: 'Save' }) });
+    await vi.advanceTimersByTimeAsync(500);
+    await session.conclude('passed', 'saved after the hand-off');
+    const recordedWait = stagedTrace(context).endWaitMs ?? 0;
+    expect(recordedWait).toBeGreaterThan(END_WAIT_MARGIN_MS);
+    expect(recordedWait).toBeLessThan(END_WAIT_MARGIN_MS + SETTLED_READ_MS);
   });
 
   it('evicts instead of re-staging when the executor had to repair after an end-mismatch', async () => {

@@ -159,6 +159,10 @@ export class StepTraceSession {
   private prefix: ReplayedPrefix | undefined;
   private startPath: string | undefined;
   private startedMs = Date.now();
+  /** When the replay handed the step to the executor, if it did. */
+  private handedOffMs: number | undefined;
+  /** When the executor finished; its turn is not app settling time. */
+  private executorCompletedMs: number | undefined;
   /**
    * The screen before any action, captured only when this step may write: the
    * staged trace's end anchors are the delta between this and the passing
@@ -339,6 +343,7 @@ export class StepTraceSession {
   async conclude(outcome: StepOutcome, verdictSummary: string | undefined): Promise<void> {
     const recorder = this.recorder;
     if (recorder === undefined) return;
+    if (this.handedOffMs !== undefined) this.executorCompletedMs = Date.now();
     switch (outcome) {
       case 'no-verdict':
         return;
@@ -540,6 +545,7 @@ export class StepTraceSession {
   }
 
   private handOff(outcome: ReplayOutcome, stopReason: HandOffReason, detail: string | undefined): void {
+    this.handedOffMs = Date.now();
     if (stopReason === 'end-mismatch') this.actionsAtEndMismatch = this.recorder?.recordedCount ?? 0;
     this.prefix = {
       replayedActions: outcome.summaries,
@@ -556,6 +562,13 @@ export class StepTraceSession {
       entry: this.keyHash,
       ...(detail === undefined ? {} : { detail: this.reportable(detail) }),
     };
+  }
+
+  /** Returns the app-settling baseline: the executor's verdict or, if it acted, its last action. */
+  private endWaitBaselineMs(recorder: TraceRecorder): number {
+    const lastActionAtMs = recorder.lastActionAtMs ?? this.startedMs;
+    if (this.handedOffMs === undefined || (recorder.lastActionAtMs ?? 0) > this.handedOffMs) return lastActionAtMs;
+    return this.executorCompletedMs ?? this.handedOffMs;
   }
 
   /**
@@ -600,8 +613,10 @@ export class StepTraceSession {
       // plus room for a slower day: the budget a replay waits for the anchors
       // to return. Measured from the last action, not the step's start: the
       // model's thinking time before that action is no reason for a replay,
-      // which does not think, to wait.
-      endWaitMs: Date.now() - (recorder.lastActionAtMs ?? this.startedMs) + END_WAIT_MARGIN_MS,
+      // which does not think, to wait. After a hand-off, the executor's last
+      // action is the baseline when it acted; otherwise its completion is the
+      // baseline. The replay and executor turn are not app settling time.
+      endWaitMs: Date.now() - this.endWaitBaselineMs(recorder) + END_WAIT_MARGIN_MS,
       keyedBy: this.claim.context,
     });
     if (trace === undefined) return 'skipped';
