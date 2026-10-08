@@ -1160,8 +1160,9 @@ export interface CacheConfig {
    * not found or ambiguous, a rejected action, an end state that did not
    * come back, the app on another screen, an unreadable entry) with
    * `REPLAY_STALE`, instead of handing it to the agent. A step with no
-   * recording, a retry, and a value read off the screen still run live.
-   * `--strict-cache` sets it for one run. Default `false`.
+   * recording and a value read off the screen still run live. Retries
+   * replay too, and the run never writes or deletes an entry, whatever
+   * the mode. `--strict-cache` sets it for one run. Default `false`.
    */
   strict?: boolean;
 }

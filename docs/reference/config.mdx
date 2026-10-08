@@ -970,7 +970,8 @@ CI restores the cache from its own cache service; `--no-cache` wins over
 both. A custom `store` is exempt from the CI demotion and states its own
 trust through `writable`. `strict` (or `--strict-cache` for one run) turns a
 recording that exists but no longer replays into a `REPLAY_STALE` failure
-instead of a hand-off to the agent; see
+instead of a hand-off to the agent, and the run then never writes the
+cache; see
 [Fail on a stale recording](/cache#fail-on-a-stale-recording).
 
 ### Commit the replay cache

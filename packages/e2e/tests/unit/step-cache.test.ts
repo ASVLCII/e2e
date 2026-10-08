@@ -1202,7 +1202,8 @@ describe('settleStagedTraces and a re-recorded flow', () => {
 });
 
 describe('cache.strict', () => {
-  const strict = (context: AgentCacheContext): AgentCacheContext => ({ ...context, strict: { advice: 're-record it' } });
+  // A strict context is read-only whatever the configured mode (`createAgentCacheContext`).
+  const strict = (context: AgentCacheContext): AgentCacheContext => ({ ...context, mode: 'read-only', strict: { advice: 're-record it' } });
 
   it('fails a step whose recording diverged instead of handing it off, and keeps the cache detail', async () => {
     const context = strict(entryContext({ endPath: '/customers', endAnchors: [savedAnchor] }));
@@ -1220,10 +1221,8 @@ describe('cache.strict', () => {
     expect(elsewhere.cacheInfo).toMatchObject({ mode: 'missed', reason: 'wrong-context' });
   });
 
-  it('still runs live a step with no recording, a retry, and a recording too long to replay', async () => {
+  it('still runs live a step with no recording and a recording too long to replay', async () => {
     await expect(makeSession(strict(fakeContext(async () => ({ status: 'miss' }))), makeHost(['/'])).begin()).resolves.toBeUndefined();
-    const retry = makeSession({ ...strict(fakeContext(async () => ({ status: 'miss' }))), replayEligible: false }, makeHost(['/']));
-    await expect(retry.begin()).resolves.toBeUndefined();
     const tapUpgrade = { name: 'tap', summary: 'tap button "Upgrade"', target: { role: 'button', name: 'Upgrade' } } as const;
     const truncated = makeSession(
       strict(entryContext({ actions: Array.from({ length: 50 }, () => tapUpgrade), startPath: '/pricing', truncated: true })),
@@ -1232,7 +1231,7 @@ describe('cache.strict', () => {
     await expect(truncated.begin()).resolves.toBeUndefined();
   });
 
-  it('keeps the stale entry it failed on in read-write mode, so the next strict run fails on it too', async () => {
+  it('keeps the stale entry it failed on, so the next strict run fails on it too', async () => {
     const deleted: string[] = [];
     const base = strict(entryContext({ endPath: '/customers', endAnchors: [savedAnchor] }));
     const context: AgentCacheContext = { ...base, store: { ...base.store, delete: async (key) => { deleted.push(key); } } };
